@@ -21,15 +21,23 @@ Only the implemented foundation layers run today. Planned layers arrive with the
 
 ```bash
 pnpm test
+pnpm test:docs
 pnpm test:watch
 pnpm typecheck
 pnpm deps:check
 pnpm smoke:dist
 pnpm smoke:package
 pnpm check
+pnpm check:docs
 ```
 
 `pnpm check` is the definition of done: format, lint, dependency graph, types, tests, build, dist smoke, then packed-install smoke. CI invokes the same gate.
+
+CI classifies the complete pull-request or push diff. A diff containing only
+Markdown files runs `pnpm check:docs` on Ubuntu; the required macOS and Windows
+check contexts complete without dependency setup or tests. Any non-Markdown path
+runs the full gate on all three operating systems. `pnpm check:docs` is a CI
+optimization, not a substitute for `pnpm check` before merging implementation.
 
 ## Test rules
 
