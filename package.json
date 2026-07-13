@@ -1,0 +1,82 @@
+{
+  "name": "@ferueda/sessions",
+  "version": "0.0.0",
+  "description": "Local-first search and analysis for AI coding-agent session history",
+  "keywords": [
+    "agents",
+    "cli",
+    "codex",
+    "cursor",
+    "local-first",
+    "sessions"
+  ],
+  "homepage": "https://github.com/ferueda/sessions#readme",
+  "bugs": {
+    "url": "https://github.com/ferueda/sessions/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ferueda/sessions.git"
+  },
+  "bin": {
+    "sessions": "./dist/bin/sessions.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {},
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "pnpm clean && tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm deps:check && pnpm typecheck && pnpm test && pnpm build && pnpm smoke:dist && pnpm smoke:package",
+    "check:ci": "pnpm check",
+    "clean": "node scripts/clean.ts",
+    "deps:check": "node scripts/check-dependencies.ts",
+    "format": "oxfmt --write src scripts test docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format:check": "oxfmt --check src scripts test docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "lint": "oxlint -c .oxlintrc.json src scripts test vitest.config.ts",
+    "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
+    "prepack": "pnpm build",
+    "prepare": "simple-git-hooks",
+    "smoke:dist": "node scripts/smoke-dist.ts",
+    "smoke:package": "node scripts/smoke-package.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "commander": "15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "lint-staged": "17.0.8",
+    "oxfmt": "0.58.0",
+    "oxlint": "1.73.0",
+    "simple-git-hooks": "2.13.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged && pnpm typecheck"
+  },
+  "lint-staged": {
+    "{src,scripts,test}/**/*.{ts,js,mjs,cjs,json}": [
+      "pnpm exec oxfmt --write",
+      "pnpm exec oxlint -c .oxlintrc.json --fix"
+    ],
+    "{docs,dev,.github}/**/*.{md,json,yml,yaml}": "pnpm exec oxfmt --write",
+    "*.{md,json,yml,yaml}": "pnpm exec oxfmt --write"
+  },
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "packageManager": "pnpm@11.10.0"
+}
