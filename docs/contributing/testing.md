@@ -15,7 +15,9 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
-Only the implemented foundation layers run today. Planned layers arrive with their corresponding vertical slice.
+Canonical domain/application contracts and the synthetic adapter conformance
+suite run today. Provider golden fixtures, SQLite integration, and later CLI
+contracts arrive with their corresponding vertical slice.
 
 ## Commands
 

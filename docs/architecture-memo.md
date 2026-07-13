@@ -108,7 +108,11 @@ A source instance combines:
 - an instance identifier representing one installation/profile/source root;
 - an opaque provider-native session ID.
 
-The canonical printable ID is `<source-instance>:<native-id>`. Native IDs are never parsed for business meaning.
+The canonical printable ID is
+`<kind>@<percent-encoded-instance-id>:<percent-encoded-native-id>`, for example
+`cursor@default:opaque-id`. Adapter kinds are open lowercase slugs. Instance and
+native IDs remain case-sensitive opaque values; the codec escapes delimiters and
+never parses or Unicode-normalizes them for business meaning.
 
 ### Session
 
@@ -116,7 +120,7 @@ A session contains:
 
 - source identity and opaque native ID;
 - optional title and workspace;
-- created/updated timestamps when observed;
+- created/updated timestamps normalized to canonical UTC when observed;
 - optional provider-neutral lineage relations;
 - the complete-input fingerprint and adapter format version used to build it;
 - ordered canonical entries.
@@ -125,10 +129,10 @@ A session contains:
 
 An entry is an ordered event with:
 
-- stable ordinal within the session;
+- contiguous zero-based ordinal within the session;
 - provider-neutral event kind;
 - actor: human, model, tool, system, or unknown;
-- timestamp when observed;
+- canonical UTC timestamp when observed;
 - optional relation to a tool call or another entry;
 - a non-public source locator for diagnostics;
 - ordered content segments.
@@ -137,7 +141,7 @@ An entry is an ordered event with:
 
 A segment retains faithful canonical text plus:
 
-- stable content hash;
+- `sha256-utf8-v1` hash of the exact canonical text bytes;
 - origin: human, injected, delegated, replayed/copied, model, tool, system, or unknown;
 - confidence in that origin classification;
 - source metadata needed to explain the classification without duplicating raw provider payloads.
@@ -146,7 +150,11 @@ Adapters preserve information they can prove and use `unknown` rather than guess
 
 ### Occurrences and recurrence
 
-Every appearance is retained as an occurrence. Identical content hashes and known lineage allow the query layer to report three different support measures:
+Every segment appearance is retained as an occurrence identified by session,
+entry ordinal, and segment ordinal. Hash equality also requires exact text
+equality, so even a digest collision cannot merge unequal content. Identical
+content and known lineage allow the query layer to report three different support
+measures:
 
 - **occurrence count:** every appearance;
 - **unique-content count:** distinct canonical content hashes;
@@ -158,21 +166,31 @@ No count is silently substituted for another. Unknown lineage remains unknown. T
 
 Each adapter implements three responsibilities:
 
-1. `probe()` — report whether a source exists and whether it is readable, without mutation.
-2. `discover()` — enumerate session candidates with identity, locator, and a fingerprint covering every input needed by `read()`.
+1. `probe()` — return `ready`, `unavailable`, or `unreadable` plus sanitized
+   adapter-owned source roots, without reading transcript content or mutating the
+   source.
+2. `discover()` — enumerate session candidates with identity, ordered input
+   descriptors, an aggregate fingerprint covering every input needed by `read()`,
+   and an adapter format version.
 3. `read(candidate)` — parse and normalize one candidate into a complete canonical session document.
 
 Contract rules:
 
 - `kind` is an open string, never a closed Cursor/Codex union.
 - Discovery order does not affect final results.
-- Fingerprints include every source file/row that can change normalized output.
+- Each input descriptor records its role, opaque diagnostic locator, and
+  fingerprint. The aggregate includes ordered roles, locators, nullable record
+  IDs, and fingerprints; any change invalidates it.
 - Adapter format versions invalidate stale normalized documents after parser changes.
-- Reads are deterministic for the same complete input.
+- Reads are deterministic for the same complete input. Adapters recheck every
+  input before and after reading, or use an equivalent stable snapshot.
 - Missing optional metadata degrades to absent/unknown values.
-- Malformed or changing sources return typed failures; they do not write partial index state.
+- Unavailable, unreadable, malformed, source-changed, and unsupported-format
+  conditions return typed failures with safe diagnostics; they do not expose raw
+  source errors or write partial index state.
 - Adapters do not import storage, query, CLI, or one another.
-- A conformance suite will run the same behavioral fixtures against every adapter.
+- The shared conformance suite runs the same safety, determinism, fingerprint,
+  mutation-race, provenance-fallback, and failure fixtures against every adapter.
 
 This is an internal port in V1, not a stable external plugin ABI.
 
