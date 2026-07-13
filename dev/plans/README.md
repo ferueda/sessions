@@ -7,4 +7,7 @@ This directory holds the repository's active implementation plans.
 - Keep plans aligned with the current codebase; update them when scope changes.
 - Remove completed plans. Git history remains the archive.
 
-Active plan: [Initial repository scaffold](260713-initial-repository-scaffold.md).
+Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
+
+Active executor plans: none. Create one scoped plan for the next roadmap milestone
+before implementation starts.

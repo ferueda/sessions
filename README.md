@@ -60,9 +60,10 @@ Provider histories are inputs, never mutation targets. Indexing will be explicit
 
 - [Project intent](docs/project-intent.md)
 - [Accepted architecture memo](docs/architecture-memo.md)
+- [V1 implementation roadmap](dev/plans/260713-v1-implementation-roadmap.md)
 - [CLI contract](docs/reference/cli-contract.md)
 - [Architecture decisions](docs/decisions/README.md)
-- [Active implementation plan](dev/plans/260713-initial-repository-scaffold.md)
+- [Active implementation plans](dev/plans/README.md)
 
 ## Contributing
 
