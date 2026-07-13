@@ -36,7 +36,7 @@ export async function checkProductionDependencies(
       const target = path.resolve(path.dirname(file), specifier);
       if (!isWithin(sourceRoot, target)) {
         violations.push(
-          `${path.relative(sourceRoot, file)} (${sourceLayer}) -> ${specifier} (outside src)`,
+          `${relativeDisplayPath(sourceRoot, file)} (${sourceLayer}) -> ${specifier} (outside src)`,
         );
         continue;
       }
@@ -45,7 +45,7 @@ export async function checkProductionDependencies(
       const targetLayer = layerFor(target, sourceRoot);
       if (!allowedDependencies[sourceLayer].includes(targetLayer)) {
         violations.push(
-          `${path.relative(sourceRoot, file)} (${sourceLayer}) -> ${specifier} (${targetLayer})`,
+          `${relativeDisplayPath(sourceRoot, file)} (${sourceLayer}) -> ${specifier} (${targetLayer})`,
         );
       }
     }
@@ -54,6 +54,10 @@ export async function checkProductionDependencies(
   if (files.length === 0) violations.push("no TypeScript production modules found");
 
   return { moduleCount: files.length, internalDependencyCount, violations };
+}
+
+function relativeDisplayPath(root: string, candidate: string): string {
+  return path.relative(root, candidate).split(path.sep).join("/");
 }
 
 function isWithin(root: string, candidate: string): boolean {
