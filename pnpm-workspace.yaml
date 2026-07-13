@@ -1,0 +1,7 @@
+packages:
+  - "."
+
+allowBuilds:
+  simple-git-hooks: true
+
+strictPeerDependencies: true
