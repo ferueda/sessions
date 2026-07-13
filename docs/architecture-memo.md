@@ -382,6 +382,13 @@ Do not transplant:
 
 ## Roadmap
 
+The phase scopes below remain accepted. Their execution order is updated to
+complete the provider-neutral query and export engine before adding Codex, so the
+second adapter can prove the boundary without core changes. The
+[V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
+supersedes the earlier phase ordering and refines it into dependency-ordered,
+independently reviewable milestones with explicit exit gates.
+
 ### Phase 0 — Foundation
 
 Durable intent/design docs, strict package scaffold, canonical types and source port, real doctor, dependency guards, offline tests, dist/package smoke, cross-platform CI.
@@ -394,13 +401,13 @@ SQLite schema/migrations, file permissions, secure-delete configuration, index r
 
 Port Cursor behavior behind `probe`/`discover`/`read`, preserve golden fixtures, add adapter conformance tests, and complete index/list/show for the first vertical slice.
 
-### Phase 3 — Equivalent second adapter
-
-Port Codex discovery and rollout normalization through the same port. Prove no changes are required in domain, storage, indexing, or query behavior.
-
-### Phase 4 — Query and export
+### Phase 3 — Query and export
 
 Provider-neutral lexical search, filters, bounded context, occurrence/dedup reporting, versioned JSON/JSONL, Markdown/JSON/JSONL export, and CLI compatibility tests.
+
+### Phase 4 — Equivalent second adapter
+
+Port Codex discovery and rollout normalization through the same port. Prove no changes are required in domain, storage, indexing, query, export, or CLI behavior.
 
 ### Phase 5 — Agent Skill
 
