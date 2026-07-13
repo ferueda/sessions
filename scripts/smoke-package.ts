@@ -42,7 +42,13 @@ try {
   );
 
   const tarball = path.join(temporaryRoot, packed.filename);
-  runPackageManager("pnpm", ["add", "--offline", "--ignore-scripts", tarball], project);
+  const store = runPackageManager("pnpm", ["store", "path", "--silent"], root).stdout.trim();
+  if (store.length === 0) throw new Error("pnpm store path returned no path");
+  runPackageManager(
+    "pnpm",
+    ["add", "--offline", "--ignore-scripts", "--store-dir", store, tarball],
+    project,
+  );
 
   const help = runPackageManager("pnpm", ["exec", "sessions", "--help"], project);
   if (!help.stdout.includes("Usage: sessions") || help.stderr !== "") {
