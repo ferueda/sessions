@@ -1,0 +1,17 @@
+# Security policy
+
+Sessions processes private local transcripts. Do not include transcripts, tokens, secrets, provider databases, home-directory paths, or other personal data in a public issue.
+
+## Reporting
+
+Use [GitHub private vulnerability reporting](https://github.com/ferueda/sessions/security/advisories/new) for suspected vulnerabilities or privacy failures. Include the smallest synthetic reproduction possible and describe affected versions, impact, and platform.
+
+If private reporting is unavailable, open a public issue containing no sensitive details and ask for a private contact channel.
+
+## Supported versions
+
+The project is pre-release. Security fixes target the current `main` branch until the first published version establishes a support policy.
+
+## Scope
+
+High-priority reports include unintended source mutation, transcript/network leakage, insecure index permissions, path traversal, unsafe export behavior, package supply-chain compromise, and structured-output injection that violates documented boundaries.
