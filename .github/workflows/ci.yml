@@ -27,36 +27,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 24.15.0
+
       - name: Detect documentation-only changes
         id: scope
-        shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          changed=false
-          docs_only=true
-          changed_files="${RUNNER_TEMP}/sessions-ci-changed-files"
-
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null ||
-             ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null ||
-             ! git diff --no-renames --name-only -z "${BASE_SHA}" "${HEAD_SHA}" > "${changed_files}"; then
-            docs_only=false
-          else
-            while IFS= read -r -d '' file; do
-              changed=true
-              case "${file}" in
-                *.md) ;;
-                *) docs_only=false ;;
-              esac
-            done < "${changed_files}"
-          fi
-
-          if [[ "${changed}" != "true" ]]; then
-            docs_only=false
-          fi
-
-          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+        run: node scripts/classify-ci-changes.ts
 
   check:
     name: Check (${{ matrix.os }})
