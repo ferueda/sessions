@@ -1,0 +1,42 @@
+# Testing
+
+Tests prove contracts at the highest stable seam that can observe them. They are deterministic and offline unless a command is explicitly a dependency/release operation.
+
+## Layers
+
+| Layer                   | Proves                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| Domain/application unit | Canonical rules, probe aggregation, indexing/reconciliation decisions                        |
+| Provider golden fixture | Faithful parsing and malformed-format behavior                                               |
+| Adapter conformance     | Shared `probe`/`discover`/`read` contract and read-only operation                            |
+| SQLite integration      | Migrations, transactions, FTS behavior, permissions, last-good state                         |
+| CLI contract            | Arguments, streams, exit codes, human/structured schemas, bounded output                     |
+| Dist smoke              | Compiled JavaScript entrypoint works                                                         |
+| Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
+| Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
+
+Only the implemented foundation layers run today. Planned layers arrive with their corresponding vertical slice.
+
+## Commands
+
+```bash
+pnpm test
+pnpm test:watch
+pnpm typecheck
+pnpm deps:check
+pnpm smoke:dist
+pnpm smoke:package
+pnpm check
+```
+
+`pnpm check` is the definition of done: format, lint, dependency graph, types, tests, build, dist smoke, then packed-install smoke. CI invokes the same gate.
+
+## Test rules
+
+- Isolate mutable state and clean temporary directories.
+- Await asynchronous work and assertions.
+- Prefer specific behavioral assertions over broad snapshots.
+- Use synthetic provider data and temporary home/cache paths.
+- Never call provider services or the network in unit/integration tests.
+- Test an operational failure as well as success when adding a state boundary.
+- Keep hooks cheap; passing a hook is not repository approval.
