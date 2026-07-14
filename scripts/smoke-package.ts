@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isPathWithin } from "./path-containment.ts";
 import { runM5SmokeWorkflow } from "./smoke-m5-workflow.ts";
 
 interface PackedFile {
@@ -64,7 +65,7 @@ try {
   );
   if (!existsSync(installedBinary)) throw new Error("offline install has no sessions binary");
   const installedTarget = await realpath(installedBinary);
-  if (isWithin(root, installedTarget)) {
+  if (isPathWithin(root, installedTarget)) {
     throw new Error("offline install resolves its binary into the source checkout");
   }
 
@@ -113,9 +114,4 @@ function runPackageManager(
     );
   }
   return { stdout: result.stdout, stderr: result.stderr };
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
