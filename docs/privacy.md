@@ -1,139 +1,152 @@
 # Privacy contract
 
-- Status: accepted V1 contract; current implementation called out explicitly
+- Status: M5 behavior implemented; later V1 behavior labeled
 - Last updated: 2026-07-14
 
-Sessions handles sensitive local history. Privacy behavior is a product contract, not a best-effort feature.
+Sessions handles sensitive local history. Privacy behavior is a product contract,
+not a best-effort feature.
 
-## Current implementation
-
-The current CLI exposes help, version, `doctor`, and `paths`. `paths` reports only Sessions-owned index locations and existing state. `doctor` checks Node.js, probes SQLite FTS5 and its per-table secure-delete capability in memory, and inspects the existing index state. For a ready index it uses an immutable snapshot to check integrity, foreign keys, FTS structure/content/security, run records, and sanitized writer-lease state. An uninitialized index is healthy. Neither command creates directories, initializes or migrates a database, locates provider histories, uses telemetry, or accesses the network.
-
-The internal provider-neutral indexing service, coordinated writer lifecycle, canonical repository, and clear maintenance are implemented and exercised by tests. The indexing service admits complete source discovery before writes, preserves last-good documents after failed refreshes, reconciles deletions only after a complete exact-source scan, and returns bounded typed diagnostics without transcript content or raw errors. The repository stores validated provider-neutral session documents, freshness state, bounded run diagnostics, and derived FTS data.
-
-Schema version 3 stores one expiring generation lease for internal `index` or `clear` ownership. Each repository mutation fences stale owners inside its write transaction; takeover marks abandoned active runs interrupted. Clear maintenance removes only the known database, WAL, and SHM paths after safety checks, never provider files or the cache directory recursively. There are no source adapters or public index/clear commands, so the current CLI still cannot populate or clear transcript content.
-
-Those cache, complete-scan deletion, and whole-index clear semantics describe the
-implemented pre-public M4 baseline only. [ADR 0007](decisions/0007-retain-a-durable-canonical-library.md)
-replaces them before M5 exposes a writer: canonical snapshots become durable user
-data, complete-scan absence becomes non-destructive source state, and deletion is
-explicit.
-
-## V1 promises
+## Current behavior
 
 - Indexing starts only when the user runs `sessions index`.
-- A successful index creates an independent durable local copy of the latest
-  successfully normalized canonical snapshot. Provider deletion or expiry does
-  not delete that copy.
-- Cursor, Codex, and future source histories are read-only inputs.
-- Index, list, search, show, export, paths, and doctor operations require no network access and emit no telemetry.
-- List, search, show, and export use the canonical library after indexing; they do not silently reopen mutable source histories.
-- A complete scan can mark a retained session missing. Unavailable, unreadable,
-  malformed, or incomplete discovery never proves absence, and no source state
-  automatically deletes canonical content.
-- No TTL or automatic pruning removes retained sessions. Only an explicit
-  `sessions forget` or `sessions data clear` invocation deletes them.
-- Sessions stores normalized content required for faithful results, not entire raw provider payloads.
-- The Codex adapter may briefly stage raw `state_5.sqlite` database/WAL bytes—not
-  rollout transcripts—beneath the exact private Sessions-owned `.scratch`
-  subtree to read active WAL state without opening provider SQLite. Normal
-  completion removes them before discovery returns. A crash can retain them
-  until the next leased index sweep or explicit data clear.
-- Unsupported non-text content retains only ordered omission class/provenance.
-  Sessions does not separately open or fetch referenced resources and does not
-  persist media bytes, data URLs, remote URLs, or local attachment paths.
-- `sessions paths` explains the owned library location without printing transcript content. Registered adapters will later add sanitized source roots.
-- Rebuilding FTS/query projections preserves canonical content. `sessions forget`
-  removes one selected snapshot/tracking record and its identity-bearing
-  historical run-item details; aggregate run diagnostics and incoming relation
-  references owned by other snapshots remain. `sessions data clear` removes only
-  the known Sessions-owned library database/sidecars and exact ephemeral scratch
-  subtree.
-- Portable export excludes diagnostic source locators, provider roots, source
-  metadata, and local workspace paths by default. Transcript text itself is not
-  secret- or path-redacted and must be reviewed before it leaves the machine.
-- No project, skill, provider configuration, or source transcript is automatically edited from analysis output.
+- Codex histories are read-only inputs. Sessions performs no provider writes,
+  network requests, telemetry, or uploads.
+- A successful index stores an independent durable normalized copy of the latest
+  successfully captured session in Sessions-owned application data.
+- A complete later scan can mark a retained session `missing`; unavailable,
+  unreadable, malformed, changing, or incomplete discovery proves no absence.
+  Neither case automatically deletes retained content.
+- List and show use only the Sessions library after indexing. They never reopen a
+  provider transcript.
+- No TTL or automatic pruning exists. Only explicit `sessions forget` or
+  `sessions data clear --yes` removes retained content.
+- Paths and doctor inspect library/source readiness without indexing, creating
+  storage, applying migrations, or reading rollout content.
 
-## Local state
+Search, portable export, Cursor, library import/restore, and automatic analysis
+are not current commands.
 
-### Current M4 path
+## Owned local state
 
-The current read-only `paths` command resolves its pre-M5 cache directory as follows:
+Sessions resolves its durable application-data directory as follows:
 
-- Linux: `$XDG_CACHE_HOME/sessions` when `XDG_CACHE_HOME` is absolute; otherwise `$HOME/.cache/sessions`.
-- macOS: `$HOME/Library/Caches/sessions`.
-- Windows: `%LOCALAPPDATA%\sessions`; a missing or relative `LOCALAPPDATA` is an error.
-
-An absolute `SESSIONS_CACHE_DIR` replaces the full owned directory path; Sessions does not append another `sessions` leaf. The database is `index.sqlite3`, with known `index.sqlite3-wal` and `index.sqlite3-shm` sidecar paths. This state is separate from the legacy Harness JSONL cache and is never reused or automatically migrated. `sessions paths` can inspect the location before it exists without creating it.
-
-### Accepted V1 path
-
-M5 moves the durable canonical library to platform application data:
-
-- Linux: `$XDG_DATA_HOME/sessions` when `XDG_DATA_HOME` is absolute; otherwise
+- Linux: absolute `$XDG_DATA_HOME/sessions`, otherwise
   `$HOME/.local/share/sessions`.
 - macOS: `$HOME/Library/Application Support/sessions`.
-- Windows: `%LOCALAPPDATA%\sessions`; a missing or relative `LOCALAPPDATA` is an
-  error.
+- Windows: absolute `%LOCALAPPDATA%\sessions`.
 
-An absolute `SESSIONS_DATA_DIR` replaces the full owned directory path. The
-database is `sessions.sqlite3`, with known `sessions.sqlite3-wal` and
+An absolute `SESSIONS_DATA_DIR` replaces the whole owned directory. The database
+is `sessions.sqlite3`, with known `sessions.sqlite3-wal` and
 `sessions.sqlite3-shm` sidecars. The only ephemeral workspace is the exact
-`.scratch` child. M5 does not silently reuse, import, or delete the
-pre-public cache database or legacy Harness JSONL cache. `sessions paths` reports
-the accepted library and scratch locations without creating either.
+`.scratch` child. Sessions does not read, migrate, or delete the pre-public cache
+database or legacy Harness JSONL cache.
 
-When the internal writer is explicitly opened, it creates owned POSIX directories with mode `0700` and constrains the database, WAL, SHM, and scratch files to `0600` where applicable. On Windows, default state remains inside the current user's local profile and relies on platform ACLs. The writer enables foreign keys, WAL, a five-second busy timeout, and SQLite core `secure_delete`. Its ordered, checksummed migrations run transactionally and refuse incompatible or newer history. Immutable readers and doctor refuse WAL recovery state; the coordinated writer may recover valid SQLite WAL state before acquiring its lease. Once canonical data is durable, migration and repair guidance must preserve a recoverable prior database rather than assuming provider reindex is possible.
+`sessions paths` reports these owned paths without creating them. It also reports
+sanitized Codex home/state roots; it does not enumerate rollout files or print
+transcript content.
 
-Scratch has a separate transient lifecycle. Only an index writer holding the
-exclusive lease may sweep/create it; Codex uses random children and removes each
-attempt in `finally`; writer close attempts root removal before lease release and
-surfaces cleanup failure while still closing/releasing safely. Probe, paths,
-doctor, and library readers never create it. The raw state copy can contain
-provider bookkeeping and unrelated rows beyond the normalized thread fields,
-including IDs, titles, and workspaces, so crash residue has the same local-at-
-rest limitations as the canonical database even though it is not retained
-product data.
+On POSIX, writer-created directories are constrained to `0700` and database,
+sidecar, and scratch files to `0600` where applicable. On Windows, state remains
+inside the current user's local profile and relies on platform ACLs. The writer
+enables foreign keys, WAL, a bounded busy timeout, SQLite core `secure_delete`,
+and FTS5 secure-delete when supported.
 
-Canonical sessions and capture state are durable user data. FTS/query projections
-and bounded operational diagnostics are rebuildable derived state even when they
-share the same SQLite database. Projection repair never deletes canonical rows.
-Current M4 all-data clear is non-migrating. Before M5 exposes it publicly, valid
-lease-bearing schemas 3 and 4 must acquire or safely take over their existing
-persistent clear lease before close/unlink; schema 3 is not migrated merely to
-delete it and cannot use the legacy direct-unlink branch. Clear remains
-only-owned-state scoped: under active heartbeat it removes the exact scratch
-subtree without following symlinks, then refreshes/asserts ownership,
-checkpoints, closes without release, and removes only the revalidated database/
-WAL/SHM paths. Beginning scratch deletion is destructive intent; when scratch is
-absent, intent begins at the final renewal/checkpoint immediately before close.
-Later failure leaves clear ownership for clear-only recovery. An orphan scratch root
-without its lease-bearing database is recovery-required and is not removed
-without coordination. Missing state is success; unsafe/unrecognized state, a
-live writer, and partial deletion fail with sanitized typed errors.
-Forget/data-clear never alters provider histories.
+Canonical sessions and capture/source-observation state are durable user data.
+FTS and bounded operational diagnostics are rebuildable derived state even though
+they share the database. Repair or projection rebuild must preserve canonical
+evidence.
 
-## Deletion limitations
+## Codex capture
 
-Forget is scoped deletion, not global erasure by value. It removes the selected
-session's stored transcript and owned evidence, but it does not rewrite another
-retained session merely because that session has a canonical relation pointing
-to the forgotten identity or contains the same text. Reindex can capture a
-still-present provider session again. Use explicit data clear to remove the whole
+Codex defaults to `~/.codex`; `CODEX_HOME` can select another home. Its effective
+state database follows Codex `sqlite_home` configuration, then
+`CODEX_SQLITE_HOME`, then the Codex home. Sessions reads the selected state and
+rollout files but never modifies them or creates provider SQLite sidecars.
+
+An active Codex SQLite database can require its WAL for a consistent view. During
+an explicitly leased index, Sessions may briefly copy raw `state_5.sqlite` and
+WAL bytes—not rollout transcripts—into a random private directory beneath
+`.scratch`. It verifies a complete stable generation and fails closed when
+concurrent changes cannot be reconciled. Normal completion removes the private
+directory. A process crash can leave raw state bookkeeping until the next leased
+index sweep or explicit data clear.
+
+The staged state copy can contain provider bookkeeping and unrelated rows beyond
+normalized thread fields, including IDs, titles, and workspaces. Crash residue
+therefore has the same local-at-rest limitations as the canonical database even
+though it is not retained product data.
+
+Rollouts are streamed from declared plain JSONL or Zstandard files. File identity
+is checked before and after reading. Malformed or changing input never replaces a
+last-good canonical document with partial content.
+
+## Stored content
+
+Sessions stores normalized evidence needed for faithful results, not a complete
+raw provider payload backup. V1 currently retains only the latest successful
+canonical snapshot per session; it does not preserve every provider revision.
+
+Text is stored exactly and enters content deduplication and FTS. Unsupported
+non-text content stores only its ordered omission class, canonical structural
+source type, and provenance. Sessions does not separately open or fetch referenced
+media and does not persist media bytes, data URLs, remote URLs, local attachment
+paths, or serialized opaque objects in omission records.
+
+Human list/show output omits source locators, source metadata, and local workspace
+values. Transcript/title text itself is faithful evidence: it is terminal-control
+escaped and output-bounded, but it is not secret- or path-redacted. Review it
+before copying it elsewhere.
+
+## Explicit deletion
+
+`sessions forget <canonical-id>` removes the selected Sessions-owned tracking
+identity and canonical snapshot without touching the provider. It also redacts
+that identity's detailed historical run items while preserving aggregate run
+counts. Shared text and incoming relations owned by other retained sessions can
+remain. If the provider still exposes the session, a later index can capture it
+again.
+
+`sessions data clear --yes` is the whole-library deletion route. It removes only
+the validated Sessions database/WAL/SHM paths and exact scratch subtree. It never
+recursively deletes provider roots. Missing state is success; unsafe,
+unrecognized, concurrently owned, or partially deleted state fails closed with a
+sanitized error.
+
+Forget is scoped deletion, not global erasure by value. It does not rewrite
+another retained session because that session has a relation to the forgotten
+identity or contains equal text. Use explicit data clear to remove the whole
 Sessions-owned library.
 
-The writer enables SQLite core `secure_delete`. It also enables FTS5's persistent per-table secure-delete setting on the canonical content index when the runtime supports it; a supported runtime that cannot configure the real table fails writer opening. Doctor reports runtime support using an in-memory capability probe.
+SQLite secure-delete settings reduce recoverable deleted content inside database
+pages. They are not encryption, guaranteed physical overwrite, or forensic secure
+erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain
+copies. Users requiring stronger protection should use full-disk encryption and
+manage backups according to their threat model.
 
-These settings reduce recoverable deleted content inside SQLite pages; they do not provide encryption, guaranteed physical overwrite, or forensic secure erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain copies.
+## Later V1 boundaries
 
-Users requiring stronger protection should use operating-system full-disk encryption and manage backups according to their threat model.
+Planned search and export will also read only the canonical library. Portable
+export must exclude diagnostic locators, provider roots, source metadata, local
+workspace paths, and attachment paths by default; frame all prior instructions
+as untrusted history; and never deliver content to another provider itself.
+
+No project, skill, provider configuration, or source transcript is automatically
+edited from analysis output.
 
 ## Threat boundaries
 
-Sessions protects against accidental mutation, unexpected network transfer, overly broad package contents, and permissive local state within its control. It does not protect against another process running as the same user, a compromised provider, malware, an already-compromised package manager, or privileged filesystem access.
+Sessions protects against accidental provider mutation, unexpected network
+transfer, overly broad package contents, and permissive local state within its
+control. It does not protect against another process running as the same user, a
+compromised provider, malware, an already-compromised package manager, or
+privileged filesystem access.
 
-Source formats can contain prompt injection or untrusted tool output. Sessions treats transcript text as data. The CLI never executes indexed or exported content. Portable Markdown frames prior instructions as historical data, but Sessions cannot guarantee how a destination system interprets user-delivered content.
+Source formats can contain prompt injection or untrusted tool output. Sessions
+treats transcript text as data and never executes indexed content. It cannot
+guarantee how another system interprets content a user later copies there.
 
 ## Reporting
 
-Use the private process in [SECURITY.md](../SECURITY.md). Never attach a real provider database or unredacted transcript unless a secure channel and minimum necessary scope have been agreed.
+Use the private process in [SECURITY.md](../SECURITY.md). Never attach a real
+provider database or unredacted transcript unless a secure channel and minimum
+necessary scope have been agreed.

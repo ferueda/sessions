@@ -1,10 +1,14 @@
 # Ship the Codex-first durable workflow
 
-- Status: reviewed; ready for implementation
+- Status: implemented; verification passed; awaiting review and merge
 - Milestone: M5
 - Date: 2026-07-14
 - Plan review: passed with zero findings on 2026-07-14
   (`20260714-181209-1e9112`)
+- Implementation verification: 54 test files and 491 tests, compiled and
+  offline-packed workflow smokes, and a privacy-safe live Codex index/list/show/
+  clear smoke passed on 2026-07-14; `pnpm check` passed and change review remains
+  the merge gate.
 
 ## Goal
 

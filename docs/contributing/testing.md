@@ -15,12 +15,13 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
-Canonical domain/application contracts, the synthetic adapter conformance suite,
-programmable fake-source indexing, real-SQLite reconciliation, schema-v3 writer
-coordination and recovery, clear maintenance, immutable ready-index health,
-path/state behavior, canonical repository integration, and `doctor`/`paths` CLI
-contracts run today. Provider golden fixtures and query contracts arrive with
-their corresponding vertical slices.
+Canonical domain/application contracts, synthetic adapter conformance,
+programmable fake-source indexing, schema-3/4 lease-safe cutover, real-SQLite
+non-destructive reconciliation, forget/all-data maintenance, immutable library
+health, and the complete current CLI contract run today. The Codex proof uses
+generated current/base/optional state schemas plus plain/Zstandard rollouts and
+active-WAL capture stress; it never reads developer history. Search/export and
+Cursor contracts arrive with their milestones.
 
 ## Commands
 
@@ -49,7 +50,7 @@ optimization, not a substitute for `pnpm check` before merging implementation.
 - Isolate mutable state and clean temporary directories.
 - Await asynchronous work and assertions.
 - Prefer specific behavioral assertions over broad snapshots.
-- Use synthetic provider data and temporary home/cache paths.
+- Use synthetic provider data and temporary provider/application-data paths.
 - Never call provider services or the network in unit/integration tests.
 - Test an operational failure as well as success when adding a state boundary.
 - Fully exhaust discovery before mutation; prove incomplete scans cannot reconcile deletions.

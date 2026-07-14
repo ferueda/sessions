@@ -1,9 +1,10 @@
 # CLI contract
 
-- Status: current public M4 behavior plus accepted V1 semantics
+- Status: current M5 behavior plus accepted later-V1 semantics
 - Last updated: 2026-07-14
 
-Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
+Generated `sessions --help` owns exact current flags. This document owns behavior
+and compatibility. Planned commands are labeled explicitly.
 
 ## Current commands
 
@@ -13,9 +14,41 @@ sessions --help
 sessions --version
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
+sessions index [--source codex] [--format human|json]
+sessions list [--limit N]
+sessions show <canonical-id> [--entry N --context N]
+sessions forget <canonical-id> [--format human|json]
+sessions data clear --yes [--format human|json]
 ```
 
-The bare command prints help. `doctor` performs read-only Node.js, in-memory SQLite FTS5, and existing index-state checks. `paths` reports Sessions-owned index paths and state. Neither command indexes, creates directories, initializes a database, or applies migrations.
+The bare command prints help. `index` is the only ordinary command that reads
+rollout content or initializes/migrates the durable library. `doctor` and `paths`
+inspect runtime, library, and registered-source readiness without indexing or
+creating state.
+
+`index` selects all registered sources when `--source` is omitted. The only
+current source is `codex`; an unknown source is invalid usage before writer open.
+A complete report exits `0`; an incomplete report is fully rendered and exits
+`1`. A successful capture stores the latest canonical snapshot. Complete later
+absence marks it missing without deletion; incomplete discovery leaves source
+state unknown.
+
+`list` defaults to 50 and accepts 1 through 200. Missing activity timestamps sort
+last, then activity descends, then the raw source/instance/native tuple ascends.
+It requests one sentinel row to report truncation and never re-sorts. A fresh
+library renders exactly `No sessions found.` plus a newline, exits `0`, and does
+not create state or resolve Codex.
+
+`show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
+entries of context on each side by default; `--context` accepts 0 through 100 and
+requires `--entry`. Missing session/entry values are operational failures.
+List/show are human-only until M7, read only the canonical library, report
+freshness/source state/capture time, omit diagnostic locators and workspace, and
+escape/bound untrusted terminal output.
+
+`forget` idempotently deletes one retained Sessions copy and returns `forgotten`
+or `absent`. `data clear` requires `--yes` and deletes all known Sessions-owned
+state. Both leave provider data untouched.
 
 ### Doctor JSON
 
@@ -23,7 +56,7 @@ The bare command prints help. `doctor` performs read-only Node.js, in-memory SQL
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "doctor",
   "ok": true,
   "checks": [
@@ -43,57 +76,69 @@ The bare command prints help. `doctor` performs read-only Node.js, in-memory SQL
 
 Check IDs, field names, and `schemaVersion` are machine-facing. Summaries are human-facing. Checks run in declared order and continue after failure. A thrown probe becomes a sanitized failed check.
 
-The current check order is `node-runtime`, `sqlite-fts5`, then `index-state`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete` (`supported` or `unsupported`) in `details`; lack of FTS5 fails the check. The index check passes `uninitialized` with guidance. Every non-ready initialized state fails.
+The current check order is `node-runtime`, `sqlite-fts5`, `library-state`, then
+`source-codex`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete`
+(`supported` or `unsupported`) in `details`; lack of FTS5 fails. An uninitialized
+library passes. Every non-ready initialized state fails. Ready Codex passes;
+unavailable or unreadable Codex fails without reading rollout content.
 
-For `ready`, the index check uses an immutable snapshot and adds `integrity`, `foreignKeys`, `ftsStructure`, `ftsContent`, `ftsSecureDelete`, `runRecords`, `writerLease`, `activeRuns`, and `interruptedRuns` to `details`. Health check values are stable strings: checks are `ok` or `failed`; FTS secure delete is `enabled`, `missing`, or `unsupported`; writer lease is `free`, `index-live`, `clear-live`, `expired`, or `invalid`; counts are non-negative decimal strings. `unsupported` is healthy only when the current SQLite runtime lacks the optional persistent setting. Integrity, foreign-key, required FTS configuration, run-record, or lease corruption fails the check. An active run without a live indexing lease also fails. Historical interrupted runs are reported but do not fail by themselves. Unexpected health inspection failure is sanitized as `health: inspection-failed`. Doctor inspection never opens a writer, runs migrations, or uses the write-shaped FTS integrity command.
+For `ready`, the library check uses an immutable snapshot and adds
+`canonicalIntegrity`, `foreignKeys`, `ftsStructure`, `ftsContent`,
+`ftsSecureDelete`, `ftsRemediation`, `runRecords`, `writerLease`, `activeRuns`,
+and `interruptedRuns` to `details`. Checks are `ok | failed`; FTS secure delete is
+`enabled | missing | unsupported`; remediation is
+`not-needed | rebuild-required`; writer lease is `free | index-live |
+forget-live | clear-live | expired | invalid`; counts are non-negative decimal
+strings. Canonical/foreign-key/run corruption fails. FTS-only damage reports
+rebuild-required without describing canonical loss. An active run is healthy only
+with an index-live lease. Doctor never opens a writer or applies migrations.
 
 All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
 
 ### Paths JSON
 
-`sessions paths --format json` writes one JSON document. Before initialization, a Linux default may look like:
+`sessions paths --format json` writes one schema-2 document. Before
+initialization, a Linux default may look like:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "paths",
-  "index": {
-    "directory": "/home/user/.cache/sessions",
-    "database": "/home/user/.cache/sessions/index.sqlite3",
-    "wal": "/home/user/.cache/sessions/index.sqlite3-wal",
-    "shm": "/home/user/.cache/sessions/index.sqlite3-shm",
+  "library": {
+    "directory": "/home/user/.local/share/sessions",
+    "scratch": "/home/user/.local/share/sessions/.scratch",
+    "database": "/home/user/.local/share/sessions/sessions.sqlite3",
+    "wal": "/home/user/.local/share/sessions/sessions.sqlite3-wal",
+    "shm": "/home/user/.local/share/sessions/sessions.sqlite3-shm",
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 3
-  }
+    "supportedSchemaVersion": 4
+  },
+  "sources": []
 }
 ```
 
-Version 1 reports only the Sessions-owned index directory, database, known WAL/SHM paths, initialization flag, state, observed schema version, and supported schema version. It does not report provider roots because no adapters are registered. Current state values are `uninitialized`, `ready`, `migration-required`, `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
+Schema 2 reports the Sessions-owned application-data library, scratch workspace,
+known database/sidecar paths, state, schema support, and admitted source probes.
+Current state values are `uninitialized`, `ready`, `migration-required`,
+`newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
 
-The human format presents the same fields. A successfully inspected incompatible state is still a paths report and exits `0`; doctor is the command that evaluates health. Path resolution or inspection failures emit no partial report, write a concise diagnostic to stderr, and exit `1`.
+The human format presents the same fields. An incompatible state is still a paths
+report and exits `0`; doctor evaluates health. Resolution/inspection failure emits
+no partial report and exits `1`.
 
-M5 replaces this pre-public cache report with a schema-versioned durable-library
-report rooted in platform application data and the `SESSIONS_DATA_DIR` override.
-It uses `library`, not `index`, for the owned database fields and does not silently
-change schema version 1 or reuse the old cache location.
-
-## Planned V1 commands
+## Remaining V1 commands
 
 ```text
-sessions index [--source cursor|codex] [--format human|json]
-sessions list [filters]
 sessions search <text> [filters]
-sessions show <source-instance:id> [--entry N --context N]
 sessions export <source-instance:id> --format md|json|jsonl [--full]
-sessions forget <source-instance:id> [--format human|json]
-sessions data clear --yes [--format human|json]
+sessions index --source cursor
 ```
 
-These names describe the accepted direction. They are added to generated help only when implemented and contract-tested.
+These routes are added to generated help only when implemented and contract-tested.
 
-M4 implements provider-neutral indexing/reconciliation and whole-database clear values internally, but does not register either route. M5 adapts those internals to durable capture before exposure. Generated help remains the authority: `sessions index`, `sessions forget`, `sessions data clear`, and all query commands are unavailable until their complete user-facing paths are composed.
+## Current retention and empty-library semantics
 
 `sessions index` creates or refreshes the latest successful normalized canonical
 snapshot as durable local user data. A complete later scan may mark the retained
@@ -119,7 +164,7 @@ uses the same output through a normal read snapshot. Other initialized non-ready
 states remain operational failures. `show` of an absent identity, including in an
 uninitialized library, remains a sanitized not-found operational failure.
 
-### M5 operational JSON
+## Current operational JSON
 
 M5's first public operational reports are stable contracts. Transcript-bearing
 list/show output remains human-only until the M7 DTO work.
@@ -244,7 +289,7 @@ and `scratchRemoved` reports the exact owned subtree. `absent` requires every
 boolean to be false. Orphan scratch without its lease-bearing database is a
 recovery-required failure, not a successful report.
 
-M5 paths schema 2 replaces `index` with `library` and adds admitted source probes:
+Paths schema 2 uses `library` and includes admitted source probes:
 
 ```json
 {
@@ -309,9 +354,9 @@ Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
 
-## Planned identity and filters
+## Current identity and planned filters
 
-Canonical printable IDs use
+Canonical printable IDs currently use
 `<kind>@<percent-encoded-instance-id>:<percent-encoded-native-id>`, for example
 `cursor@default:opaque-id`. Kind is an open lowercase adapter slug. Instance and
 native IDs are case-sensitive opaque values; delimiters are escaped and values
@@ -334,6 +379,9 @@ tool identity onto them. Raw SQLite FTS syntax is not a public API.
 - Exit `2`: invalid command, flag, value, or required argument.
 
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
+Concurrent index/forget/clear ownership is a sanitized
+`Session library is busy` operational failure; lease tokens, owners, and timing
+details are never rendered.
 
 ## Structured output
 

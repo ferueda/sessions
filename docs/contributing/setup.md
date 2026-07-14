@@ -24,13 +24,17 @@ pnpm check
 | `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored |
 | Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                |
 
-The current public CLI writes no user state. `sessions paths` resolves the platform-local `sessions` cache directory, or the exact absolute `SESSIONS_CACHE_DIR` override, without creating it. Tests exercise the internal indexing/reconciliation service, schema-v3 coordinated writer, canonical repository, clear maintenance, and immutable health inspection. Concrete adapters and public index/clear/query commands remain planned. Index paths, ownership, and deletion limits are governed by [privacy](../privacy.md).
+`sessions index` is the only ordinary command that initializes or migrates user
+state. It writes the durable canonical library to platform application data, or
+the exact absolute `SESSIONS_DATA_DIR` override. Its `.scratch` child is an
+ephemeral writer-leased discovery workspace, not a second library or provider
+backup. Sessions never reuses or migrates the pre-public cache. Paths, ownership,
+capture behavior, and deletion limits are governed by
+[privacy](../privacy.md).
 
-That cache path is the pre-M5 implementation baseline. The accepted public
-design moves durable canonical data to platform application data under
-`SESSIONS_DATA_DIR`; it does not silently reuse or migrate the pre-public cache.
-Its planned `.scratch` child is an ephemeral writer-leased discovery workspace,
-not a second library or provider backup.
+The current Codex adapter resolves the default local installation. Tests use only
+generated state databases and plain/Zstandard rollouts under temporary roots; no
+developer provider history is a test dependency.
 
 ## Hooks
 
@@ -40,8 +44,12 @@ The pre-commit hook formats/lints staged files and runs the full typecheck. Bypa
 
 - Wrong Node/pnpm: compare `node --version` and `pnpm --version` with `package.json`.
 - Missing FTS5: run `pnpm build` then `node dist/bin/sessions.js doctor --format json`.
-- Unexpected index path or state: run `node dist/bin/sessions.js paths --format json`; inspection does not repair or migrate it.
+- Unexpected library or source path/state: run
+  `node dist/bin/sessions.js paths --format json`; inspection does not repair,
+  migrate, or read transcript content.
 - Stale build: `pnpm clean && pnpm build`.
 - Gate failure: rerun the focused script listed by the failed `pnpm check` step.
 
-Setup never invents credentials or provider configuration. No environment file is required for the foundation.
+Setup never invents credentials or provider configuration. No environment file
+is required. `CODEX_HOME`, Codex `sqlite_home`, and `CODEX_SQLITE_HOME` are
+adapter path inputs, not Sessions credentials.

@@ -24,7 +24,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 4 are complete. The repository currently has:
+Milestones 0 through 5 are complete. The repository currently has:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
@@ -43,15 +43,21 @@ Milestones 0 through 4 are complete. The repository currently has:
   run interruption, and valid WAL recovery;
 - internal only-owned-file clear maintenance and immutable ready-index health
   inspection used by doctor;
+- schema-4 durable canonical evidence with exact text, privacy-safe omissions,
+  generic tool identity/linkage, capture time, and source-presence state;
+- a passive Codex adapter that snapshots the required state database/WAL into a
+  leased private workspace, streams plain or Zstandard rollouts, and normalizes
+  source evidence without writing provider-owned files;
+- public `index`, `list`, `show`, `forget`, and `data clear` workflows backed only
+  by the provider-neutral application and storage layers;
+- platform application-data storage, non-destructive missing/unknown source
+  reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have Cursor or Codex adapters, public capture/deletion commands,
-list/search/show/export, the packaged Agent Skill, release automation, or the
-pinned Harness integration. The indexing and maintenance paths remain internal
-until a real source is registered; no public command creates or clears persistent
-state yet. Their current cache placement, complete-scan deletion, and destructive
-`index clear` semantics are a pre-public implementation baseline that M5 must
-replace under [ADR 0007](../../docs/decisions/0007-retain-a-durable-canonical-library.md).
+It does not yet have provider-neutral search/evidence queries, portable export,
+the Cursor adapter, the packaged Agent Skill, release automation, or the pinned
+Harness integration. M6 is next and builds query semantics over the retained
+Codex evidence without changing adapter responsibilities.
 
 ## Execution rules
 
@@ -79,11 +85,11 @@ replace under [ADR 0007](../../docs/decisions/0007-retain-a-durable-canonical-li
 
 ```mermaid
 flowchart TD
-  M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts"]
-  M1 --> M2["M2 State and SQLite lifecycle"]
+  M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts — complete"]
+  M1 --> M2["M2 State and SQLite lifecycle — complete"]
   M2 --> M3["M3 Canonical repository — complete"]
   M3 --> M4["M4 Indexing and reconciliation — complete"]
-  M4 --> M5["M5 Codex vertical slice"]
+  M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine"]
   M6 --> M7["M7 Export and CLI schemas"]
   M7 --> M8["M8 Cursor parity"]
@@ -322,7 +328,7 @@ M5 replaces complete-scan deletion with retained source-presence state, replaces
 public `index clear` with explicit forget/data-clear intent, and keeps the M4
 writer safety and only-owned-file guarantees.
 
-### M5 — Ship the Codex vertical slice
+### M5 — Ship the Codex vertical slice (complete)
 
 Outcome: the first end-to-end user workflow durably captures Codex and serves
 list/show from the canonical library even after later provider disappearance.
@@ -905,8 +911,8 @@ These are evidence checkpoints, not date commitments:
 
 | Checkpoint             | Required evidence                                                     |
 | ---------------------- | --------------------------------------------------------------------- |
-| Foundation             | M0 complete; current pre-alpha repository                             |
-| Internal alpha         | M1-M5; Codex index/list/show vertical slice                           |
+| Foundation             | M0 complete; package and repository foundation                        |
+| Internal alpha         | M1-M5 complete; Codex index/list/show vertical slice                  |
 | Feature-complete alpha | M6-M7; Codex search/evidence/export and stable schemas                |
 | Beta                   | M8; Cursor equivalence and third-adapter architecture proof           |
 | Release candidate      | M9-M10; packaged skill, onboarding, install and publish qualification |
