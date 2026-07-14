@@ -24,7 +24,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 4 are complete. The repository currently has:
+Milestones 0 through 5 are complete. The repository currently has:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
@@ -39,19 +39,25 @@ Milestones 0 through 4 are complete. The repository currently has:
 - an internal provider-neutral indexing service with complete-discovery admission,
   incremental reads, last-good preservation, exact-source reconciliation, and
   repository-authoritative reports;
-- schema-v3 renewable writer leases, transactional mutation fencing, abandoned-
-  run interruption, and valid WAL recovery;
+- renewable writer leases, transactional mutation fencing, abandoned-run
+  interruption, and valid WAL recovery;
 - internal only-owned-file clear maintenance and immutable ready-index health
   inspection used by doctor;
+- one current storage baseline with durable canonical evidence, exact text, privacy-safe omissions,
+  generic tool identity/linkage, capture time, and source-presence state;
+- a passive Codex adapter that snapshots the required state database/WAL into a
+  leased private workspace, streams plain or Zstandard rollouts, and normalizes
+  source evidence without writing provider-owned files;
+- public `index`, `list`, `show`, `forget`, and `data clear` workflows backed only
+  by the provider-neutral application and storage layers;
+- platform application-data storage, non-destructive missing/unknown source
+  reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have Cursor or Codex adapters, public capture/deletion commands,
-list/search/show/export, the packaged Agent Skill, release automation, or the
-pinned Harness integration. The indexing and maintenance paths remain internal
-until a real source is registered; no public command creates or clears persistent
-state yet. Their current cache placement, complete-scan deletion, and destructive
-`index clear` semantics are a pre-public implementation baseline that M5 must
-replace under [ADR 0007](../../docs/decisions/0007-retain-a-durable-canonical-library.md).
+It does not yet have provider-neutral search/evidence queries, portable export,
+the Cursor adapter, the packaged Agent Skill, release automation, or the pinned
+Harness integration. M6 is next and builds query semantics over the retained
+Codex evidence without changing adapter responsibilities.
 
 ## Execution rules
 
@@ -79,11 +85,11 @@ replace under [ADR 0007](../../docs/decisions/0007-retain-a-durable-canonical-li
 
 ```mermaid
 flowchart TD
-  M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts"]
-  M1 --> M2["M2 State and SQLite lifecycle"]
+  M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts — complete"]
+  M1 --> M2["M2 State and SQLite lifecycle — complete"]
   M2 --> M3["M3 Canonical repository — complete"]
   M3 --> M4["M4 Indexing and reconciliation — complete"]
-  M4 --> M5["M5 Codex vertical slice"]
+  M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine"]
   M6 --> M7["M7 Export and CLI schemas"]
   M7 --> M8["M8 Cursor parity"]
@@ -282,15 +288,15 @@ Index sequence:
 6. Read and validate changed candidates, then atomically replace each session.
 7. Reconcile unseen sessions only after a complete discovery for that exact
    source instance.
-8. Finish with discovered, unchanged, updated, failed, removed, stale, and
+8. Finish with discovered, unchanged, updated, failed, missing, stale, and
    incomplete counts plus bounded item diagnostics.
 
 Failure and concurrency policy:
 
 - Failed reads preserve prior canonical rows and record staleness. A new failed
   candidate records diagnostics but no document.
-- A thrown or incomplete discovery removes nothing. A complete later scan removes
-  missing canonical documents; it retains non-content run evidence only.
+- A thrown or incomplete discovery proves no absence. A complete later scan marks
+  missing canonical documents without deleting them.
 - Two indexing writers cannot mutate the same index concurrently. The second
   exits with an operational diagnostic; a later run identifies and closes an
   interrupted predecessor safely.
@@ -322,7 +328,7 @@ M5 replaces complete-scan deletion with retained source-presence state, replaces
 public `index clear` with explicit forget/data-clear intent, and keeps the M4
 writer safety and only-owned-file guarantees.
 
-### M5 — Ship the Codex vertical slice
+### M5 — Ship the Codex vertical slice (complete)
 
 Outcome: the first end-to-end user workflow durably captures Codex and serves
 list/show from the canonical library even after later provider disappearance.
@@ -351,12 +357,13 @@ Required behavior:
   `LOCALAPPDATA` on Windows. Replace `SESSIONS_CACHE_DIR` with the absolute
   `SESSIONS_DATA_DIR` override and use `sessions.sqlite3`; never silently import,
   delete, or reuse the old cache or Harness JSONL state.
-- Expand schema 4 and the provider-neutral repository with capture time,
+- Define one current pre-alpha storage baseline containing capture time,
   last-seen/source-observation time, source presence (`present`, `missing`, or
-  `unknown`), and adapter version/source revision. Existing schema-3 canonical
-  rows migrate without loss and with unknown historical capture/presence facts.
-  Snapshot freshness and source presence remain independent. M7 owns the exact
-  export projection and document-digest scheme/backfill.
+  `unknown`), adapter version/source revision, canonical evidence, FTS, run
+  diagnostics, and writer coordination directly. Earlier development databases
+  are unsupported and fail closed without migration or deletion. Snapshot
+  freshness and source presence remain independent. M7 owns the exact export
+  projection and document-digest scheme/backfill.
 - Use one application-owned observation instant per selected-source run for its
   coverage, presence, last-seen, and successful-capture facts. Capture time means
   the scan that produced the successfully persisted normalized snapshot. SQLite
@@ -381,20 +388,20 @@ Required behavior:
 - Clear removes scratch under active heartbeat after the destructive-intent
   boundary, then refreshes/asserts ownership, checkpoints, closes without
   release, and verifies post-close database/sidecar identities and the immutable
-  carried lease immediately before unlink. It refuses orphan scratch without a
+  owned lease immediately before unlink. It refuses orphan scratch without a
   lease-bearing database and reports `scratchRemoved` separately.
 - Add `forget` to the fenced writer lease. Every live purpose is exclusive;
   expired index/forget may be taken over by any writer, while an expired clear
   may be resumed only by clear because file unlink continues after database
   close. Doctor reports `forget-live` distinctly and active runs are healthy only
   beside `index-live`.
-- Arbitrate the existing schema-3 lease before migration, then atomically install
-  generation + 1/final purpose after the schema-4 lease-table rebuild and fence
-  old owners. Data clear acquires valid schema-3 ownership without migrating it
-  merely to delete it; schema 3 never uses the non-current direct-unlink path.
-- Publish exact M5 operational schemas: index schema 2 with source coverage,
-  `missing`, and full canonical identity refs; forget/data-clear schema 1; paths
-  schema 2 with durable-library and sanitized probe outcomes; doctor schema 2
+- Keep the ordered, checksummed migration ledger for future published releases.
+  Index may bootstrap only a truly empty owned database; forget never initializes
+  storage, and clear accepts only the current baseline or an empty interrupted-
+  initialization file without recovery state. All unsupported schemas fail closed.
+- Publish one current M5 operational schema version: index with source coverage,
+  `missing`, and full canonical identity refs; forget/data-clear; paths with
+  durable-library and sanitized probe outcomes; doctor
   with `library-state`, `source-codex`, canonical-versus-FTS health, remediation,
   and lease state. M7 still owns transcript/query/export DTOs.
 
@@ -495,20 +502,21 @@ Exit gate:
   content. Tests prove omitted segments never enter FTS, hashes, recurrence, or
   output as private references. Boundary and adversarial tests enforce the exact
   source-type grammar and prove unsafe discriminators fall back without leaking.
-- Schema/repository/application tests prove schema-3 preservation, deterministic
-  present/missing/unknown transitions, complete-scan retention,
+- Schema/repository/application tests prove one-row baseline bootstrap, obsolete-
+  development-schema refusal without mutation, deterministic present/missing/
+  unknown transitions, complete-scan retention,
   incomplete-scan no-absence, idempotent repeated missing state, unchanged and
   changed reappearance, and present-plus-stale read failure. Divergent app/lease
   clocks prove one application-owned scan instant populates library facts.
 - Lease tests prove every live/expired arbitration cell, expired-clear recovery,
   stale-owner fencing, and forget crash/idempotence. Exact structured-report
   tests cover all operational schemas, probe unions, doctor order/details, and
-  absence of new `removed` output. A source-instance golden vector plus path
+  the current failed/missing outcome set. A source-instance golden vector plus path
   alias/root isolation tests lock the persistent Codex identity.
-- Schema-3 cutover tests prove live refusal is mutation-free, expired takeover
-  carries ownership across migration, every prior owner is fenced, and data clear
-  never uses the old direct-unlink bypass. Fresh-root list tests prove exact empty
-  output, exit/stream behavior, and no storage/provider activity.
+- Lease tests prove live refusal is mutation-free, expired takeover fences every
+  prior owner, and synthetic future migrations run only under owned writer
+  identity. Fresh-root list tests prove exact empty output, exit/stream behavior,
+  and no storage/provider activity.
 - Codex passes shared conformance and provider golden tests for root/environment/
   config/legacy paths, explicit missing/corrupt roots, required and optional
   schema fields, path containment, logical row/edge
@@ -905,8 +913,8 @@ These are evidence checkpoints, not date commitments:
 
 | Checkpoint             | Required evidence                                                     |
 | ---------------------- | --------------------------------------------------------------------- |
-| Foundation             | M0 complete; current pre-alpha repository                             |
-| Internal alpha         | M1-M5; Codex index/list/show vertical slice                           |
+| Foundation             | M0 complete; package and repository foundation                        |
+| Internal alpha         | M1-M5 complete; Codex index/list/show vertical slice                  |
 | Feature-complete alpha | M6-M7; Codex search/evidence/export and stable schemas                |
 | Beta                   | M8; Cursor equivalence and third-adapter architecture proof           |
 | Release candidate      | M9-M10; packaged skill, onboarding, install and publish qualification |

@@ -13,9 +13,10 @@ import { createIndexStateDiagnostic } from "../../src/infrastructure/state/index
 
 const paths: IndexPaths = {
   directory: "/cache/sessions",
-  database: "/cache/sessions/index.sqlite3",
-  wal: "/cache/sessions/index.sqlite3-wal",
-  shm: "/cache/sessions/index.sqlite3-shm",
+  scratch: "/cache/sessions/.scratch",
+  database: "/cache/sessions/sessions.sqlite3",
+  wal: "/cache/sessions/sessions.sqlite3-wal",
+  shm: "/cache/sessions/sessions.sqlite3-shm",
 };
 
 describe("createIndexStateDiagnostic", () => {
@@ -53,11 +54,12 @@ describe("createIndexStateDiagnostic", () => {
       details: {
         state: "ready",
         schemaVersion: "1",
-        integrity: "ok",
+        canonicalIntegrity: "ok",
         foreignKeys: "ok",
         ftsStructure: "ok",
         ftsContent: "ok",
         ftsSecureDelete: "enabled",
+        ftsRemediation: "not-needed",
         runRecords: "ok",
         writerLease: "free",
         activeRuns: "0",
@@ -71,13 +73,14 @@ describe("createIndexStateDiagnostic", () => {
       {
         status: "ready",
         initialized: true,
-        schemaVersion: 3,
-        supportedSchemaVersion: 3,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
       },
       {
         ...healthyIndex,
         ok: false,
         ftsContent: "failed",
+        ftsRemediation: "rebuild-required",
         writerLease: "expired",
         activeRuns: 1,
         interruptedRuns: 2,
@@ -86,17 +89,18 @@ describe("createIndexStateDiagnostic", () => {
 
     expect(outcome).toEqual({
       ok: false,
-      summary: "Index schema 3 failed health checks",
+      summary: "Index schema 1 failed health checks",
       details: {
         state: "ready",
         initialized: "true",
-        schemaVersion: "3",
-        supportedSchemaVersion: "3",
-        integrity: "ok",
+        schemaVersion: "1",
+        supportedSchemaVersion: "1",
+        canonicalIntegrity: "ok",
         foreignKeys: "ok",
         ftsStructure: "ok",
         ftsContent: "failed",
         ftsSecureDelete: "enabled",
+        ftsRemediation: "rebuild-required",
         runRecords: "ok",
         writerLease: "expired",
         activeRuns: "1",
@@ -109,8 +113,8 @@ describe("createIndexStateDiagnostic", () => {
     const state: IndexState = {
       status: "ready",
       initialized: true,
-      schemaVersion: 3,
-      supportedSchemaVersion: 3,
+      schemaVersion: 1,
+      supportedSchemaVersion: 1,
     };
     const inspector: IndexStateInspector & IndexHealthInspector = {
       async inspect() {
@@ -123,12 +127,12 @@ describe("createIndexStateDiagnostic", () => {
 
     await expect(createIndexStateDiagnostic(() => paths, inspector).run()).resolves.toEqual({
       ok: false,
-      summary: "Index schema 3 health inspection failed",
+      summary: "Index schema 1 health inspection failed",
       details: {
         state: "ready",
         initialized: "true",
-        schemaVersion: "3",
-        supportedSchemaVersion: "3",
+        schemaVersion: "1",
+        supportedSchemaVersion: "1",
         health: "inspection-failed",
       },
     });
@@ -195,11 +199,12 @@ describe("createIndexStateDiagnostic", () => {
 
 const healthyIndex: ReadyIndexHealth = {
   ok: true,
-  integrity: "ok",
+  canonicalIntegrity: "ok",
   foreignKeys: "ok",
   ftsStructure: "ok",
   ftsContent: "ok",
   ftsSecureDelete: "enabled",
+  ftsRemediation: "not-needed",
   runRecords: "ok",
   writerLease: "free",
   activeRuns: 0,

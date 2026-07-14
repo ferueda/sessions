@@ -14,6 +14,9 @@ import {
   type SqliteMigration,
 } from "./migrations.ts";
 import { readWriterLeaseHealth } from "./writer-lease.ts";
+import { readCanonicalDocument } from "./sqlite-session-document.ts";
+import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
+import { isSessionIdentity } from "../../domain/session-identity.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
@@ -53,16 +56,20 @@ function inspectDatabaseHealth(
   clock: () => Date,
   fts5SecureDeleteRequired: boolean,
 ): ReadyIndexHealth {
-  const integrity = check(() => databaseIntegrityIsValid(database));
+  const canonicalIntegrity = check(() => canonicalIntegrityIsValid(database));
   const foreignKeys = check(() => foreignKeysAreValid(database));
   const ftsStructure = check(() => ftsStructureIsValid(database));
   const ftsContent = check(() => ftsContentRowsAreConsistent(database));
   const ftsSecureDelete = inspectFtsSecureDelete(database, fts5SecureDeleteRequired);
+  const ftsRemediation =
+    ftsStructure === "ok" && ftsContent === "ok" && ftsSecureDelete.healthy
+      ? "not-needed"
+      : "rebuild-required";
   const runs = readRunCounts(database);
   const writerLease = readLeaseHealth(database, clock);
   const activeRunHasLiveIndexLease = runs.active === 0 || writerLease === "index-live";
   const ok =
-    integrity === "ok" &&
+    canonicalIntegrity === "ok" &&
     foreignKeys === "ok" &&
     ftsStructure === "ok" &&
     ftsContent === "ok" &&
@@ -73,11 +80,12 @@ function inspectDatabaseHealth(
 
   return Object.freeze({
     ok,
-    integrity,
+    canonicalIntegrity,
     foreignKeys,
     ftsStructure,
     ftsContent,
     ftsSecureDelete: ftsSecureDelete.status,
+    ftsRemediation,
     runRecords: runs.health,
     writerLease,
     activeRuns: runs.active,
@@ -85,11 +93,94 @@ function inspectDatabaseHealth(
   });
 }
 
-function databaseIntegrityIsValid(database: DatabaseSync): boolean {
-  const row = database.prepare("PRAGMA integrity_check(1)").get() as
-    | Record<string, unknown>
-    | undefined;
-  return row !== undefined && Object.values(row)[0] === "ok";
+function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
+  return sourceInstancesAreValid(database) && sessionTrackingIsValid(database);
+}
+
+function sourceInstancesAreValid(database: DatabaseSync): boolean {
+  const rows = database
+    .prepare(
+      `SELECT source_instance_id, kind, instance_id, coverage_status, coverage_observed_at
+       FROM sessions_source_instances
+       ORDER BY source_instance_id`,
+    )
+    .all() as readonly Record<string, unknown>[];
+  return rows.every((row) => {
+    nonNegativeInteger(row.source_instance_id);
+    // Reuse the public identity grammar to validate a source tuple with a fixed valid native ID.
+    return (
+      isSessionIdentity({
+        source: { kind: row.kind, instanceId: row.instance_id },
+        nativeId: "health-check",
+      }) &&
+      (row.coverage_status === "complete" || row.coverage_status === "unknown") &&
+      optionalCanonicalTimestampIsValid(row.coverage_observed_at) &&
+      (row.coverage_status !== "complete" || row.coverage_observed_at !== null)
+    );
+  });
+}
+
+function sessionTrackingIsValid(database: DatabaseSync): boolean {
+  const rows = database
+    .prepare(
+      `SELECT tracking.session_id,
+              tracking.source_instance_id,
+              tracking.native_id,
+              tracking.presence_status,
+              tracking.presence_observed_at,
+              tracking.captured_at,
+              tracking.last_seen_at,
+              source.kind,
+              source.instance_id
+       FROM sessions_session_tracking AS tracking
+       LEFT JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       ORDER BY tracking.session_id`,
+    )
+    .all() as readonly Record<string, unknown>[];
+  for (const row of rows) {
+    const sessionId = nonNegativeInteger(row.session_id);
+    nonNegativeInteger(row.source_instance_id);
+    const identity = {
+      source: { kind: row.kind, instanceId: row.instance_id },
+      nativeId: row.native_id,
+    };
+    if (!isSessionIdentity(identity)) return false;
+    if (
+      (row.presence_status !== "present" && row.presence_status !== "missing") ||
+      !optionalCanonicalTimestampIsValid(row.presence_observed_at) ||
+      !optionalCanonicalTimestampIsValid(row.captured_at) ||
+      !optionalCanonicalTimestampIsValid(row.last_seen_at)
+    ) {
+      return false;
+    }
+
+    const freshness = readSessionFreshness(database, identity);
+    const document = readCanonicalDocument(database, identity, sessionId);
+    const summary = readSessionSummary(database, identity);
+    if (freshness.status === "current" || freshness.status === "stale") {
+      if (document === undefined || summary === undefined) return false;
+      continue;
+    }
+    // A first-seen failure legitimately retains tracking without a document.
+    if (freshness.status === "untracked" || document !== undefined || summary !== undefined) {
+      return false;
+    }
+    if (row.captured_at !== null) return false;
+    if (freshness.status === "unindexed" && row.presence_status !== "present") return false;
+  }
+  return true;
+}
+
+function optionalCanonicalTimestampIsValid(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) &&
+    Number.isFinite(milliseconds) &&
+    new Date(milliseconds).toISOString() === value
+  );
 }
 
 function foreignKeysAreValid(database: DatabaseSync): boolean {
@@ -227,6 +318,25 @@ interface RunCounts {
 
 function readRunCounts(database: DatabaseSync): RunCounts {
   try {
+    if (
+      database
+        .prepare(
+          `SELECT 1 AS invalid
+           FROM sessions_index_runs AS run
+           WHERE run.discovered_count <> run.unchanged_count + run.indexed_count + run.failed_count
+              OR run.stale_count > run.failed_count
+              OR run.failed_count + run.missing_count <>
+                 run.omitted_item_count + (
+                   SELECT COUNT(*)
+                   FROM sessions_index_run_items AS item
+                   WHERE item.run_id = run.run_id
+                 )
+           LIMIT 1`,
+        )
+        .get() !== undefined
+    ) {
+      return { health: "failed", active: 0, interrupted: 0 };
+    }
     const row = database
       .prepare(
         `SELECT
@@ -250,7 +360,9 @@ function readLeaseHealth(database: DatabaseSync, clock: () => Date): IndexWriter
     const health = readWriterLeaseHealth(database, { now: clock });
     if (health.status === "free") return "free";
     if (health.status === "expired") return "expired";
-    return health.purpose === "index" ? "index-live" : "clear-live";
+    if (health.purpose === "index") return "index-live";
+    if (health.purpose === "forget") return "forget-live";
+    return "clear-live";
   } catch {
     return "invalid";
   }

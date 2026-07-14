@@ -1,7 +1,6 @@
 # Source adapter contract
 
-Status: implemented M1 internal contract plus an accepted M5 tool-evidence
-extension; no concrete adapter exists yet.
+Status: implemented internal contract with one conforming Codex adapter.
 
 Adapters translate provider histories into canonical documents. They do not define indexing, storage, queries, rendering, or analysis policy.
 
@@ -12,11 +11,10 @@ Adapters translate provider histories into canonical documents. They do not defi
 - `kind`: open adapter identifier; never a closed Cursor/Codex union.
 - `probe()`: return `ready`, `unavailable`, or `unreadable` plus sanitized source
   roots without reading transcript content or mutating state.
-- `discover()`: yield candidates with identity, at least one ordered input
-  descriptor, a complete aggregate fingerprint, and adapter format version. M5
-  changes this internal signature to `discover(workspace)` after writer open; the
-  provider-neutral workspace offers only `withPrivateDirectory(operation)`, and
-  probe/read receive none.
+- `discover(workspace)`: yield candidates with identity, at least one ordered
+  input descriptor, a complete aggregate fingerprint, and adapter format version.
+  The provider-neutral workspace offers only
+  `withPrivateDirectory(operation)` after writer open; probe/read receive none.
 - `read(candidate)`: deterministically normalize one complete candidate into a canonical `SessionDocument`.
 
 The port and values live under `src/application/ports/`; canonical transcript values live under `src/domain/`.
@@ -36,9 +34,9 @@ The port and values live under `src/application/ports/`; canonical transcript va
   one discovery generation before yielding. Candidate reads require matching
   frozen descriptors; state changes after capture are observed on the next
   discovery, while remaining live inputs still receive pre/post verification.
-- The planned M5 workspace implementation asserts the writer lease before
-  allocation and after private random-directory cleanup in `finally`, returns a
-  callback result only while ownership remains valid, and aggregates applicable
+- The workspace implementation asserts the writer lease before allocation and
+  after private random-directory cleanup in `finally`, returns a callback result
+  only while ownership remains valid, and aggregates applicable
   operation/cleanup/lease failures. The adapter never sees its root, lease
   identity, or cleanup policy.
 - Missing optional metadata maps to absent/unknown values.
@@ -68,22 +66,23 @@ snapshot-owned inputs must remain deterministic from the frozen generation and
 surface changes on the next discovery. Its synthetic source proves the contract
 now; every concrete adapter must invoke the same suite alongside provider-
 specific golden fixtures that enumerate every input affecting normalized output.
-Fixtures contain no personal paths or transcripts.
+The Codex adapter runs both proof layers against generated SQLite and plain/Zstd
+rollout fixtures. Fixtures contain no personal paths or transcripts.
 
 The V1 contract is internal. A public plugin ABI is deferred until multiple independent adapters prove the boundary.
 
-## Accepted M5 extension — not implemented
+## Canonical tool and omitted-content evidence
 
-Before the first concrete adapter is normalized, the provider-neutral entry,
-validation, schema, and repository contracts will add generic `tool-call` and
-`tool-result` evidence. A call may carry its exact source-observed tool name,
+The provider-neutral entry, validation, schema, and repository contracts support
+generic `tool-call` and `tool-result` evidence. A call may carry its exact
+source-observed tool name,
 optional exact namespace, and provider call ID; results link to calls through
 canonical entry relations and available call IDs. Name and namespace remain
 separate, exact, and valid only on calls; namespace requires a name. Adapters do
 not split, concatenate, or infer identity, and results do not copy it. Arguments
 and results remain faithful ordered content.
 
-Canonical content will become an ordered union of text and omitted segments.
+Canonical content is an ordered union of text and omitted segments.
 Text retains exact bytes and hashes and alone participates in FTS, deduplication,
 and recurrence. Omitted segments preserve position, broad non-text class,
 provenance, and a 1–64-byte lower-ASCII kebab source type matching
@@ -100,3 +99,19 @@ content signals; none implies an invocation. The shared conformance suite will
 cover linked events, missing tool identity, same-name tools in different
 namespaces, ordered mixed text/non-text content, mention-only content, and
 unavailable execution evidence without embedding skill policy in adapters.
+
+## Codex implementation
+
+`src/adapters/codex/` resolves one global/default Codex instance, probes its
+roots, snapshots active SQLite/WAL state into the leased private workspace,
+feature-detects supported thread/edge columns, and discovers ordered candidates.
+Reads verify live rollout identity before and after streaming plain JSONL or
+Zstandard data and normalize only declared record variants. Unknown supported
+structural records become privacy-safe omissions; malformed or changing evidence
+returns a typed failure and never a partial document.
+
+The adapter imports only application/domain contracts. It never opens the
+Sessions database, decides retention or source absence, renders output, or owns
+durable files. See the
+[format support reference](../reference/codex-format-support.md) for its current
+compatibility boundary.

@@ -25,12 +25,14 @@ import { SourceFailureError } from "../../src/application/source-failure.ts";
 import { formatSessionIdentity } from "../../src/domain/session-identity.ts";
 import type { SessionDocument, SessionIdentity, SourceInstance } from "../../src/domain/session.ts";
 import { createFakeIndexingSource, type FakeIndexingSource } from "../fixtures/indexing-source.ts";
+import { syntheticDiscoveryWorkspace } from "../fixtures/discovery-workspace.ts";
 
 const paths = {
   directory: "/tmp/sessions-test",
-  database: "/tmp/sessions-test/index.sqlite3",
-  wal: "/tmp/sessions-test/index.sqlite3-wal",
-  shm: "/tmp/sessions-test/index.sqlite3-shm",
+  scratch: "/tmp/sessions-test/.scratch",
+  database: "/tmp/sessions-test/sessions.sqlite3",
+  wal: "/tmp/sessions-test/sessions.sqlite3-wal",
+  shm: "/tmp/sessions-test/sessions.sqlite3-shm",
 };
 
 interface ProbeFailureCase {
@@ -101,6 +103,16 @@ function probe(source: FakeIndexingSource, status: SourceProbeStatus): SourcePro
 }
 
 describe("runIndex", () => {
+  test("passes the opened writer workspace into source discovery", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([]);
+    const harness = createIndexHarness();
+
+    await execute(harness, [source.selected]);
+
+    expect(source.discoveryWorkspaces).toEqual([syntheticDiscoveryWorkspace]);
+  });
+
   test("rejects duplicate selections before opening the index", async () => {
     const source = createFakeIndexingSource();
     const harness = createIndexHarness();
@@ -115,6 +127,19 @@ describe("runIndex", () => {
     ).rejects.toThrow("Duplicate selected source instance");
 
     expect(harness.openWriter).not.toHaveBeenCalled();
+  });
+
+  test("maps writer contention to the public library-busy failure", async () => {
+    const source = createFakeIndexingSource();
+    const harness = createIndexHarness();
+    const busy = Object.assign(new Error("internal lease detail"), { code: "writer-busy" });
+    harness.openWriter.mockRejectedValue(busy);
+
+    await expect(execute(harness, [source.selected])).rejects.toMatchObject({
+      code: "library-busy",
+      message: "Session library is busy",
+      cause: busy,
+    });
   });
 
   test("sorts sources and continues after unavailable and malformed probes", async () => {
@@ -158,7 +183,7 @@ describe("runIndex", () => {
     expect(report).toMatchObject({
       schemaVersion: 1,
       command: "index",
-      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, removed: 0 },
+      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, missing: 0 },
       incompleteSources: 2,
       omittedItemCount: 0,
     });
@@ -228,10 +253,10 @@ describe("runIndex", () => {
       unchanged: 0,
       updated: 0,
       failed: 1,
-      removed: 0,
+      missing: 0,
       stale: 1,
     });
-    expect(report.sources[0]?.items).toEqual([
+    expect(report.sources[0]?.items).toMatchObject([
       {
         identity: { source: source.instance, nativeId: "session" },
         outcome: "failed",
@@ -247,7 +272,7 @@ describe("runIndex", () => {
     const source = createFakeIndexingSource();
     source.setDiscovery([
       source.candidate("kept", "revision-one"),
-      source.candidate("later-removed", "revision-one"),
+      source.candidate("later-missing", "revision-one"),
     ]);
     const harness = createIndexHarness();
     await execute(harness, [source.selected]);
@@ -267,10 +292,8 @@ describe("runIndex", () => {
 
     source.setDiscovery([source.candidate("kept", "revision-two")]);
     const complete = await execute(harness, [source.selected]);
-    expect(complete.counts).toMatchObject({ discovered: 1, updated: 1, removed: 1 });
-    expect(await harness.index.listIndexedIdentities(source.instance)).toEqual([
-      identity(source.instance, "kept"),
-    ]);
+    expect(complete.counts).toMatchObject({ discovered: 1, updated: 1, missing: 1 });
+    expect(await harness.index.listIndexedIdentities(source.instance)).toHaveLength(2);
   });
 
   test("does not record a second failure after repository replacement rejects", async () => {
@@ -343,6 +366,7 @@ function createIndexHarness(
       supportedSchemaVersion: 3,
     },
     sessions: index,
+    workspace: syntheticDiscoveryWorkspace,
     async close() {
       if (Object.hasOwn(options, "closeError")) throw options.closeError;
     },
@@ -370,6 +394,7 @@ interface MemoryIndexOptions {
 
 interface StoredSession {
   readonly identity: SessionIdentity;
+  presence: "present" | "missing";
   lastGood?: SessionObservation["revision"];
   latest:
     | {
@@ -380,8 +405,7 @@ interface StoredSession {
         readonly outcome: "failed";
         readonly revision: SessionObservation["revision"];
         readonly failure: RecordableSessionFailureCode | "repository-write";
-      }
-    | { readonly outcome: "removed" };
+      };
 }
 
 interface MemoryRun {
@@ -395,7 +419,7 @@ interface MutableCounts {
   unchanged: number;
   updated: number;
   failed: number;
-  removed: number;
+  missing: number;
   stale: number;
 }
 
@@ -421,9 +445,6 @@ class MemorySessionIndex implements SessionIndexWriter {
     }
     const stored = this.#sessions.get(formatSessionIdentity(sessionIdentity));
     if (stored === undefined) return { status: "untracked", identity: sessionIdentity };
-    if (stored.latest.outcome === "removed") {
-      return { status: "removed", identity: sessionIdentity, latest: stored.latest };
-    }
     if (stored.lastGood === undefined) {
       if (stored.latest.outcome !== "failed") throw new Error("invalid memory fixture state");
       return { status: "unindexed", identity: sessionIdentity, latest: stored.latest };
@@ -448,17 +469,22 @@ class MemorySessionIndex implements SessionIndexWriter {
     return undefined;
   }
 
+  async listSummaries() {
+    return [];
+  }
+
   async getDocument(): Promise<SessionDocument | undefined> {
+    return undefined;
+  }
+
+  async getSession() {
     return undefined;
   }
 
   async listIndexedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]> {
     return [...this.#sessions.values()]
       .filter(
-        (stored) =>
-          stored.lastGood !== undefined &&
-          stored.latest.outcome !== "removed" &&
-          sameSource(stored.identity.source, source),
+        (stored) => stored.lastGood !== undefined && sameSource(stored.identity.source, source),
       )
       .map(({ identity: value }) => value)
       .sort((left, right) =>
@@ -502,6 +528,7 @@ class MemorySessionIndex implements SessionIndexWriter {
     const active = this.#run(run);
     this.#sessions.set(formatSessionIdentity(replacement.observation.identity), {
       identity: replacement.observation.identity,
+      presence: "present",
       lastGood: replacement.observation.revision,
       latest: { outcome: "indexed", revision: replacement.observation.revision },
     });
@@ -509,20 +536,15 @@ class MemorySessionIndex implements SessionIndexWriter {
     active.counts.updated += 1;
   }
 
-  async removeSession(run: SessionIndexRun, sessionIdentity: SessionIdentity) {
+  async recordMissing(run: SessionIndexRun, sessionIdentity: SessionIdentity) {
     const active = this.#run(run);
     const stored = this.#sessions.get(formatSessionIdentity(sessionIdentity));
-    if (
-      stored === undefined ||
-      stored.lastGood === undefined ||
-      stored.latest.outcome === "removed"
-    ) {
+    if (stored === undefined || stored.lastGood === undefined) {
       return;
     }
-    delete stored.lastGood;
-    stored.latest = { outcome: "removed" };
-    active.counts.removed += 1;
-    active.items.push({ identity: sessionIdentity, outcome: "removed" });
+    stored.presence = "missing";
+    active.counts.missing += 1;
+    active.items.push({ identity: sessionIdentity, outcome: "missing" });
   }
 
   async finishRun(run: SessionIndexRun, completion: FinishIndexRunInput): Promise<IndexRunResult> {
@@ -538,8 +560,17 @@ class MemorySessionIndex implements SessionIndexWriter {
     };
     const result: IndexRunResult =
       completion.status === "completed"
-        ? { ...common, status: "completed" }
-        : { ...common, status: "incomplete", failure: completion.failure };
+        ? {
+            ...common,
+            status: "completed",
+            coverage: { status: "complete", observedAt: active.run.startedAt },
+          }
+        : {
+            ...common,
+            status: "incomplete",
+            coverage: { status: "unknown", observedAt: active.run.startedAt },
+            failure: completion.failure,
+          };
     this.#runs.delete(run.id);
     this.finishedRuns.push({ completion, result });
     return result;
@@ -556,6 +587,7 @@ class MemorySessionIndex implements SessionIndexWriter {
     const stale = previous?.lastGood !== undefined;
     this.#sessions.set(key, {
       identity: observation.identity,
+      presence: "present",
       ...(previous?.lastGood === undefined ? {} : { lastGood: previous.lastGood }),
       latest: { outcome: "failed", revision: observation.revision, failure },
     });
@@ -598,7 +630,7 @@ function sameSource(left: SourceInstance, right: SourceInstance): boolean {
 }
 
 function emptyCounts(): MutableCounts {
-  return { discovered: 0, unchanged: 0, updated: 0, failed: 0, removed: 0, stale: 0 };
+  return { discovered: 0, unchanged: 0, updated: 0, failed: 0, missing: 0, stale: 0 };
 }
 
 async function captureError(promise: Promise<unknown>): Promise<unknown> {

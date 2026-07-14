@@ -1,88 +1,138 @@
 # Current architecture
 
-Status: foundation through the M4 indexing-and-reconciliation slice. This map describes code that
-exists now; the [architecture memo](../architecture-memo.md) describes the
-accepted target.
+Status: M5 Codex durable vertical slice.
+
+This map describes code that exists now. The
+[architecture memo](../architecture-memo.md) describes the accepted V1 target.
 
 ## Runtime flow
 
 ```text
 src/bin/sessions.ts
-  -> src/cli/run.ts -> src/cli/program.ts
-  -> src/application/run-doctor.ts + src/application/get-paths.ts
-  -> src/application/ports/index-lifecycle.ts
-  -> src/infrastructure/state/{paths,index-state-diagnostic}.ts
-  -> src/infrastructure/sqlite/{database,sqlite-index-health}.ts
-  -> src/infrastructure/{runtime,sqlite} diagnostics
+  -> src/cli/{run,program,render}.ts
 
-internal M4 services (not composed into the public CLI)
-  -> src/application/{run-index,discover-sessions,clear-index}.ts
-  -> src/application/ports/{session-source,session-index,index-maintenance}.ts
-  -> src/infrastructure/sqlite/{sqlite-session-index,index-maintenance}.ts
-  -> src/infrastructure/sqlite/{writer-lease,sqlite-writer-database,migrations}.ts
+doctor / paths
+  -> src/application/{run-doctor,get-paths,source-diagnostic}.ts
+  -> runtime + SQLite + library-state diagnostics
+  -> lazy Codex probe
+
+index
+  -> src/adapters/codex/source.ts
+  -> src/application/run-index.ts
+  -> writer-leased SourceDiscoveryWorkspace
+  -> src/infrastructure/sqlite/sqlite-session-index.ts
+
+list / show
+  -> src/application/{list-sessions,show-session}.ts
+  -> immutable library reader (no adapter)
+
+forget / data clear
+  -> src/application/{forget-session,clear-index}.ts
+  -> src/infrastructure/sqlite/index-maintenance.ts
 ```
 
-The composition root reads the package version, resolves the platform-local index paths, wires concrete diagnostics and SQLite state inspection, and maps the returned code to `process.exitCode`. CLI presentation receives `doctor` and `paths` functions plus output writers; it does not import concrete infrastructure.
-
-`paths` and the `index-state` doctor check receive only inspection capabilities. They resolve state without creating directories, opening a writer, or applying migrations. A ready-index doctor check uses an immutable read snapshot for bounded integrity, foreign-key, FTS, run-record, and lease-health checks. The concrete lifecycle also implements guarded reader/writer repository handles for internal indexing, but no current public command calls the writer or clear service.
+The composition root is the only production module that imports both a concrete
+adapter and infrastructure. It resolves Codex lazily: help, version, list, show,
+forget, and data clear do not resolve provider configuration. Index, paths, and
+doctor intentionally resolve or probe the registered source.
 
 ## Ownership
 
-| Path                                       | Current owner                                                                     |
-| ------------------------------------------ | --------------------------------------------------------------------------------- |
-| `src/domain/`                              | Session values, identity/hash policy, canonical validation, index-state values    |
-| `src/application/ports/`                   | Source, index, lifecycle, maintenance, health, and diagnostic contracts           |
-| `src/application/source-*.ts`              | Complete input fingerprints and typed source failures                             |
-| `src/application/validate-session.ts`      | Immutable candidate/source selection and canonical replacement admission          |
-| `src/application/read-session-document.ts` | Validated adapter-read boundary                                                   |
-| `src/application/discover-sessions.ts`     | Complete discovery admission, duplicate policy, and deterministic ordering        |
-| `src/application/run-index.ts`             | Provider-neutral incremental indexing and source-scoped reconciliation            |
-| `src/application/index-report.ts`          | Immutable provider-neutral aggregate/source reports                               |
-| `src/application/clear-index.ts`           | Stable internal clear report                                                      |
-| `src/application/run-doctor.ts`            | Probe aggregation and report contract                                             |
-| `src/application/get-paths.ts`             | Versioned owned-state path report                                                 |
-| `src/infrastructure/state/`                | Platform path resolution and index-state diagnostic                               |
-| `src/infrastructure/sqlite/`               | Lifecycle, repository, migrations, writer lease, health, maintenance, permissions |
-| `src/cli/`                                 | Command grammar, rendering, stream and exit behavior                              |
-| `src/bin/`                                 | Sole concrete composition root                                                    |
-| `scripts/`                                 | Repository build/delivery smoke helpers; not published runtime                    |
-| `test/`                                    | Cross-layer behavior and documentation contracts                                  |
+| Path                                      | Owner                                                                                  |
+| ----------------------------------------- | -------------------------------------------------------------------------------------- |
+| `src/domain/`                             | Canonical session, identity, hash, source-type, provenance, and validation values      |
+| `src/application/ports/`                  | Source, library, lifecycle, maintenance, health, and diagnostic contracts              |
+| `src/application/source-*.ts`             | Complete input fingerprints and typed source failures                                  |
+| `src/application/validate-session.ts`     | Immutable adapter-read admission                                                       |
+| `src/application/discover-sessions.ts`    | Complete discovery admission, duplicate policy, and deterministic ordering             |
+| `src/application/run-index.ts`            | Provider-neutral incremental capture and source-presence reconciliation                |
+| `src/application/{list,show}-sessions.ts` | Provider-free retained-library reads and bounds                                        |
+| `src/application/*report.ts`              | Versioned provider-neutral operational reports                                         |
+| `src/adapters/codex/`                     | Codex path/state/rollout discovery and canonical normalization                         |
+| `src/infrastructure/state/`               | Application-data paths, state inspection, and leased ephemeral discovery workspace     |
+| `src/infrastructure/sqlite/`              | Schema, lifecycle, canonical repository, lease, health, forget, and all-data deletion  |
+| `src/cli/`                                | Command grammar, terminal-safe rendering, streams, and exit behavior                   |
+| `src/bin/`                                | Sole concrete composition root                                                         |
+| `scripts/`                                | Build and delivery smoke helpers; not published runtime                                |
+| `test/`                                   | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
-The shared source conformance harness, programmable fake indexing source, provider-neutral indexing/reconciliation service, and canonical SQLite repository exist. Query behavior, concrete provider adapters, public index/clear/query commands, and packaged skills do not exist yet.
+Search, portable export, Cursor, packaged Agent Skills, and a public adapter ABI
+do not exist yet.
+
+M5 intentionally adds only `smol-toml` at runtime. Provider and canonical input
+use focused handwritten bounded validators; Zod is deferred until a concrete
+public-schema benefit justifies its runtime/package cost. M7 owns the versioned
+public transcript DTOs, deterministic document digest, JSON/JSONL, and portable
+export rather than freezing partial equivalents in M5.
 
 ## Dependency direction
 
 - Domain -> domain only.
 - Application -> application/domain.
 - Infrastructure -> infrastructure/application/domain.
-- Future adapters -> adapters/application/domain.
+- Adapters -> adapters/application/domain.
 - CLI -> CLI/application/domain.
 - Binary composition -> any production layer.
 
-`scripts/check-dependencies.ts` enforces these boundaries for explicit relative imports and fails on an empty scan. Oxlint rejects cycles. `pnpm deps:check` is the focused gate.
+`scripts/check-dependencies.ts` enforces explicit relative-import boundaries and
+fails on an empty scan. Oxlint rejects cycles. `pnpm deps:check` is the focused
+gate.
+
+## Capture boundary
+
+The source port is `probe` / `discover(workspace)` / `read`. The application
+engine selects sources, admits a complete discovery set, compares fingerprints,
+owns last-good behavior, records coverage/presence, and reconciles unseen
+sessions. Adapters only turn provider evidence into candidates and canonical
+documents.
+
+Codex discovery snapshots `state_5.sqlite` and any active WAL bytes into a random
+private child of the Sessions `.scratch` workspace. The adapter never opens the
+provider database with SQLite and never receives the workspace root or writer
+lease. Snapshot validation fails closed if concurrent checkpoint/reset evidence
+cannot prove one complete generation. Rollout reads stream plain JSONL or Zstd,
+verify live file identity before and after consumption, and admit no partial
+document after change or parse failure.
+
+## Durable library
+
+The owned directory is platform application data, or the exact absolute
+`SESSIONS_DATA_DIR` override. It contains `sessions.sqlite3`, known WAL/SHM
+sidecars, and the exact ephemeral `.scratch` child. The pre-public cache path and
+legacy Harness JSONL cache are never reused, migrated, or deleted.
+
+The current baseline creates canonical text/omitted segments, exact tool identity
+and linkage, source instances, latest successful fingerprints/documents, capture
+timestamps, source presence/coverage, bounded run evidence, derived
+external-content FTS, and writer coordination directly. Only text enters
+interning and FTS. Omitted content stores class, source type, ordinal, and
+provenance—never media bytes or references.
+
+One renewable generation lease serializes `index`, `forget`, and `clear`. Every
+mutation asserts ownership inside its transaction. Expired takeover fences stale
+writers and interrupts abandoned active index runs. Unsupported development
+databases fail closed; no pre-release schema cutover or lease carry-forward exists.
+
+A complete scan marks unseen retained sessions `missing`; unavailable or
+incomplete discovery leaves effective source state `unknown`. Neither deletes
+canonical evidence. A failed discovered read preserves the last-good document and
+marks it stale. Reappearance restores `present` and unchanged fingerprints avoid
+another transcript read.
+
+`forget` transactionally deletes one selected tracking identity and its owned
+canonical evidence while preserving aggregate redacted run history, shared text,
+and incoming relations owned by other sessions. `data clear --yes` removes only
+the validated Sessions database/WAL/SHM paths and exact scratch subtree. Neither
+operation touches a provider.
+
+Immutable readers reconstruct list summaries and complete canonical documents
+only from the library. List/show never resolve or reopen Codex, so retained
+content remains usable after provider disappearance. Ready-library doctor checks
+canonical integrity separately from rebuildable FTS health.
 
 ## Build
 
-Source uses explicit `.ts` imports and erasable TypeScript. `tsconfig.build.json` compiles only `src/` into `dist/`, rewrites relative extensions to `.js`, and emits source maps. The package exposes no library API; published consumers execute `dist/bin/sessions.js`.
-
-## State
-
-The owned directory is the platform cache leaf `sessions`, or the exact absolute `SESSIONS_CACHE_DIR` override. It contains `index.sqlite3` and any SQLite WAL/SHM sidecars. `sessions paths` reports these locations and initialization state without creating them; doctor also inspects without mutation.
-
-The internal writer uses ordered checksummed migrations, WAL, foreign keys, a five-second busy timeout, core secure delete, and per-table FTS secure delete when supported. Migration 1 bootstraps history; migration 2 adds provider-neutral session tracking, canonical documents, bounded run diagnostics, collision-safe content values/occurrences, and derived external-content FTS; migration 3 adds a singleton generation lease for `index` and `clear` ownership.
-
-One renewable lease owner may write at a time. Every repository mutation verifies its token, generation, purpose, and expiry in the same transaction. Expired takeover fences stale writers and marks abandoned active runs interrupted before new work. A writer may open valid WAL recovery state; immutable readers and doctor still refuse recovery sidecars. Repository replacement remains atomic and preserves last-good content after refresh failure.
-
-Internal clear maintenance never opens provider paths or recursively deletes the cache directory. It removes only the known database/WAL/SHM files after path-safety checks and, for a current schema, a fenced checkpoint. Snapshot-scoped readers and ready-index health inspection do not create files, sidecars, migrations, or other mutations. On POSIX, the directory is constrained to `0700` and database/sidecar files to `0600`; Windows uses profile-local platform ACLs. See [privacy](../privacy.md) for guarantees and limitations.
-
-These are current M4 mechanics, not the accepted public retention lifecycle.
-[ADR 0007](../decisions/0007-retain-a-durable-canonical-library.md) requires M5
-to move canonical data to platform application data, retain the latest successful
-snapshot after complete-scan absence, separate source presence from freshness,
-expose only explicit forget/data-clear deletion, arbitrate schema-3 ownership in
-the same transaction as migration, and remove valid schema 3 from the
-non-current direct-unlink clear path. It also adds an exact application-data
-`.scratch` path behind a writer-leased provider-neutral private-directory
-capability; adapters never receive `IndexPaths`, and only explicit data clear
-recursively removes that validated subtree. This current-code map should be
-rewritten after that implementation lands.
+Source uses explicit `.ts` imports and erasable TypeScript. `tsconfig.build.json`
+compiles only `src/` into `dist/`, rewrites relative extensions to `.js`, and
+emits source maps. The package exposes no library API; published consumers execute
+`dist/bin/sessions.js`.

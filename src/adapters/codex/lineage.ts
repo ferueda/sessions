@@ -1,0 +1,93 @@
+import { CodexRolloutError } from "./rollout.ts";
+
+import type { SessionIdentity, SessionRelation } from "../../domain/session.ts";
+
+export interface CodexMetadataLineage {
+  readonly parentThreadId?: string;
+  readonly forkedFromId?: string;
+}
+
+export class CodexLineageTracker {
+  readonly #identity: SessionIdentity;
+  readonly #stateParentNativeId: string | undefined;
+  #metadataRelation: { readonly kind: "parent" | "fork"; readonly nativeId: string } | undefined;
+  #sawCurrentMetadata = false;
+
+  constructor(identity: SessionIdentity, stateParentNativeId?: string) {
+    if (
+      stateParentNativeId !== undefined &&
+      (stateParentNativeId.length === 0 ||
+        !stateParentNativeId.isWellFormed() ||
+        stateParentNativeId === identity.nativeId)
+    ) {
+      throwMalformed();
+    }
+    this.#identity = identity;
+    this.#stateParentNativeId = stateParentNativeId;
+  }
+
+  observeCurrentMetadata(metadata: CodexMetadataLineage): void {
+    this.#sawCurrentMetadata = true;
+    const { parentThreadId, forkedFromId } = metadata;
+
+    if (
+      parentThreadId !== undefined &&
+      forkedFromId !== undefined &&
+      parentThreadId !== forkedFromId
+    ) {
+      throwMalformed();
+    }
+
+    if (this.#stateParentNativeId !== undefined) {
+      if (
+        (parentThreadId !== undefined && parentThreadId !== this.#stateParentNativeId) ||
+        (forkedFromId !== undefined && forkedFromId !== this.#stateParentNativeId)
+      ) {
+        throwMalformed();
+      }
+      return;
+    }
+
+    const relation =
+      parentThreadId !== undefined
+        ? { kind: "parent" as const, nativeId: parentThreadId }
+        : forkedFromId !== undefined
+          ? { kind: "fork" as const, nativeId: forkedFromId }
+          : undefined;
+    if (relation === undefined) return;
+    if (relation.nativeId === this.#identity.nativeId) throwMalformed();
+    if (
+      this.#metadataRelation !== undefined &&
+      (this.#metadataRelation.kind !== relation.kind ||
+        this.#metadataRelation.nativeId !== relation.nativeId)
+    ) {
+      throwMalformed();
+    }
+    this.#metadataRelation = relation;
+  }
+
+  finish(): readonly SessionRelation[] {
+    if (!this.#sawCurrentMetadata) throwMalformed();
+
+    const relation =
+      this.#stateParentNativeId === undefined
+        ? this.#metadataRelation
+        : { kind: "parent" as const, nativeId: this.#stateParentNativeId };
+    if (relation === undefined) return [];
+
+    return [
+      {
+        kind: relation.kind,
+        target: {
+          source: this.#identity.source,
+          nativeId: relation.nativeId,
+        },
+        confidence: "high",
+      },
+    ];
+  }
+}
+
+function throwMalformed(): never {
+  throw new CodexRolloutError("malformed");
+}

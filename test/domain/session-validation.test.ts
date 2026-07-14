@@ -2,11 +2,11 @@ import { describe, expect, test } from "vitest";
 
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type {
-  ContentSegment,
   SessionDocument,
   SessionEntry,
   SessionIdentity,
   SessionRelation,
+  TextContentSegment,
 } from "../../src/domain/session.ts";
 import {
   MAX_SESSION_VALIDATION_ISSUES,
@@ -29,6 +29,7 @@ describe("validateSessionDocument", () => {
     const document = validDocument();
     const entry = document.entries[0]!;
     const segment = entry.content[0]!;
+    if (segment.kind !== "text") throw new Error("expected text segment");
     const value = {
       ...document,
       createdAt: "2026-07-13T12:00:00.000Z",
@@ -217,6 +218,7 @@ describe("validateSessionDocument", () => {
     const document = validDocument();
     const entry = document.entries[0]!;
     const segment = entry.content[0]!;
+    if (segment.kind !== "text") throw new Error("expected text segment");
 
     expect(
       invalidResult({
@@ -293,7 +295,9 @@ describe("validateSessionDocument", () => {
     if (!result.ok) throw new Error("expected well-formed Unicode");
     expect(result.document.title).toBe(decomposed);
     expect(result.document.entries[0]?.kind).toBe(decomposed);
-    expect(result.document.entries[0]?.content[0]?.text).toBe(decomposed);
+    const admittedSegment = result.document.entries[0]?.content[0];
+    expect(admittedSegment?.kind).toBe("text");
+    expect(admittedSegment?.kind === "text" ? admittedSegment.text : undefined).toBe(decomposed);
     expect(result.document.entries[0]?.content[0]?.sourceMetadata).toEqual({
       [decomposed]: decomposed,
     });
@@ -316,6 +320,89 @@ describe("validateSessionDocument", () => {
     expect(invalidResult({ ...validDocument(), title: undefined }).issues).toContainEqual({
       code: "expected-string",
       path: "/title",
+    });
+  });
+
+  test("preserves mixed text and omitted evidence in exact order", () => {
+    const document = validDocument();
+    const entry = document.entries[0]!;
+    const result = validateSessionDocument({
+      ...document,
+      entries: [
+        {
+          ...entry,
+          content: [
+            canonicalSegment(0, "before"),
+            {
+              kind: "omitted",
+              ordinal: 1,
+              contentClass: "image",
+              sourceType: "input-image",
+              origin: "human",
+              originConfidence: "high",
+              sourceMetadata: {},
+            },
+            canonicalSegment(2, "after"),
+          ],
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error("expected mixed evidence");
+    expect(result.document.entries[0]?.content.map(({ kind }) => kind)).toEqual([
+      "text",
+      "omitted",
+      "text",
+    ]);
+  });
+
+  test("rejects unsafe omitted types and cross-variant fields", () => {
+    const document = validDocument();
+    const entry = document.entries[0]!;
+    const omitted = {
+      kind: "omitted",
+      ordinal: 0,
+      contentClass: "unknown",
+      sourceType: "unknown-record",
+      origin: "unknown",
+      originConfidence: "unknown",
+      sourceMetadata: {},
+    };
+    expect(
+      invalidResult({
+        ...document,
+        entries: [{ ...entry, content: [{ ...omitted, sourceType: "unsafe_type" }] }],
+      }).issues,
+    ).toContainEqual({ code: "invalid-source-type", path: "/entries/0/content/0/sourceType" });
+    expect(
+      invalidResult({
+        ...document,
+        entries: [{ ...entry, content: [{ ...omitted, text: "private" }] }],
+      }).issues,
+    ).toContainEqual({ code: "invalid-segment-variant", path: "/entries/0/content/0" });
+  });
+
+  test("admits legacy call IDs but scopes tool name and namespace to calls", () => {
+    const document = validDocument();
+    const entry = document.entries[0]!;
+    expect(
+      validateSessionDocument({
+        ...document,
+        entries: [{ ...entry, toolCallId: "legacy-id" }],
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      invalidResult({ ...document, entries: [{ ...entry, toolName: "shell" }] }).issues,
+    ).toContainEqual({ code: "invalid-tool-identity", path: "/entries/0" });
+    expect(
+      invalidResult({
+        ...document,
+        entries: [{ ...entry, kind: "tool-call", toolNamespace: "local" }],
+      }).issues,
+    ).toContainEqual({
+      code: "invalid-tool-identity",
+      path: "/entries/0/toolNamespace",
     });
   });
 
@@ -342,6 +429,7 @@ function illFormedPersistedStringCases(): readonly {
   const entryDocument = validDocument();
   const entry = entryDocument.entries[0]!;
   const segment = entry.content[0]!;
+  if (segment.kind !== "text") throw new Error("expected text segment");
   const relation = entryDocument.relations[0]!;
   const withEntry = (overrides: Readonly<Record<string, unknown>>): unknown => ({
     ...entryDocument,
@@ -518,8 +606,9 @@ function canonicalEntry(ordinal: number, timestamp?: string): SessionEntry {
   };
 }
 
-function canonicalSegment(ordinal: number, text: string): ContentSegment {
+function canonicalSegment(ordinal: number, text: string): TextContentSegment {
   return {
+    kind: "text",
     ordinal,
     text,
     contentHash: hashContent(text),

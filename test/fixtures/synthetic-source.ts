@@ -17,6 +17,7 @@ import type {
   SessionSourceContractFixture,
   SessionSourceContractScenario,
 } from "../contracts/session-source.contract.ts";
+import { syntheticDiscoveryWorkspace } from "./discovery-workspace.ts";
 
 const SENSITIVE_SOURCE_SENTINEL = "private source error sentinel";
 const SENSITIVE_METADATA_TITLE = "private metadata sentinel";
@@ -87,6 +88,7 @@ export function createSyntheticSourceFixture(
         role: sourceInput.role,
         locator: copyLocator(sourceInput.locator),
       },
+      ownership: "live",
     })),
   );
 
@@ -156,11 +158,13 @@ export function createSyntheticSourceFixture(
 
   return {
     source,
+    discoveryWorkspace: syntheticDiscoveryWorkspace,
     sourceInstance: SOURCE_INSTANCE,
     identities: [primaryIdentity, missingMetadataIdentity],
     primaryIdentity,
     missingMetadataIdentity,
     repeatedText: REPEATED_TEXT,
+    repeatedTextProvenance: { origin: "unknown", originConfidence: "unknown" },
     expectedInputs,
     sensitiveValues: [REPEATED_TEXT, SENSITIVE_METADATA_TITLE, SENSITIVE_SOURCE_SENTINEL],
     snapshotSource: () => snapshotSessions(sessions),
@@ -267,6 +271,7 @@ function documentFor(session: SyntheticSessionSnapshot): SessionDocument {
         sourceLocator: transcript.locator,
         content: [
           {
+            kind: "text",
             ordinal: 0,
             text: transcript.content,
             contentHash,

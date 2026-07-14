@@ -40,7 +40,7 @@ export interface IndexRunCounts {
   readonly unchanged: number;
   readonly updated: number;
   readonly failed: number;
-  readonly removed: number;
+  readonly missing: number;
   readonly stale: number;
 }
 
@@ -63,7 +63,7 @@ export type IndexRunItem =
     }
   | {
       readonly identity: SessionIdentity;
-      readonly outcome: "removed";
+      readonly outcome: "missing";
     };
 
 export type IndexRunResult =
@@ -73,6 +73,7 @@ export type IndexRunResult =
       readonly startedAt: string;
       readonly finishedAt: string;
       readonly counts: IndexRunCounts;
+      readonly coverage: { readonly status: "complete"; readonly observedAt: string };
       readonly items: readonly IndexRunItem[];
       readonly omittedItemCount: number;
     }
@@ -82,6 +83,7 @@ export type IndexRunResult =
       readonly startedAt: string;
       readonly finishedAt: string;
       readonly counts: IndexRunCounts;
+      readonly coverage: { readonly status: "unknown"; readonly observedAt: string };
       readonly items: readonly IndexRunItem[];
       readonly omittedItemCount: number;
       readonly failure: IndexRunFailureCode;
@@ -101,10 +103,6 @@ export interface FailedLatestObservation {
   readonly outcome: "failed";
   readonly revision: SessionRevision;
   readonly failure: SessionIndexFailureCode;
-}
-
-export interface RemovedLatestObservation {
-  readonly outcome: "removed";
 }
 
 export type SessionFreshness =
@@ -128,11 +126,6 @@ export type SessionFreshness =
       readonly identity: SessionIdentity;
       readonly lastGood: SessionRevision;
       readonly latest: FailedLatestObservation;
-    }
-  | {
-      readonly status: "removed";
-      readonly identity: SessionIdentity;
-      readonly latest: RemovedLatestObservation;
     };
 
 export interface IndexedSessionSummary {
@@ -142,6 +135,13 @@ export interface IndexedSessionSummary {
   readonly createdAt?: string;
   readonly updatedAt?: string;
   readonly freshness: "current" | "stale";
+  readonly sourceState: "present" | "missing" | "unknown";
+  readonly capturedAt?: string;
+}
+
+export interface IndexedSession {
+  readonly summary: IndexedSessionSummary;
+  readonly document: SessionDocument;
 }
 
 export interface StartIndexRunInput {
@@ -153,6 +153,8 @@ export interface SessionIndexReader {
   getFreshness(identity: SessionIdentity): Promise<SessionFreshness>;
   getSummary(identity: SessionIdentity): Promise<IndexedSessionSummary | undefined>;
   getDocument(identity: SessionIdentity): Promise<SessionDocument | undefined>;
+  getSession(identity: SessionIdentity): Promise<IndexedSession | undefined>;
+  listSummaries(options: { readonly limit: number }): Promise<readonly IndexedSessionSummary[]>;
 }
 
 export interface SessionIndexWriter extends SessionIndexReader {
@@ -165,7 +167,7 @@ export interface SessionIndexWriter extends SessionIndexReader {
     failure: RecordableSessionFailureCode,
   ): Promise<void>;
   replaceSession(run: SessionIndexRun, replacement: ValidatedSessionReplacement): Promise<void>;
-  removeSession(run: SessionIndexRun, identity: SessionIdentity): Promise<void>;
+  recordMissing(run: SessionIndexRun, identity: SessionIdentity): Promise<void>;
   finishRun(run: SessionIndexRun, completion: FinishIndexRunInput): Promise<IndexRunResult>;
 }
 

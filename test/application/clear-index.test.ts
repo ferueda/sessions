@@ -1,31 +1,38 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { clearIndex } from "../../src/application/clear-index.ts";
+import { clearData } from "../../src/application/clear-index.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
-import type { IndexMaintenance } from "../../src/application/ports/index-maintenance.ts";
+import {
+  IndexMaintenanceError,
+  type IndexMaintenance,
+} from "../../src/application/ports/index-maintenance.ts";
 
 const paths: IndexPaths = {
   directory: "/cache/sessions",
-  database: "/cache/sessions/index.sqlite3",
-  wal: "/cache/sessions/index.sqlite3-wal",
-  shm: "/cache/sessions/index.sqlite3-shm",
+  scratch: "/cache/sessions/.scratch",
+  database: "/cache/sessions/sessions.sqlite3",
+  wal: "/cache/sessions/sessions.sqlite3-wal",
+  shm: "/cache/sessions/sessions.sqlite3-shm",
 };
 
-describe("clearIndex", () => {
+describe("clearData", () => {
   test("returns the exact versioned absent report", async () => {
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>().mockResolvedValue({
         outcome: "absent",
+        scratchRemoved: false,
         databaseRemoved: false,
         walRemoved: false,
         shmRemoved: false,
       }),
+      forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
-    await expect(clearIndex(paths, maintenance)).resolves.toEqual({
+    await expect(clearData(paths, maintenance)).resolves.toEqual({
       schemaVersion: 1,
-      command: "index-clear",
+      command: "data-clear",
       outcome: "absent",
+      scratchRemoved: false,
       databaseRemoved: false,
       walRemoved: false,
       shmRemoved: false,
@@ -37,16 +44,19 @@ describe("clearIndex", () => {
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>().mockResolvedValue({
         outcome: "cleared",
+        scratchRemoved: true,
         databaseRemoved: true,
         walRemoved: true,
         shmRemoved: false,
       }),
+      forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
-    await expect(clearIndex(paths, maintenance)).resolves.toEqual({
+    await expect(clearData(paths, maintenance)).resolves.toEqual({
       schemaVersion: 1,
-      command: "index-clear",
+      command: "data-clear",
       outcome: "cleared",
+      scratchRemoved: true,
       databaseRemoved: true,
       walRemoved: true,
       shmRemoved: false,
@@ -57,8 +67,23 @@ describe("clearIndex", () => {
     const failure = new Error("maintenance failed");
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(failure),
+      forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
-    await expect(clearIndex(paths, maintenance)).rejects.toBe(failure);
+    await expect(clearData(paths, maintenance)).rejects.toBe(failure);
+  });
+
+  test("maps writer contention to the public library-busy failure", async () => {
+    const busy = new IndexMaintenanceError("library-busy");
+    const maintenance: IndexMaintenance = {
+      clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(busy),
+      forget: vi.fn<IndexMaintenance["forget"]>(),
+    };
+
+    await expect(clearData(paths, maintenance)).rejects.toMatchObject({
+      code: "library-busy",
+      message: "Session library is busy",
+      cause: busy,
+    });
   });
 });

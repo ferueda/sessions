@@ -6,7 +6,7 @@ import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
 const LEASE_DURATION_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-export type WriterLeasePurpose = "index" | "clear";
+export type WriterLeasePurpose = "index" | "forget" | "clear";
 export type SqliteWriterLeaseErrorCode = "writer-busy" | "writer-lease-lost" | "corrupt-data";
 
 export class SqliteWriterLeaseError extends Error {
@@ -52,7 +52,7 @@ export interface WriterLeaseHeartbeat {
   stop(): void;
 }
 
-interface AcquireWriterLeaseOptions {
+export interface AcquireWriterLeaseOptions {
   readonly now: () => Date;
   readonly token?: () => string;
 }
@@ -70,49 +70,55 @@ export function acquireWriterLease(
   purpose: WriterLeasePurpose,
   options: AcquireWriterLeaseOptions,
 ): WriterLeaseIdentity {
+  return runImmediateTransaction(database, () =>
+    acquireWriterLeaseInTransaction(database, purpose, options),
+  );
+}
+
+/** Acquire while the caller holds the surrounding immediate transaction. */
+export function acquireWriterLeaseInTransaction(
+  database: DatabaseSync,
+  purpose: WriterLeasePurpose,
+  options: AcquireWriterLeaseOptions,
+): WriterLeaseIdentity {
+  if (!database.isTransaction) {
+    throw new TypeError("Writer lease transaction must already be active");
+  }
   if (!isPurpose(purpose)) throw new TypeError("Invalid writer lease purpose");
   const now = canonicalNow(options.now);
   const token = (options.token ?? randomUUID)();
   assertToken(token);
   const expiresAt = expiryFrom(now.date);
 
-  return runImmediateTransaction(database, () => {
-    const current = readLeaseRow(database);
-    const health = healthFromRow(current, now.timestamp);
-    if (health.status === "live") throw new SqliteWriterLeaseError("writer-busy");
-    // An expired clear lease can represent a process between closing SQLite and
-    // unlinking files. Only another clear may resume that destructive intent.
-    if (health.status === "expired" && health.purpose === "clear" && purpose === "index") {
-      throw new SqliteWriterLeaseError("writer-busy");
-    }
+  const current = readLeaseRow(database);
+  assertAcquirable(healthFromRow(current, now.timestamp), purpose);
 
-    const generation = incrementGeneration(current.generation);
-    const result = database
-      .prepare(
-        `UPDATE sessions_writer_lease
-         SET generation = ?,
-             purpose = ?,
-             owner_token = ?,
-             acquired_at = ?,
-             heartbeat_at = ?,
-             expires_at = ?
-         WHERE singleton = 1 AND generation = ?`,
-      )
-      .run(generation, purpose, token, now.timestamp, now.timestamp, expiresAt, current.generation);
-    if (result.changes !== 1) throw new SqliteWriterLeaseError("writer-lease-lost");
+  const generation = incrementGeneration(current.generation);
+  const result = database
+    .prepare(
+      `UPDATE sessions_writer_lease
+       SET generation = ?,
+           purpose = ?,
+           owner_token = ?,
+           acquired_at = ?,
+           heartbeat_at = ?,
+           expires_at = ?
+       WHERE singleton = 1 AND generation = ?`,
+    )
+    .run(generation, purpose, token, now.timestamp, now.timestamp, expiresAt, current.generation);
+  if (result.changes !== 1) throw new SqliteWriterLeaseError("writer-lease-lost");
 
-    database
-      .prepare(
-        `UPDATE sessions_index_runs
-         SET status = 'interrupted',
-             finished_at = ?,
-             failure_code = 'interrupted'
-         WHERE status = 'active'`,
-      )
-      .run(now.timestamp);
+  database
+    .prepare(
+      `UPDATE sessions_index_runs
+       SET status = 'interrupted',
+           finished_at = ?,
+           failure_code = 'interrupted'
+       WHERE status = 'active'`,
+    )
+    .run(now.timestamp);
 
-    return { purpose, generation, token };
-  });
+  return { purpose, generation, token };
 }
 
 /** Assert while the caller holds the surrounding write transaction. */
@@ -324,6 +330,15 @@ function healthFromRow(row: NormalizedLeaseRow, now: string): WriterLeaseHealth 
   };
 }
 
+function assertAcquirable(health: WriterLeaseHealth, requested: WriterLeasePurpose): void {
+  if (health.status === "live") throw new SqliteWriterLeaseError("writer-busy");
+  // An expired clear lease can represent a process between closing SQLite and
+  // unlinking files. Only another clear may resume that destructive intent.
+  if (health.status === "expired" && health.purpose === "clear" && requested !== "clear") {
+    throw new SqliteWriterLeaseError("writer-busy");
+  }
+}
+
 function assertWriterLeaseAt(
   database: DatabaseSync,
   identity: WriterLeaseIdentity,
@@ -407,7 +422,7 @@ function integerAt(value: unknown): number {
 }
 
 function isPurpose(value: unknown): value is WriterLeasePurpose {
-  return value === "index" || value === "clear";
+  return value === "index" || value === "forget" || value === "clear";
 }
 
 function assertCanonicalTimestamp(value: string): void {

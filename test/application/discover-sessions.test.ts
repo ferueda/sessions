@@ -8,6 +8,7 @@ import type {
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
 import { selectSessionSource } from "../../src/application/validate-session.ts";
 import type { SessionDocument, SourceInstance } from "../../src/domain/session.ts";
+import { syntheticDiscoveryWorkspace } from "../fixtures/discovery-workspace.ts";
 
 const sourceInstance = { kind: "synthetic", instanceId: "one" } as const;
 
@@ -20,7 +21,10 @@ describe("discoverSessions", () => {
       mutable.inputs[0]!.fingerprint = "mutated-after-yield";
     });
 
-    const result = await discoverSessions(selectSessionSource(sourceInstance, adapter));
+    const result = await discoverSessions(
+      selectSessionSource(sourceInstance, adapter),
+      syntheticDiscoveryWorkspace,
+    );
 
     expect(result.complete).toBe(true);
     if (!result.complete) throw new Error("expected complete discovery");
@@ -38,6 +42,7 @@ describe("discoverSessions", () => {
 
     const result = await discoverSessions(
       selectSessionSource(sourceInstance, source([supplementary, privateUse])),
+      syntheticDiscoveryWorkspace,
     );
 
     if (!result.complete) throw new Error("expected complete discovery");
@@ -52,7 +57,10 @@ describe("discoverSessions", () => {
     ["malformed candidate", [{} as DiscoveredSession]],
     ["conflicting duplicate", [candidate("one"), candidate("one", sourceInstance, "two")]],
   ])("marks %s incomplete and returns no candidates", async (_label, candidates) => {
-    const result = await discoverSessions(selectSessionSource(sourceInstance, source(candidates)));
+    const result = await discoverSessions(
+      selectSessionSource(sourceInstance, source(candidates)),
+      syntheticDiscoveryWorkspace,
+    );
 
     expect(result).toEqual({ complete: false, candidates: [] });
   });
@@ -72,10 +80,33 @@ describe("discoverSessions", () => {
       },
     };
 
-    await expect(discoverSessions(selectSessionSource(sourceInstance, adapter))).resolves.toEqual({
-      complete: false,
-      candidates: [],
-    });
+    await expect(
+      discoverSessions(selectSessionSource(sourceInstance, adapter), syntheticDiscoveryWorkspace),
+    ).resolves.toEqual({ complete: false, candidates: [] });
+  });
+
+  test("passes the writer-owned workspace only to discovery", async () => {
+    let received: unknown;
+    const adapter: SessionSource = {
+      kind: sourceInstance.kind,
+      async probe() {
+        return readyProbe();
+      },
+      async *discover(workspace) {
+        received = workspace;
+        yield candidate("one");
+      },
+      async read(value) {
+        return document(value);
+      },
+    };
+
+    await discoverSessions(
+      selectSessionSource(sourceInstance, adapter),
+      syntheticDiscoveryWorkspace,
+    );
+
+    expect(received).toBe(syntheticDiscoveryWorkspace);
   });
 });
 

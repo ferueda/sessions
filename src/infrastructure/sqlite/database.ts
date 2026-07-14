@@ -18,7 +18,6 @@ import {
 } from "./fts5-security.ts";
 import { SqliteIndexLifecycleError } from "./lifecycle-error.ts";
 import {
-  applyMigrations,
   CURRENT_INDEX_SCHEMA_VERSION,
   MigrationHistoryError,
   readMigrationHistory,
@@ -43,7 +42,12 @@ import {
   openSqliteWriterDatabase,
 } from "./sqlite-writer-database.ts";
 import {
-  acquireWriterLease,
+  applyWriterMigrations,
+  acquireWriterSchema,
+  validateWriterSchemaCatalog,
+} from "./writer-schema.ts";
+import {
+  assertWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
   SqliteWriterLeaseError,
   startWriterLeaseHeartbeat,
@@ -51,6 +55,10 @@ import {
   type WriterLeaseIdentity,
   type WriterLeaseScheduler,
 } from "./writer-lease.ts";
+import {
+  openSourceDiscoveryWorkspace,
+  type SourceDiscoveryWorkspaceLifecycle,
+} from "../state/source-discovery-workspace.ts";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
@@ -85,6 +93,7 @@ export function createSqliteIndexLifecycle(
 ): SqliteIndexLifecycle {
   const migrations = options.migrations ?? sqliteMigrations;
   validateMigrationCatalog(migrations);
+  validateWriterSchemaCatalog(migrations);
   const supportedSchemaVersion =
     options.supportedSchemaVersion ??
     (options.migrations === undefined ? CURRENT_INDEX_SCHEMA_VERSION : migrations.length);
@@ -173,61 +182,63 @@ export function createSqliteIndexLifecycle(
       }
 
       const database = await openWriterWithFailureCleanup(paths, busyTimeoutMs, platform);
+      let heartbeat: WriterLeaseHeartbeat | undefined;
+      let lease: WriterLeaseIdentity | undefined;
+      let workspace: SourceDiscoveryWorkspaceLifecycle | undefined;
       try {
         configureSqliteWriterDatabase(database, busyTimeoutMs);
-        const history = applyMigrations(database, migrations);
+        const acquired = acquireWriterSchema(database, "index", migrations, {
+          now,
+          ...(options.writerToken === undefined ? {} : { token: options.writerToken }),
+        });
+        const ownedLease = acquired.lease;
+        lease = ownedLease;
+        // Start renewal before any pending release migration runs.
+        heartbeat = startWriterLeaseHeartbeat(database, ownedLease, {
+          now,
+          ...(options.writerScheduler === undefined ? {} : { scheduler: options.writerScheduler }),
+        });
+        const history = applyWriterMigrations(database, migrations, ownedLease, { now });
         if (history.currentVersion !== supportedSchemaVersion) {
           throw new Error("SQLite migrations did not reach the supported schema");
         }
         await secureIndexFiles(paths, { platform });
-        const lease = acquireWriterLease(database, "index", {
-          now,
-          ...(options.writerToken === undefined ? {} : { token: options.writerToken }),
+        // Persistent FTS configuration is a write and must happen only after
+        // this handle owns the high-level writer lease.
+        const fts5SecureDelete = configureFts5SecureDelete(
+          database,
+          SESSIONS_CONTENT_FTS_TABLE,
+          fts5Security,
+        );
+        const sessions = createCoordinatedSqliteSessionIndex(database, { lease: ownedLease, now });
+        workspace = await openSourceDiscoveryWorkspace(paths, {
+          assertLease: () => assertWriterLease(database, ownedLease, { now }),
+          platform,
         });
-        let heartbeat: WriterLeaseHeartbeat | undefined;
-        try {
-          // Persistent FTS configuration is a write and must happen only after
-          // this handle owns the high-level writer lease.
-          const fts5SecureDelete = configureFts5SecureDelete(
-            database,
-            SESSIONS_CONTENT_FTS_TABLE,
-            fts5Security,
-          );
-          const sessions = createCoordinatedSqliteSessionIndex(database, { lease, now });
-          heartbeat = startWriterLeaseHeartbeat(database, lease, {
-            now,
-            ...(options.writerScheduler === undefined
-              ? {}
-              : { scheduler: options.writerScheduler }),
-          });
 
-          return createWriter(
-            database,
-            paths,
-            platform,
-            supportedSchemaVersion,
-            fts5Security,
-            fts5SecureDelete,
-            sessions,
-            lease,
-            heartbeat,
-            now,
-          );
-        } catch (error) {
-          let operationError = error;
-          try {
-            heartbeat?.stop();
-          } catch (heartbeatError) {
-            operationError = new AggregateError(
-              [error, heartbeatError],
-              "SQLite writer setup and heartbeat cleanup failed",
-              { cause: error },
-            );
-          }
-          return throwAfterLeaseCleanup(operationError, database, lease, now, paths, platform);
-        }
+        return createWriter(
+          database,
+          paths,
+          platform,
+          supportedSchemaVersion,
+          fts5Security,
+          fts5SecureDelete,
+          sessions,
+          workspace,
+          ownedLease,
+          heartbeat,
+          now,
+        );
       } catch (error) {
-        return throwAfterDatabaseCleanup(error, database, paths, platform);
+        return throwAfterWriterSetupCleanup(error, {
+          database,
+          heartbeat,
+          lease,
+          now,
+          paths,
+          platform,
+          workspace,
+        });
       }
     },
   };
@@ -268,6 +279,16 @@ function createReader(snapshot: SqliteReadSnapshot, state: ReadyIndexState): Sql
     getDocument(identity) {
       return snapshot.run((database) =>
         createSqliteSessionIndexReader(database).getDocument(identity),
+      );
+    },
+    getSession(identity) {
+      return snapshot.run((database) =>
+        createSqliteSessionIndexReader(database).getSession(identity),
+      );
+    },
+    listSummaries(options) {
+      return snapshot.run((database) =>
+        createSqliteSessionIndexReader(database).listSummaries(options),
       );
     },
   };
@@ -396,6 +417,7 @@ function createWriter(
   fts5Security: Fts5SecurityCapability,
   fts5SecureDelete: boolean,
   sessions: SqliteIndexWriter["sessions"],
+  workspace: SourceDiscoveryWorkspaceLifecycle,
   lease: WriterLeaseIdentity,
   heartbeat: WriterLeaseHeartbeat,
   now: () => Date,
@@ -408,11 +430,17 @@ function createWriter(
     database,
     state,
     sessions,
+    workspace: workspace.workspace,
     fts5Security,
     fts5SecureDelete,
     async close() {
       if (closed) return;
       const cleanupErrors: unknown[] = [];
+      try {
+        await workspace.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
       try {
         heartbeat.stop();
       } catch (error) {
@@ -455,60 +483,64 @@ function createWriter(
   };
 }
 
-async function throwAfterLeaseCleanup(
-  operationError: unknown,
-  database: DatabaseSync,
-  lease: WriterLeaseIdentity,
-  now: () => Date,
-  paths: IndexPaths,
-  platform: NodeJS.Platform,
-): Promise<never> {
-  const cleanupErrors: unknown[] = [];
-  try {
-    interruptOwnedRunsAndReleaseWriterLease(database, lease, { now });
-  } catch (error) {
-    cleanupErrors.push(error);
-  }
-  try {
-    database.close();
-  } catch (error) {
-    cleanupErrors.push(error);
-  }
-  try {
-    await secureIndexFiles(paths, { platform });
-  } catch (error) {
-    cleanupErrors.push(error);
-  }
-  if (cleanupErrors.length === 0) throw operationError;
-  throw new AggregateError(
-    [operationError, ...cleanupErrors],
-    "SQLite operation and lease cleanup failed",
-    { cause: operationError },
-  );
+interface WriterSetupCleanupContext {
+  readonly database: DatabaseSync;
+  readonly heartbeat: WriterLeaseHeartbeat | undefined;
+  readonly lease: WriterLeaseIdentity | undefined;
+  readonly now: () => Date;
+  readonly paths: IndexPaths;
+  readonly platform: NodeJS.Platform;
+  readonly workspace: SourceDiscoveryWorkspaceLifecycle | undefined;
 }
 
-async function throwAfterDatabaseCleanup(
+async function throwAfterWriterSetupCleanup(
   operationError: unknown,
-  database: DatabaseSync,
-  paths: IndexPaths,
-  platform: NodeJS.Platform,
+  context: WriterSetupCleanupContext,
 ): Promise<never> {
   const cleanupErrors: unknown[] = [];
+  if (context.workspace !== undefined) {
+    try {
+      await context.workspace.close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
   try {
-    database.close();
+    context.heartbeat?.stop();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (context.heartbeat?.failure !== undefined) {
+    cleanupErrors.push(context.heartbeat.failure);
+  }
+  if (context.lease !== undefined) {
+    try {
+      if (context.database.isOpen) {
+        const released = interruptOwnedRunsAndReleaseWriterLease(context.database, context.lease, {
+          now: context.now,
+        });
+        if (!released && context.heartbeat?.failure === undefined) {
+          cleanupErrors.push(new SqliteWriterLeaseError("writer-lease-lost"));
+        }
+      }
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  try {
+    context.database.close();
   } catch (error) {
     cleanupErrors.push(error);
   }
   try {
-    await secureIndexFiles(paths, { platform });
+    await secureIndexFiles(context.paths, { platform: context.platform });
   } catch (error) {
     cleanupErrors.push(error);
   }
-
   if (cleanupErrors.length === 0) throw operationError;
   throw new AggregateError(
     [operationError, ...cleanupErrors],
-    "SQLite operation and cleanup failed",
+    "SQLite writer setup and cleanup failed",
     { cause: operationError },
   );
 }

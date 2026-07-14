@@ -12,6 +12,7 @@ Contracts:
 
 - [Privacy](../privacy.md)
 - [CLI](../reference/cli-contract.md)
+- [Codex format support](../reference/codex-format-support.md)
 - [Source adapters](adapter-contract.md)
 - [Repository commands](commands.md)
 - [Architecture decisions](../decisions/README.md)

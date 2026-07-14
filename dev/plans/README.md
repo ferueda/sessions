@@ -13,5 +13,5 @@ Active executor plan:
 
 - [Ship the Codex-first durable workflow](260714-codex-vertical-slice.md) — M5
   Codex adapter, canonical evidence extension, durable capture/source presence,
-  and index/list/show/forget/data-clear slice; ready after zero-finding plan
-  review `20260714-181209-1e9112`.
+  one current pre-alpha storage baseline, and index/list/show/forget/data-clear
+  slice; implementation, verification, and review fixes complete; awaiting merge.

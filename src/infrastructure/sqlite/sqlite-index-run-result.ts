@@ -39,15 +39,24 @@ export function readImmutableIndexRunResult(
     omittedItemCount,
   };
   return completion.status === "completed"
-    ? Object.freeze({ ...common, status: "completed" })
-    : Object.freeze({ ...common, status: "incomplete", failure: completion.failure });
+    ? Object.freeze({
+        ...common,
+        status: "completed",
+        coverage: Object.freeze({ status: "complete", observedAt: run.startedAt }),
+      })
+    : Object.freeze({
+        ...common,
+        status: "incomplete",
+        coverage: Object.freeze({ status: "unknown", observedAt: run.startedAt }),
+        failure: completion.failure,
+      });
 }
 
 function readRunCounts(database: DatabaseSync, runId: number): IndexRunCounts {
   const row = database
     .prepare(
       `SELECT discovered_count, unchanged_count, indexed_count,
-              failed_count, removed_count, stale_count
+              failed_count, missing_count, stale_count
        FROM sessions_index_runs
        WHERE run_id = ?`,
     )
@@ -58,7 +67,7 @@ function readRunCounts(database: DatabaseSync, runId: number): IndexRunCounts {
     unchanged: integerAt(row.unchanged_count),
     updated: integerAt(row.indexed_count),
     failed: integerAt(row.failed_count),
-    removed: integerAt(row.removed_count),
+    missing: integerAt(row.missing_count),
     stale: integerAt(row.stale_count),
   };
 }
@@ -102,8 +111,8 @@ function readRunItems(
         source: Object.freeze({ ...identity.source }),
         nativeId: identity.nativeId,
       });
-      if (row.outcome === "removed" && row.failure_code === null) {
-        return Object.freeze({ identity: frozenIdentity, outcome: "removed" });
+      if (row.outcome === "missing" && row.failure_code === null) {
+        return Object.freeze({ identity: frozenIdentity, outcome: "missing" });
       }
       if (
         row.outcome === "failed" &&
@@ -137,7 +146,7 @@ function assertRunResultConsistency(
   if (
     counts.discovered !== counts.unchanged + counts.updated + counts.failed ||
     counts.stale > counts.failed ||
-    counts.failed + counts.removed !== items.length + omittedItemCount
+    counts.failed + counts.missing !== items.length + omittedItemCount
   ) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
@@ -156,7 +165,7 @@ interface CountRow {
   readonly unchanged_count: number | bigint;
   readonly indexed_count: number | bigint;
   readonly failed_count: number | bigint;
-  readonly removed_count: number | bigint;
+  readonly missing_count: number | bigint;
   readonly stale_count: number | bigint;
 }
 

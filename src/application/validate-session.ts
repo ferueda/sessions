@@ -371,17 +371,30 @@ function freezeDocument(document: SessionDocument): SessionDocument {
           ? {}
           : { relatedEntryOrdinal: entry.relatedEntryOrdinal }),
         ...(entry.toolCallId === undefined ? {} : { toolCallId: entry.toolCallId }),
+        ...(entry.toolName === undefined ? {} : { toolName: entry.toolName }),
+        ...(entry.toolNamespace === undefined ? {} : { toolNamespace: entry.toolNamespace }),
         sourceLocator: Object.freeze({ ...entry.sourceLocator }),
         content: Object.freeze(
           entry.content.map((segment) =>
-            Object.freeze({
-              ordinal: segment.ordinal,
-              text: segment.text,
-              contentHash: Object.freeze({ ...segment.contentHash }),
-              origin: segment.origin,
-              originConfidence: segment.originConfidence,
-              sourceMetadata: Object.freeze({ ...segment.sourceMetadata }),
-            }),
+            segment.kind === "text"
+              ? Object.freeze({
+                  kind: segment.kind,
+                  ordinal: segment.ordinal,
+                  text: segment.text,
+                  contentHash: Object.freeze({ ...segment.contentHash }),
+                  origin: segment.origin,
+                  originConfidence: segment.originConfidence,
+                  sourceMetadata: Object.freeze({ ...segment.sourceMetadata }),
+                })
+              : Object.freeze({
+                  kind: segment.kind,
+                  ordinal: segment.ordinal,
+                  contentClass: segment.contentClass,
+                  sourceType: segment.sourceType,
+                  origin: segment.origin,
+                  originConfidence: segment.originConfidence,
+                  sourceMetadata: Object.freeze({ ...segment.sourceMetadata }),
+                }),
           ),
         ),
       }),

@@ -15,6 +15,7 @@ import {
   finishCompleted,
   type SessionIndexContractFixture,
 } from "../contracts/session-index.contract.ts";
+import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
@@ -22,6 +23,104 @@ import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease
 
 describe("SQLite session index", () => {
   runSessionIndexContract(createFixture);
+
+  test("round-trips tool identity and ordered text/omitted evidence without interning omissions", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("canonical-evidence-profile", "mixed-evidence");
+      const firstText = "before omitted evidence";
+      const secondText = "after omitted evidence";
+      const document: SessionDocument = {
+        ...minimalDocument(sessionIdentity),
+        entries: [
+          {
+            ordinal: 0,
+            kind: "tool-call",
+            actor: "model",
+            toolCallId: "call-1",
+            toolName: "exec_command",
+            toolNamespace: "functions",
+            sourceLocator: { uri: "memory://mixed/0" },
+            content: [
+              {
+                kind: "text",
+                ordinal: 0,
+                text: firstText,
+                contentHash: hashContent(firstText),
+                origin: "model",
+                originConfidence: "high",
+                sourceMetadata: {},
+              },
+              {
+                kind: "omitted",
+                ordinal: 1,
+                contentClass: "image",
+                sourceType: "input-image",
+                origin: "human",
+                originConfidence: "high",
+                sourceMetadata: {},
+              },
+              {
+                kind: "text",
+                ordinal: 2,
+                text: secondText,
+                contentHash: hashContent(secondText),
+                origin: "model",
+                originConfidence: "high",
+                sourceMetadata: {},
+              },
+            ],
+          },
+          {
+            ordinal: 1,
+            kind: "tool-result",
+            actor: "tool",
+            relatedEntryOrdinal: 0,
+            toolCallId: "call-1",
+            sourceLocator: { uri: "memory://mixed/1" },
+            content: [],
+          },
+        ],
+      };
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      const admitted = replacement(sessionIdentity, "mixed-a", document);
+
+      await index.replaceSession(run, admitted);
+
+      await expect(index.getDocument(sessionIdentity)).resolves.toEqual(admitted.document);
+      expect(rowCount(database, "sessions_content_values")).toBe(2);
+      expect(ftsCount(database, "before")).toBe(1);
+      expect(ftsCount(database, "input")).toBe(0);
+      expect(
+        database
+          .prepare(
+            `SELECT segment_ordinal,
+                    content_id IS NOT NULL AS has_content,
+                    content_class,
+                    source_type
+             FROM sessions_content_occurrences
+             ORDER BY segment_ordinal`,
+          )
+          .all(),
+      ).toEqual([
+        { segment_ordinal: 0, has_content: 1, content_class: null, source_type: null },
+        {
+          segment_ordinal: 1,
+          has_content: 0,
+          content_class: "image",
+          source_type: "input-image",
+        },
+        { segment_ordinal: 2, has_content: 1, content_class: null, source_type: null },
+      ]);
+      await finishCompleted(index, run, counts({ discovered: 1, updated: 1 }));
+    } finally {
+      database.close();
+    }
+  });
 
   test("rolls back a forced replacement failure, records staleness, and retries cleanly", async () => {
     const database = migratedDatabase();
@@ -102,7 +201,7 @@ describe("SQLite session index", () => {
     }
   });
 
-  test("retains shared content until its last occurrence is removed", async () => {
+  test("retains shared content when its session becomes missing", async () => {
     const database = migratedDatabase();
     const index = createIndex(database);
     try {
@@ -136,12 +235,12 @@ describe("SQLite session index", () => {
       expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
       expect(ftsCount(database, "recurrence")).toBe(1);
 
-      await index.removeSession(run, secondIdentity);
-      expect(rowCount(database, "sessions_content_values")).toBe(0);
-      expect(rowCount(database, "sessions_content_occurrences")).toBe(0);
-      expect(ftsCount(database, "recurrence")).toBe(0);
+      await index.recordMissing(run, secondIdentity);
+      expect(rowCount(database, "sessions_content_values")).toBe(1);
+      expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
+      expect(ftsCount(database, "recurrence")).toBe(1);
       expectFtsIntegrity(database);
-      await finishCompleted(index, run, counts({ discovered: 3, updated: 3, removed: 1 }));
+      await finishCompleted(index, run, counts({ discovered: 3, updated: 3, missing: 1 }));
     } finally {
       database.close();
     }

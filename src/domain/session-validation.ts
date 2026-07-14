@@ -5,16 +5,19 @@ import {
   isSessionIdentity,
   sameSessionIdentity,
 } from "./session-identity.ts";
+import { isCanonicalSourceType, isContentClass } from "./source-type.ts";
 import type {
   Actor,
   ContentOrigin,
   ContentSegment,
+  OmittedContentSegment,
   OriginConfidence,
   SessionDocument,
   SessionEntry,
   SessionIdentity,
   SessionRelation,
   SourceLocator,
+  TextContentSegment,
 } from "./session.ts";
 
 export const MAX_SESSION_VALIDATION_ISSUES = 32;
@@ -33,9 +36,12 @@ export type SessionValidationIssueCode =
   | "invalid-object"
   | "invalid-ordinal"
   | "invalid-source-metadata"
+  | "invalid-source-type"
   | "invalid-string"
+  | "invalid-segment-variant"
   | "invalid-text"
   | "invalid-timestamp"
+  | "invalid-tool-identity"
   | "missing-property"
   | "noncontiguous-ordinal"
   | "self-entry-reference"
@@ -156,14 +162,19 @@ const ENTRY_KEYS = new Set([
   "timestamp",
   "relatedEntryOrdinal",
   "toolCallId",
+  "toolName",
+  "toolNamespace",
   "sourceLocator",
   "content",
 ]);
 const LOCATOR_KEYS = new Set(["uri", "recordId"]);
 const SEGMENT_KEYS = new Set([
+  "kind",
   "ordinal",
   "text",
   "contentHash",
+  "contentClass",
+  "sourceType",
   "origin",
   "originConfidence",
   "sourceMetadata",
@@ -298,6 +309,13 @@ function entryAt(
     collector,
   );
   const toolCallId = optionalStringAt(entry, "toolCallId", `${path}/toolCallId`, collector);
+  const toolName = optionalStringAt(entry, "toolName", `${path}/toolName`, collector);
+  const toolNamespace = optionalStringAt(
+    entry,
+    "toolNamespace",
+    `${path}/toolNamespace`,
+    collector,
+  );
   const sourceLocator = Object.hasOwn(entry, "sourceLocator")
     ? locatorAt(entry.sourceLocator, `${path}/sourceLocator`, collector)
     : undefined;
@@ -315,6 +333,13 @@ function entryAt(
     return undefined;
   }
 
+  if (kind !== "tool-call" && (toolName !== undefined || toolNamespace !== undefined)) {
+    addIssue(collector, "invalid-tool-identity", path);
+  }
+  if (toolNamespace !== undefined && toolName === undefined) {
+    addIssue(collector, "invalid-tool-identity", `${path}/toolNamespace`);
+  }
+
   return {
     ordinal,
     kind,
@@ -322,6 +347,8 @@ function entryAt(
     ...(timestamp === undefined ? {} : { timestamp }),
     ...(relatedEntryOrdinal === undefined ? {} : { relatedEntryOrdinal }),
     ...(toolCallId === undefined ? {} : { toolCallId }),
+    ...(toolName === undefined ? {} : { toolName }),
+    ...(toolNamespace === undefined ? {} : { toolNamespace }),
     sourceLocator,
     content,
   };
@@ -372,25 +399,15 @@ function segmentAt(
   const path = `/entries/${entryOrdinal}/content/${expectedOrdinal}`;
   const segment = objectAt(value, path, SEGMENT_KEYS, collector);
   if (segment === undefined) return undefined;
-  for (const key of [
-    "ordinal",
-    "text",
-    "contentHash",
-    "origin",
-    "originConfidence",
-    "sourceMetadata",
-  ] as const) {
+  for (const key of ["kind", "ordinal", "origin", "originConfidence", "sourceMetadata"] as const) {
     requireProperty(segment, key, `${path}/${key}`, collector);
   }
 
+  const kind = Object.hasOwn(segment, "kind")
+    ? segmentKindAt(segment.kind, `${path}/kind`, collector)
+    : undefined;
   const ordinal = Object.hasOwn(segment, "ordinal")
     ? ordinalAt(segment.ordinal, expectedOrdinal, `${path}/ordinal`, collector)
-    : undefined;
-  const text = Object.hasOwn(segment, "text")
-    ? textAt(segment.text, `${path}/text`, collector)
-    : undefined;
-  const contentHash = Object.hasOwn(segment, "contentHash")
-    ? hashAt(segment.contentHash, `${path}/contentHash`, collector)
     : undefined;
   const origin = Object.hasOwn(segment, "origin")
     ? originAt(segment.origin, `${path}/origin`, collector)
@@ -402,20 +419,49 @@ function segmentAt(
     ? sourceMetadataAt(segment.sourceMetadata, `${path}/sourceMetadata`, collector)
     : undefined;
 
-  if (text !== undefined && contentHash !== undefined && !contentHashMatches(text, contentHash)) {
-    addIssue(collector, "content-hash-mismatch", `${path}/contentHash`);
-  }
   if (
+    kind === undefined ||
     ordinal === undefined ||
-    text === undefined ||
-    contentHash === undefined ||
     origin === undefined ||
     originConfidence === undefined ||
     sourceMetadata === undefined
   ) {
     return undefined;
   }
-  return { ordinal, text, contentHash, origin, originConfidence, sourceMetadata };
+
+  const base = { kind, ordinal, origin, originConfidence, sourceMetadata };
+  if (kind === "text") {
+    requireProperty(segment, "text", `${path}/text`, collector);
+    requireProperty(segment, "contentHash", `${path}/contentHash`, collector);
+    if (Object.hasOwn(segment, "contentClass") || Object.hasOwn(segment, "sourceType")) {
+      addIssue(collector, "invalid-segment-variant", path);
+    }
+    const text = Object.hasOwn(segment, "text")
+      ? textAt(segment.text, `${path}/text`, collector)
+      : undefined;
+    const contentHash = Object.hasOwn(segment, "contentHash")
+      ? hashAt(segment.contentHash, `${path}/contentHash`, collector)
+      : undefined;
+    if (text !== undefined && contentHash !== undefined && !contentHashMatches(text, contentHash)) {
+      addIssue(collector, "content-hash-mismatch", `${path}/contentHash`);
+    }
+    if (text === undefined || contentHash === undefined) return undefined;
+    return { ...base, kind, text, contentHash } satisfies TextContentSegment;
+  }
+
+  requireProperty(segment, "contentClass", `${path}/contentClass`, collector);
+  requireProperty(segment, "sourceType", `${path}/sourceType`, collector);
+  if (Object.hasOwn(segment, "text") || Object.hasOwn(segment, "contentHash")) {
+    addIssue(collector, "invalid-segment-variant", path);
+  }
+  const contentClass = Object.hasOwn(segment, "contentClass")
+    ? contentClassAt(segment.contentClass, `${path}/contentClass`, collector)
+    : undefined;
+  const sourceType = Object.hasOwn(segment, "sourceType")
+    ? sourceTypeAt(segment.sourceType, `${path}/sourceType`, collector)
+    : undefined;
+  if (contentClass === undefined || sourceType === undefined) return undefined;
+  return { ...base, kind, contentClass, sourceType } satisfies OmittedContentSegment;
 }
 
 function objectAt(
@@ -547,7 +593,7 @@ function hashAt(
   value: unknown,
   path: string,
   collector: IssueCollector,
-): ContentSegment["contentHash"] | undefined {
+): TextContentSegment["contentHash"] | undefined {
   const snapshot = snapshotPlainRecord(value);
   if (snapshot.ok) {
     const contentHash = {
@@ -563,6 +609,32 @@ function hashAt(
     }
   }
   addIssue(collector, "invalid-content-hash", path);
+  return undefined;
+}
+
+function segmentKindAt(
+  value: unknown,
+  path: string,
+  collector: IssueCollector,
+): ContentSegment["kind"] | undefined {
+  if (value === "text" || value === "omitted") return value;
+  addIssue(collector, "invalid-literal", path);
+  return undefined;
+}
+
+function contentClassAt(
+  value: unknown,
+  path: string,
+  collector: IssueCollector,
+): OmittedContentSegment["contentClass"] | undefined {
+  if (isContentClass(value)) return value;
+  addIssue(collector, "invalid-literal", path);
+  return undefined;
+}
+
+function sourceTypeAt(value: unknown, path: string, collector: IssueCollector): string | undefined {
+  if (isCanonicalSourceType(value)) return value;
+  addIssue(collector, "invalid-source-type", path);
   return undefined;
 }
 

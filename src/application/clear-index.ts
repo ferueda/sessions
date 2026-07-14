@@ -1,26 +1,34 @@
 import type { IndexPaths } from "./ports/index-lifecycle.ts";
 import type { IndexMaintenance } from "./ports/index-maintenance.ts";
+import { mapLibraryBusyError } from "./library-error.ts";
 
-export interface ClearIndexReport {
+export interface DataClearReport {
   readonly schemaVersion: 1;
-  readonly command: "index-clear";
+  readonly command: "data-clear";
   readonly outcome: "absent" | "cleared";
+  readonly scratchRemoved: boolean;
   readonly databaseRemoved: boolean;
   readonly walRemoved: boolean;
   readonly shmRemoved: boolean;
 }
 
-export async function clearIndex(
+export async function clearData(
   paths: IndexPaths,
   maintenance: IndexMaintenance,
-): Promise<ClearIndexReport> {
-  const result = await maintenance.clear(paths);
-  return {
+): Promise<DataClearReport> {
+  let result: Awaited<ReturnType<IndexMaintenance["clear"]>>;
+  try {
+    result = await maintenance.clear(paths);
+  } catch (error) {
+    throw mapLibraryBusyError(error);
+  }
+  return Object.freeze({
     schemaVersion: 1,
-    command: "index-clear",
+    command: "data-clear",
     outcome: result.outcome,
+    scratchRemoved: result.scratchRemoved,
     databaseRemoved: result.databaseRemoved,
     walRemoved: result.walRemoved,
     shmRemoved: result.shmRemoved,
-  };
+  });
 }

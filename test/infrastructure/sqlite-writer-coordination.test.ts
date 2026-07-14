@@ -12,12 +12,7 @@ import {
   minimalDocument,
   observation,
 } from "../contracts/session-index.contract.ts";
-import {
-  applyMigrations,
-  CURRENT_INDEX_SCHEMA_VERSION,
-  readMigrationHistory,
-  sqliteMigrations,
-} from "../../src/infrastructure/sqlite/migrations.ts";
+import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import {
@@ -40,39 +35,6 @@ afterEach(async () => {
 });
 
 describe("SQLite writer coordination", () => {
-  test("migrates schema 2 to schema 3 without changing canonical data", () => {
-    const database = openDatabase();
-    try {
-      applyMigrations(database, sqliteMigrations.slice(0, 2));
-      database
-        .prepare(
-          `INSERT INTO sessions_source_instances (kind, instance_id)
-           VALUES ('synthetic', 'preserved-profile')`,
-        )
-        .run();
-
-      const history = applyMigrations(database);
-
-      expect(CURRENT_INDEX_SCHEMA_VERSION).toBe(3);
-      expect(history).toMatchObject({ currentVersion: 3, pending: [] });
-      expect(readMigrationHistory(database).currentVersion).toBe(3);
-      expect(
-        database.prepare("SELECT kind, instance_id FROM sessions_source_instances").all(),
-      ).toEqual([{ kind: "synthetic", instance_id: "preserved-profile" }]);
-      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toEqual({
-        singleton: 1,
-        generation: 0,
-        purpose: null,
-        owner_token: null,
-        acquired_at: null,
-        heartbeat_at: null,
-        expires_at: null,
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   test("admits one live writer and exposes no owner token in health", () => {
     const database = migratedDatabase();
     const clock = fakeClock("2026-07-13T12:00:00.000Z");
@@ -284,7 +246,7 @@ describe("SQLite writer coordination", () => {
         () => first.recordUnchanged(run, sessionObservation),
         () => first.recordFailure(run, sessionObservation, "malformed"),
         () => first.replaceSession(run, replacement),
-        () => first.removeSession(run, sessionIdentity),
+        () => first.recordMissing(run, sessionIdentity),
         () =>
           first.finishRun(run, {
             status: "incomplete",
@@ -369,7 +331,12 @@ describe("SQLite writer coordination", () => {
     clock.set("2026-07-13T12:01:00.000Z");
     scheduler.tick();
 
-    await expect(writer.close()).rejects.toMatchObject({ code: "writer-lease-lost" });
+    const closeFailure = await writer.close().catch((error: unknown) => error);
+    expect(closeFailure).toBeInstanceOf(AggregateError);
+    expect((closeFailure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "writer-lease-lost" }),
+      expect.objectContaining({ code: "writer-lease-lost" }),
+    ]);
     const replacement = await lifecycle.openWriter(paths);
     await replacement.close();
   });
@@ -388,7 +355,12 @@ describe("SQLite writer coordination", () => {
     });
 
     clock.set("2026-07-13T12:01:00.000Z");
-    await expect(writer.close()).rejects.toMatchObject({ code: "writer-lease-lost" });
+    const closeFailure = await writer.close().catch((error: unknown) => error);
+    expect(closeFailure).toBeInstanceOf(AggregateError);
+    expect((closeFailure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "writer-lease-lost" }),
+      expect.objectContaining({ code: "writer-lease-lost" }),
+    ]);
 
     const replacement = await lifecycle.openWriter(paths);
     await replacement.close();
@@ -508,9 +480,10 @@ async function fixturePaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-writer-coordination-"));
   temporaryDirectories.push(root);
   const directory = path.join(root, "sessions");
-  const database = path.join(directory, "index.sqlite3");
+  const database = path.join(directory, "sessions.sqlite3");
   return {
     directory,
+    scratch: path.join(directory, ".scratch"),
     database,
     wal: `${database}-wal`,
     shm: `${database}-shm`,

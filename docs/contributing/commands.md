@@ -15,11 +15,16 @@
 | `pnpm test:docs`                 | Run documentation contract tests                            | No                              | No                                  |
 | `pnpm clean`                     | Remove compiled output                                      | `dist/`                         | No                                  |
 | `pnpm build`                     | Clean and compile distributable JS                          | `dist/`                         | No                                  |
-| `pnpm smoke:dist`                | Invoke compiled help/version/doctor/paths                   | No persistent state             | No                                  |
-| `pnpm smoke:package`             | Pack, offline-install in temp project, invoke generated bin | Temporary directory, removed    | No after dependencies are installed |
+| `pnpm smoke:dist`                | Exercise compiled M5 workflow with a synthetic Codex source | Temporary directory, removed    | No                                  |
+| `pnpm smoke:package`             | Offline-install tarball and exercise the same M5 workflow   | Temporary directory, removed    | No after dependencies are installed |
 | `pnpm check` / `pnpm check:ci`   | Complete definition-of-done gate                            | Build/temp state                | No after dependencies are installed |
 | `pnpm check:docs`                | Run the documentation-only CI gate                          | No                              | No                                  |
 
 `pnpm prepack` rebuilds the package and is run by normal npm publishing/packing flows. The package smoke deliberately packs with lifecycle scripts disabled after an explicit build, preventing recursive smoke execution.
 
-Current public CLI commands are documented in [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state but create no directories, files, or migrations. SQLite lifecycle tests create protected state only beneath temporary test directories.
+Current public CLI commands are documented in
+[the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
+but create no directories, files, migrations, or rollout reads. Index explicitly
+creates/updates the durable library from read-only provider inputs; list/show are
+library-only reads; forget/data-clear delete only Sessions-owned state. Tests and
+smokes use generated providers and protected state beneath temporary directories.

@@ -75,64 +75,24 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-The implemented foundation through M4 uses this concrete layout:
+M5 implements the first complete vertical slice: one Codex adapter, current
+baseline durable canonical evidence, non-destructive source-presence reconciliation,
+index/list/show, scoped forget, all-data clear, and source-aware diagnostics. The
+maintained file-by-file map is the
+[current architecture guide](contributing/architecture.md); this memo remains the
+stable target design.
 
-```text
-src/
-  domain/
-    session.ts
-    session-validation.ts
-    index-state.ts
-  application/
-    ports/session-source.ts
-    ports/session-index.ts
-    ports/runtime-diagnostic.ts
-    ports/index-lifecycle.ts
-    ports/index-health.ts
-    ports/index-maintenance.ts
-    validate-session.ts
-    read-session-document.ts
-    discover-sessions.ts
-    run-index.ts
-    index-report.ts
-    clear-index.ts
-    get-paths.ts
-    run-doctor.ts
-  infrastructure/
-    runtime/node-diagnostic.ts
-    state/
-      paths.ts
-      index-state-diagnostic.ts
-    sqlite/
-      database.ts
-      migrations.ts
-      migrations/0001-bootstrap.ts
-      migrations/0002-canonical-repository.ts
-      migrations/0003-writer-coordination.ts
-      permissions.ts
-      sqlite-diagnostic.ts
-      fts5-security.ts
-      read-snapshot.ts
-      writer-lease.ts
-      sqlite-writer-database.ts
-      sqlite-session-index.ts
-      sqlite-session-document.ts
-      sqlite-session-state.ts
-      sqlite-session-transaction.ts
-      sqlite-index-run-result.ts
-      sqlite-index-health.ts
-      index-maintenance.ts
-  cli/
-    program.ts
-    run.ts
-  bin/sessions.ts
-```
+`src/bin/sessions.ts` is the only composition root and becomes
+`dist/bin/sessions.js`. Domain imports only domain. Application imports
+application/domain. Infrastructure imports inward but never adapters or CLI.
+Adapters import application/domain but never infrastructure or CLI. CLI imports
+application/domain, never concrete infrastructure or adapters. The binary alone
+may import all layers to wire them.
 
-`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them.
-
-Migration 2 and the internal SQLite repository persist and exactly reconstruct validated provider-neutral session documents, last-good and latest-observation freshness, bounded indexing-run diagnostics, collision-safe interned content, and derived FTS5 rows. Migration 3 adds singleton generation-based writer coordination. Repository replacements are atomic; every write is lease-fenced; expired takeover interrupts abandoned active runs; and snapshot readers remain non-migrating and sidecar-free.
-
-The internal M4 application service now owns admitted source selection, complete discovery preflight, incremental reads, last-good failure behavior, exact-source reconciliation, and durable provider-neutral reports. Its current pre-public behavior deletes canonical rows after complete-scan absence, stores them under a cache path, and clears the whole database. [ADR 0007](decisions/0007-retain-a-durable-canonical-library.md) supersedes those lifecycle semantics for M5: concrete provider adapters, durable capture, explicit data deletion, query behavior, and packaged skills remain planned work.
+The current baseline persists exact text and privacy-safe omissions, tool
+identity/linkage, capture/source-observation state, rebuildable FTS, and writer
+coordination directly. Complete-scan absence marks a retained snapshot missing
+instead of deleting it. One generation lease fences index, forget, and clear.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -304,7 +264,9 @@ This is an internal port in V1, not a stable external plugin ABI.
 
 ## Indexing and reconciliation
 
-The implemented internal indexing service is the engine for the planned `sessions index` command, which will be the only operation that reads provider histories for durable capture. M5 adapts its current removal behavior to this accepted sequence:
+The implemented indexing service is the engine behind `sessions index`, the only
+operation that reads provider histories for durable capture. It uses this
+sequence:
 
 1. Validate, deduplicate, and deterministically order exact selected source instances before opening a writer.
 2. Start a durable source run, then probe the selected adapter.
@@ -354,7 +316,14 @@ context can include directly linked tool-result entries even when they are
 non-adjacent; those results retain the relation without receiving an invented
 copy of the call's tool identity.
 
-SQLite migrations are ordered, transactional, and forward-only for released versions. An incompatible or failed migration leaves the previous database recoverable and prints a remediation path; it never silently rebuilds or discards canonical user data. M5's schema-3 cutover arbitrates the existing persistent lease before migration, then installs the new generation/final purpose after the lease-table rebuild in the same transaction and fences every prior schema-3 owner. Data clear acquires valid schema-3/4 ownership before unlink instead of treating schema 3 as an uncoordinated old database. Repair and projection rebuilds distinguish canonical integrity from derived FTS integrity.
+Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
+earlier development builds are unsupported and fail closed without migration or
+deletion; users can select a fresh Sessions data directory and index again.
+Compatibility begins with the first published release. From that point, SQLite
+migrations are ordered, checksummed, transactional, and forward-only; they must
+preserve canonical evidence, arbitrate writer ownership before schema mutation,
+and fail recoverably. Repair and projection rebuilds distinguish canonical
+integrity from derived FTS integrity.
 
 ## Privacy and local state
 
@@ -383,7 +352,16 @@ SQLite migrations are ordered, transactional, and forward-only for released vers
 
 Detailed promises belong to [the privacy contract](privacy.md).
 
-The only-owned-file clear path exists internally in M4 but is not a public command. It validates path safety, acquires a writer lease for a current schema, checkpoints, and removes only database/WAL/SHM files without recursing or opening provider paths. M5 removes schema 3 from the pre-public non-current direct-unlink branch: valid lease-bearing schemas 3 and 4 must first acquire and carry a compatible clear lease. Schema 3 is deleted without migrating merely to clear it. M5 adds one narrowly scoped recursive exception: under active clear heartbeat it removes only the exact validated Sessions-owned `.scratch` subtree without following symlinks. That begins destructive intent when scratch exists; otherwise intent begins at the final renewal/checkpoint immediately before close. It then refreshes/asserts the carried lease, checkpoints, closes without release, and verifies post-close database/sidecar identities and the immutable lease immediately before unlink. Later failure leaves clear intent for clear-only recovery; orphan scratch without its lease-bearing database is recovery-required. M5 exposes this behavior only as explicit all-data deletion in durable application data. A session-scoped repository deletion backs `sessions forget`; it preserves source/run aggregates and incoming relation tuples so it does not silently rewrite other retained snapshots. Reindex can recapture the selected identity. No public `index clear` command is introduced.
+The public only-owned-file clear path validates the current baseline and path
+safety, acquires its clear lease, checkpoints, and removes only database/WAL/SHM
+files plus the exact `.scratch` subtree without following symlinks. Unsupported
+development databases are refused, not deleted. Post-close identity/lease
+verification fences races; later failure leaves clear intent for clear-only
+recovery. Orphan scratch without its lease-bearing database is recovery-required.
+A session-scoped transaction backs `sessions forget`; it preserves aggregate run
+evidence and incoming relation tuples so it does not silently rewrite other
+retained snapshots. Reindex can recapture the selected identity. No public
+`index clear` command exists.
 
 ## CLI contract
 
@@ -393,18 +371,19 @@ Current surface:
 sessions
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
+sessions index [--source codex] [--format human|json]
+sessions list [--limit N]
+sessions show <canonical-id> [--entry N --context N]
+sessions forget <canonical-id> [--format human|json]
+sessions data clear --yes [--format human|json]
 ```
 
 Remaining planned V1 surface:
 
 ```text
-sessions index [--source cursor|codex] [--format human|json]
-sessions list [filters]
 sessions search <text> [filters]
-sessions show <source-instance:id> [--entry N --context N]
 sessions export <source-instance:id> --format md|json|jsonl [--full]
-sessions forget <source-instance:id> [--format human|json]
-sessions data clear --yes [--format human|json]
+sessions index --source cursor
 ```
 
 Behavioral rules:
@@ -425,7 +404,8 @@ Behavioral rules:
 - Destructive deletion is explicit and distinct from rebuilding derived search
   state.
 
-The exact current surface is generated help; stable semantics live in [the CLI contract](reference/cli-contract.md). No public command opens the implemented SQLite writer or clear maintenance yet.
+The exact current surface is generated help; stable semantics live in
+[the CLI contract](reference/cli-contract.md).
 
 ## Portable context export
 
@@ -462,7 +442,10 @@ proves later reuse.
 
 ## Doctor
 
-`sessions doctor` performs real, read-only capability checks. It verifies the minimum Node runtime, creates an in-memory FTS5 table against the runtime's actual SQLite build, reports whether the FTS5 per-table secure-delete command is supported, and inspects index-path safety and schema state. Future adapter slices add non-mutating source probes.
+`sessions doctor` performs real, read-only capability checks. It verifies the
+minimum Node runtime, probes the runtime's SQLite/FTS5 build in memory, inspects
+library safety/health through immutable state, and probes Codex readiness without
+reading rollout content.
 
 Doctor supports human output through `sessions doctor` and JSON through `sessions doctor --format json`. The JSON contract is:
 
@@ -490,7 +473,13 @@ Check order is stable. Every check runs even when an earlier check fails. A thro
 
 The complete human or JSON report is requested data and goes to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. An unexpected failure outside aggregation writes a concise diagnostic to stderr, emits no fabricated report, and exits `1`. Invalid format or other usage exits `2` through normal CLI error handling.
 
-The current checks are `node-runtime`, `sqlite-fts5`, and `index-state`. The SQLite capability probe uses `:memory:`. An uninitialized index passes with guidance. A ready index is checked through an immutable snapshot for bounded SQLite integrity, foreign keys, FTS structure/content/security, run-record readability, writer-lease state, and active/interrupted run counts. An active run requires a live indexing lease; interrupted history alone is informational. Doctor never resolves provider sources, creates or migrates the index, executes write-shaped FTS integrity commands, or persists data.
+The current checks are `node-runtime`, `sqlite-fts5`, `library-state`, and
+`source-codex`. The SQLite capability probe uses `:memory:`. An uninitialized
+library passes with guidance. A ready library distinguishes canonical integrity
+from rebuildable FTS health and reports run/lease state. An active run requires a
+live indexing lease; interrupted history alone is informational. Doctor resolves
+and probes Codex paths but never reads rollout content, opens a writer, creates or
+migrates the library, or persists data.
 
 ## Agent Skill design
 
@@ -675,7 +664,8 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 2 are implemented;
+Phase 3 is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query and export engine is completed
 over Codex before Cursor becomes the second-adapter proof. The
@@ -683,15 +673,15 @@ over Codex before Cursor becomes the second-adapter proof. The
 supersedes the earlier phase ordering and refines it into dependency-ordered,
 independently reviewable milestones with explicit exit gates.
 
-### Phase 0 — Foundation
+### Phase 0 — Foundation (complete)
 
 Durable intent/design docs, strict package scaffold, canonical types and source port, real doctor, dependency guards, offline tests, dist/package smoke, cross-platform CI.
 
-### Phase 1 — Canonical library
+### Phase 1 — Canonical library (complete)
 
 SQLite schema/migrations, application-data paths, file permissions, secure-delete configuration, durable canonical repository, non-destructive reconciliation, typed failures, last-good/absence tests, explicit forget/data-clear commands, and rebuildable FTS projections.
 
-### Phase 2 — First adapter
+### Phase 2 — First adapter (complete)
 
 Implement Codex behind `probe`/`discover`/`read`, using the source survey and new
 synthetic fixtures rather than porting the Harness parser. Complete

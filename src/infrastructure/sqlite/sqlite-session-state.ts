@@ -29,6 +29,10 @@ export interface SessionTrackingRecord {
   readonly latest_adapter_version: string | null;
   readonly latest_outcome: string;
   readonly latest_failure_code: string | null;
+  readonly presence_status: string;
+  readonly presence_observed_at: string | null;
+  readonly captured_at: string | null;
+  readonly last_seen_at: string | null;
   readonly has_document: number | bigint;
 }
 
@@ -48,6 +52,10 @@ export function findSessionTracking(
               tracking.latest_adapter_version,
               tracking.latest_outcome,
               tracking.latest_failure_code,
+              tracking.presence_status,
+              tracking.presence_observed_at,
+              tracking.captured_at,
+              tracking.last_seen_at,
               EXISTS (
                 SELECT 1
                 FROM sessions_canonical_sessions AS canonical
@@ -81,12 +89,6 @@ export function readSessionFreshness(
   );
   const copiedIdentity = copyIdentity(identity);
 
-  if (row.latest_outcome === "removed") {
-    if (hasDocument || lastGood !== undefined || latestRevision !== undefined) {
-      throw new SqliteSessionIndexError("corrupt-data");
-    }
-    return { status: "removed", identity: copiedIdentity, latest: { outcome: "removed" } };
-  }
   if (latestRevision === undefined) throw new SqliteSessionIndexError("corrupt-data");
   if (row.latest_outcome === "failed") {
     if (!isFailureCode(row.latest_failure_code)) {
@@ -131,7 +133,10 @@ export function readSessionSummary(
       `SELECT canonical.title,
               canonical.workspace,
               canonical.created_at,
-              canonical.updated_at
+              canonical.updated_at,
+              tracking.captured_at,
+              tracking.presence_status,
+              source.coverage_status
        FROM sessions_canonical_sessions AS canonical
        JOIN sessions_session_tracking AS tracking
          ON tracking.session_id = canonical.session_id
@@ -149,13 +154,78 @@ export function readSessionSummary(
   if (freshness.status !== "current" && freshness.status !== "stale") {
     throw new SqliteSessionIndexError("corrupt-data");
   }
+  return summaryFromRow(identity, row, freshness.status);
+}
+
+export function listSessionSummaries(
+  database: DatabaseSync,
+  limit: number,
+): readonly IndexedSessionSummary[] {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("Invalid summary limit");
+  const rows = database
+    .prepare(
+      `SELECT source.kind,
+              source.instance_id,
+              tracking.native_id,
+              canonical.title,
+              canonical.workspace,
+              canonical.created_at,
+              canonical.updated_at,
+              tracking.captured_at,
+              tracking.presence_status,
+              source.coverage_status
+       FROM sessions_canonical_sessions AS canonical
+       JOIN sessions_session_tracking AS tracking
+         ON tracking.session_id = canonical.session_id
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       ORDER BY
+         CASE WHEN COALESCE(canonical.updated_at, canonical.created_at) IS NULL THEN 1 ELSE 0 END,
+         COALESCE(canonical.updated_at, canonical.created_at) DESC,
+         source.kind COLLATE BINARY,
+         source.instance_id COLLATE BINARY,
+         tracking.native_id COLLATE BINARY
+       LIMIT ?`,
+    )
+    .all(limit) as unknown as readonly ListSummaryRow[];
+  return Object.freeze(
+    rows.map((row) => {
+      if (
+        typeof row.kind !== "string" ||
+        typeof row.instance_id !== "string" ||
+        typeof row.native_id !== "string"
+      ) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      const identity: SessionIdentity = {
+        source: { kind: row.kind, instanceId: row.instance_id },
+        nativeId: row.native_id,
+      };
+      const freshness = readSessionFreshness(database, identity);
+      if (freshness.status !== "current" && freshness.status !== "stale") {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      return Object.freeze(summaryFromRow(identity, row, freshness.status));
+    }),
+  );
+}
+
+function summaryFromRow(
+  identity: SessionIdentity,
+  row: SummaryRow,
+  freshness: "current" | "stale",
+): IndexedSessionSummary {
+  const sourceState = effectiveSourceState(row.coverage_status, row.presence_status);
+  assertOptionalCanonicalTimestamp(row.captured_at);
   return {
     identity: copyIdentity(identity),
     ...optional("title", row.title),
     ...optional("workspace", row.workspace),
     ...optional("createdAt", row.created_at),
     ...optional("updatedAt", row.updated_at),
-    freshness: freshness.status,
+    freshness,
+    sourceState,
+    ...optional("capturedAt", row.captured_at),
   };
 }
 
@@ -238,4 +308,37 @@ interface SummaryRow {
   readonly workspace: string | null;
   readonly created_at: string | null;
   readonly updated_at: string | null;
+  readonly captured_at: string | null;
+  readonly presence_status: unknown;
+  readonly coverage_status: unknown;
+}
+
+interface ListSummaryRow extends SummaryRow {
+  readonly kind: unknown;
+  readonly instance_id: unknown;
+  readonly native_id: unknown;
+}
+
+function effectiveSourceState(
+  coverage: unknown,
+  presence: unknown,
+): IndexedSessionSummary["sourceState"] {
+  if (coverage === "unknown") return "unknown";
+  if (coverage === "complete" && (presence === "present" || presence === "missing")) {
+    return presence;
+  }
+  throw new SqliteSessionIndexError("corrupt-data");
+}
+
+function assertOptionalCanonicalTimestamp(value: unknown): void {
+  if (value === null) return;
+  if (typeof value !== "string") throw new SqliteSessionIndexError("corrupt-data");
+  const milliseconds = Date.parse(value);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) ||
+    !Number.isFinite(milliseconds) ||
+    new Date(milliseconds).toISOString() !== value
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
 }
