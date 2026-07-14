@@ -74,16 +74,21 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-The implemented foundation through M2 uses this concrete layout:
+The implemented foundation through M3 uses this concrete layout:
 
 ```text
 src/
-  domain/session.ts
-  domain/index-state.ts
+  domain/
+    session.ts
+    session-validation.ts
+    index-state.ts
   application/
     ports/session-source.ts
+    ports/session-index.ts
     ports/runtime-diagnostic.ts
     ports/index-lifecycle.ts
+    validate-session.ts
+    read-session-document.ts
     get-paths.ts
     run-doctor.ts
   infrastructure/
@@ -95,16 +100,24 @@ src/
       database.ts
       migrations.ts
       migrations/0001-bootstrap.ts
+      migrations/0002-canonical-repository.ts
       permissions.ts
       sqlite-diagnostic.ts
       fts5-security.ts
+      read-snapshot.ts
+      sqlite-session-index.ts
+      sqlite-session-document.ts
+      sqlite-session-state.ts
+      sqlite-session-transaction.ts
   cli/
     program.ts
     run.ts
   bin/sessions.ts
 ```
 
-`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them. The current SQLite migration creates metadata only; canonical content tables, repository behavior, and adapters remain future work.
+`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them.
+
+Migration 2 and the internal SQLite repository now persist and exactly reconstruct validated provider-neutral session documents, last-good and latest-observation freshness, bounded indexing-run diagnostics, collision-safe interned content, and derived FTS5 rows. Repository replacements are atomic, and snapshot readers remain non-migrating and sidecar-free. Source discovery, indexing and reconciliation orchestration, provider adapters, and public index/query commands remain planned work.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 

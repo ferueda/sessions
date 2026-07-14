@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current M2 behavior plus accepted V1 semantics
+- Status: current M3 behavior plus accepted V1 semantics
 - Last updated: 2026-07-13
 
 Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
