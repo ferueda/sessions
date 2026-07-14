@@ -180,43 +180,50 @@ describe("Codex state snapshot feasibility", () => {
     }
   });
 
-  test("accepts only complete committed generations during WAL resets", async () => {
+  test("accepts complete committed generations across WAL checkpoint and reset transitions", async () => {
     const fixture = await activeWalFixture();
     fixture.database.close();
     const databaseIndex = openDatabases.indexOf(fixture.database);
     if (databaseIndex >= 0) openDatabases.splice(databaseIndex, 1);
 
     const workspace = await testWorkspace();
-    const stopSignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    const writer = startConcurrentWriter(fixture.databasePath, stopSignal);
-    await waitForWorkerMessage(writer, "ready");
+    const writer = startConcurrentWriter(fixture.databasePath);
+    expect(await writer.ready).toBe(1);
 
     const accepted: Generation[] = [];
     try {
-      for (let index = 0; index < 120; index += 1) {
-        try {
-          const generation = await materializeCodexStateSnapshot({
-            databasePath: fixture.databasePath,
-            workspace,
-            materialize: readGeneration,
-          });
-          accepted.push(generation);
-          expect(generation.left).toBe(generation.right);
-        } catch (error) {
-          if (!(error instanceof CodexStateSnapshotError) || error.kind !== "source-changed") {
-            throw error;
-          }
+      for (const checkpoint of ["none", "passive", "truncate"] as const) {
+        let committedGeneration: number | undefined;
+        const generation = await materializeCodexStateSnapshot({
+          databasePath: fixture.databasePath,
+          workspace,
+          hooks: {
+            async beforePostVerification(attempt) {
+              if (attempt === 1) committedGeneration = await writer.advance(checkpoint);
+            },
+          },
+          materialize: readGeneration,
+        });
+
+        if (committedGeneration === undefined) {
+          throw new Error(`Worker did not acknowledge the ${checkpoint} transition`);
         }
+        expect(generation).toEqual({
+          left: committedGeneration,
+          right: committedGeneration,
+        });
+        accepted.push(generation);
       }
     } finally {
-      Atomics.store(stopSignal, 0, 1);
-      Atomics.notify(stopSignal, 0);
-      await waitForWorkerMessage(writer, "stopped");
-      await writer.terminate();
+      try {
+        await writer.stop();
+      } finally {
+        await writer.worker.terminate();
+      }
     }
 
-    expect(accepted.length).toBeGreaterThan(0);
-    expect(new Set(accepted.map(({ left }) => left)).size).toBeGreaterThan(1);
+    expect(accepted.map(({ left }) => left)).toEqual([2, 3, 4]);
+    expect(workspace.attemptDirectories).toHaveLength(6);
     expect(await readdir(workspace.root)).toEqual([]);
   });
 });
@@ -362,15 +369,52 @@ function openImmutable(file: string): DatabaseSync {
   return new DatabaseSync(url.href, { readOnly: true });
 }
 
-function startConcurrentWriter(databasePath: string, stopSignal: Int32Array): Worker {
-  return new Worker(
+type CheckpointMode = "none" | "passive" | "truncate";
+
+interface ConcurrentWriter {
+  readonly worker: Worker;
+  readonly ready: Promise<number>;
+  readonly advance: (checkpoint: CheckpointMode) => Promise<number>;
+  readonly stop: () => Promise<void>;
+}
+
+interface WorkerStatus {
+  error?: Error;
+  exitCode?: number;
+}
+
+interface WorkerReadyMessage {
+  readonly type: "ready";
+  readonly generation: number;
+}
+
+interface WorkerAdvancedMessage {
+  readonly type: "advanced";
+  readonly requestId: number;
+  readonly checkpoint: CheckpointMode;
+  readonly generation: number;
+}
+
+interface WorkerStoppedMessage {
+  readonly type: "stopped";
+  readonly requestId: number;
+}
+
+const WORKER_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+function startConcurrentWriter(databasePath: string): ConcurrentWriter {
+  const worker = new Worker(
     `
       const { DatabaseSync } = require("node:sqlite");
       const { parentPort, workerData } = require("node:worker_threads");
-      const stop = new Int32Array(workerData.stopBuffer);
       const database = new DatabaseSync(workerData.databasePath, { timeout: 1_000 });
       database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
       let generation = Number(database.prepare("SELECT generation FROM left_state WHERE singleton = 1").get().generation);
+      const checkpoints = {
+        none: undefined,
+        passive: "PRAGMA wal_checkpoint(PASSIVE);",
+        truncate: "PRAGMA wal_checkpoint(TRUNCATE);",
+      };
 
       function writeNext() {
         generation += 1;
@@ -378,48 +422,142 @@ function startConcurrentWriter(databasePath: string, stopSignal: Int32Array): Wo
         database.prepare("UPDATE left_state SET generation = ? WHERE singleton = 1").run(generation);
         database.prepare("UPDATE right_state SET generation = ? WHERE singleton = 1").run(generation);
         database.exec("COMMIT;");
-        if (generation % 2 === 0) database.exec("PRAGMA wal_checkpoint(PASSIVE);");
-        if (generation % 5 === 0) database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
       }
 
-      function step() {
-        if (Atomics.load(stop, 0) !== 0) {
-          database.close();
-          parentPort.postMessage("stopped");
+      function applyCheckpoint(mode) {
+        const statement = checkpoints[mode];
+        if (statement === undefined) return;
+        const result = database.prepare(statement).get();
+        // SQLite reports checkpoint contention in the result instead of throwing.
+        if (Number(result.busy) !== 0) throw new Error("Checkpoint remained busy");
+        if (mode === "passive" && Number(result.checkpointed) < 1) {
+          throw new Error("Passive checkpoint copied no WAL frames");
+        }
+        if (
+          mode === "truncate" &&
+          (Number(result.log) !== 0 || Number(result.checkpointed) !== 0)
+        ) {
+          throw new Error("Truncating checkpoint did not reset the WAL");
+        }
+      }
+
+      parentPort.on("message", (command) => {
+        if (command.type === "advance") {
+          if (!Object.hasOwn(checkpoints, command.checkpoint)) {
+            throw new Error("Unknown checkpoint mode");
+          }
+          writeNext();
+          applyCheckpoint(command.checkpoint);
+          parentPort.postMessage({
+            type: "advanced",
+            requestId: command.requestId,
+            checkpoint: command.checkpoint,
+            generation,
+          });
           return;
         }
-        writeNext();
-        setTimeout(step, 2);
-      }
 
-      writeNext();
-      parentPort.postMessage("ready");
-      setTimeout(step, 2);
+        if (command.type === "stop") {
+          database.close();
+          parentPort.postMessage({ type: "stopped", requestId: command.requestId });
+          return;
+        }
+
+        throw new Error("Unknown concurrent writer command");
+      });
+
+      parentPort.postMessage({ type: "ready", generation });
     `,
     {
       eval: true,
-      workerData: { databasePath, stopBuffer: stopSignal.buffer },
+      workerData: { databasePath },
     },
   );
+
+  const status: WorkerStatus = {};
+  worker.on("error", (error) => {
+    status.error =
+      error instanceof Error ? error : new Error("Concurrent SQLite writer failed unexpectedly");
+  });
+  worker.on("exit", (code) => {
+    status.exitCode = code;
+  });
+
+  const ready = waitForWorkerMessage(worker, status, "ready", isWorkerReadyMessage).then(
+    ({ generation }) => generation,
+  );
+  let nextRequestId = 0;
+
+  return {
+    worker,
+    ready,
+    async advance(checkpoint) {
+      await ready;
+      const requestId = (nextRequestId += 1);
+      const response = waitForWorkerMessage(
+        worker,
+        status,
+        `${checkpoint} checkpoint acknowledgement`,
+        (message): message is WorkerAdvancedMessage =>
+          isWorkerAdvancedMessage(message, requestId, checkpoint),
+      );
+      worker.postMessage({ type: "advance", requestId, checkpoint });
+      return (await response).generation;
+    },
+    async stop() {
+      await ready;
+      const requestId = (nextRequestId += 1);
+      const response = waitForWorkerMessage(
+        worker,
+        status,
+        "stop acknowledgement",
+        (message): message is WorkerStoppedMessage => isWorkerStoppedMessage(message, requestId),
+      );
+      worker.postMessage({ type: "stop", requestId });
+      await response;
+    },
+  };
 }
 
-function waitForWorkerMessage(worker: Worker, expected: string): Promise<void> {
+function waitForWorkerMessage<T>(
+  worker: Worker,
+  status: WorkerStatus,
+  description: string,
+  matches: (message: unknown) => message is T,
+): Promise<T> {
+  if (status.error !== undefined) return Promise.reject(status.error);
+  if (status.exitCode !== undefined) {
+    return Promise.reject(
+      new Error(
+        `Concurrent SQLite writer exited before ${description} with code ${status.exitCode}`,
+      ),
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const onMessage = (message: unknown) => {
-      if (message !== expected) return;
+      if (!matches(message)) return;
       cleanup();
-      resolve();
+      resolve(message);
     };
     const onError = (error: Error) => {
       cleanup();
       reject(error);
     };
     const onExit = (code: number) => {
-      if (code === 0) return;
       cleanup();
-      reject(new Error(`Concurrent SQLite writer exited with code ${code}`));
+      reject(new Error(`Concurrent SQLite writer exited before ${description} with code ${code}`));
     };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `Concurrent SQLite writer did not complete ${description} within ${WORKER_HANDSHAKE_TIMEOUT_MS}ms`,
+        ),
+      );
+    }, WORKER_HANDSHAKE_TIMEOUT_MS);
     const cleanup = () => {
+      clearTimeout(timeout);
       worker.off("message", onMessage);
       worker.off("error", onError);
       worker.off("exit", onExit);
@@ -428,6 +566,39 @@ function waitForWorkerMessage(worker: Worker, expected: string): Promise<void> {
     worker.on("error", onError);
     worker.on("exit", onExit);
   });
+}
+
+function isWorkerReadyMessage(message: unknown): message is WorkerReadyMessage {
+  return isRecord(message) && message.type === "ready" && isGeneration(message.generation);
+}
+
+function isWorkerAdvancedMessage(
+  message: unknown,
+  requestId: number,
+  checkpoint: CheckpointMode,
+): message is WorkerAdvancedMessage {
+  return (
+    isRecord(message) &&
+    message.type === "advanced" &&
+    message.requestId === requestId &&
+    message.checkpoint === checkpoint &&
+    isGeneration(message.generation)
+  );
+}
+
+function isWorkerStoppedMessage(
+  message: unknown,
+  requestId: number,
+): message is WorkerStoppedMessage {
+  return isRecord(message) && message.type === "stopped" && message.requestId === requestId;
+}
+
+function isGeneration(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
 }
 
 function escapeRegExp(value: string): string {

@@ -71,6 +71,96 @@ describe("SQLite ready-index health", () => {
     });
   });
 
+  test("accepts valid tracking-only history with migrated null observation facts", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      database
+        .prepare(
+          `INSERT INTO sessions_session_tracking (
+             source_instance_id, native_id, latest_outcome, presence_status
+           ) VALUES (?, 'legacy-removed', 'removed', 'missing')`,
+        )
+        .run(fixture.sourceInstanceId);
+    });
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      canonicalIntegrity: "ok",
+      ftsStructure: "ok",
+      ftsContent: "ok",
+    });
+  });
+
+  test("validates source instances even when they have no tracking rows", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      database
+        .prepare(
+          `INSERT INTO sessions_source_instances (kind, instance_id)
+           VALUES ('Invalid-Kind', 'source-only')`,
+        )
+        .run();
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test("detects corrupt revisions on tracking-only failed identities", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      database
+        .prepare(
+          `UPDATE sessions_session_tracking
+           SET latest_fingerprint_digest = 'invalid'
+           WHERE session_id = ?`,
+        )
+        .run(fixture.sessionId);
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test("detects tracking state that claims an indexed revision without a document", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      database
+        .prepare(
+          `UPDATE sessions_session_tracking
+           SET last_good_fingerprint_scheme = latest_fingerprint_scheme,
+               last_good_fingerprint_digest = latest_fingerprint_digest,
+               last_good_adapter_version = latest_adapter_version,
+               latest_outcome = 'indexed',
+               latest_failure_code = NULL
+           WHERE session_id = ?`,
+        )
+        .run(fixture.sessionId);
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test.each([
+    "coverage_observed_at",
+    "presence_observed_at",
+    "captured_at",
+    "last_seen_at",
+  ] as const)("detects a non-canonical %s timestamp", async (column) => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      corruptObservationTimestamp(database, fixture, column);
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
   test("fails an active run without a live indexing lease", async () => {
     const paths = await initializedPaths();
     mutateDatabase(paths.database, (database) => {
@@ -233,4 +323,76 @@ function mutateDatabase(file: string, mutate: (database: DatabaseSync) => void):
   } finally {
     database.close();
   }
+}
+
+interface TrackingOnlyFixture {
+  readonly sessionId: number | bigint;
+  readonly sourceInstanceId: number | bigint;
+}
+
+function seedValidTrackingOnly(database: DatabaseSync): TrackingOnlyFixture {
+  const source = database
+    .prepare(
+      `INSERT INTO sessions_source_instances (kind, instance_id)
+       VALUES ('synthetic', 'tracking-only')`,
+    )
+    .run();
+  const tracking = database
+    .prepare(
+      `INSERT INTO sessions_session_tracking (
+         source_instance_id,
+         native_id,
+         latest_fingerprint_scheme,
+         latest_fingerprint_digest,
+         latest_adapter_version,
+         latest_outcome,
+         latest_failure_code
+       ) VALUES (?, 'failed-session', 'sha256-json-v1', ?, 'fixture-v1', 'failed', 'unreadable')`,
+    )
+    .run(source.lastInsertRowid, "a".repeat(64));
+  return {
+    sourceInstanceId: source.lastInsertRowid,
+    sessionId: tracking.lastInsertRowid,
+  };
+}
+
+function corruptObservationTimestamp(
+  database: DatabaseSync,
+  fixture: TrackingOnlyFixture,
+  column: "coverage_observed_at" | "presence_observed_at" | "captured_at" | "last_seen_at",
+): void {
+  const invalidTimestamp = "2026-7-14T12:00:00Z";
+  if (column === "coverage_observed_at") {
+    database
+      .prepare(
+        `UPDATE sessions_source_instances
+         SET coverage_observed_at = ?
+         WHERE source_instance_id = ?`,
+      )
+      .run(invalidTimestamp, fixture.sourceInstanceId);
+    return;
+  }
+  const sql = {
+    presence_observed_at: `UPDATE sessions_session_tracking
+                           SET presence_observed_at = ?
+                           WHERE session_id = ?`,
+    captured_at: `UPDATE sessions_session_tracking
+                  SET captured_at = ?
+                  WHERE session_id = ?`,
+    last_seen_at: `UPDATE sessions_session_tracking
+                   SET last_seen_at = ?
+                   WHERE session_id = ?`,
+  }[column];
+  database.prepare(sql).run(invalidTimestamp, fixture.sessionId);
+}
+
+async function expectCanonicalIntegrityFailure(paths: IndexPaths): Promise<void> {
+  await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+    ok: false,
+    canonicalIntegrity: "failed",
+    foreignKeys: "ok",
+    ftsStructure: "ok",
+    ftsContent: "ok",
+    ftsRemediation: "not-needed",
+  });
 }

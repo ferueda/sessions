@@ -309,11 +309,19 @@ function acquireClearLease(
     if (history.currentVersion === 4 && history.pending.length !== 0) {
       throw new IndexMaintenanceError("concurrent-change");
     }
+    if (history.currentVersion === 3) assertSchemaThreeClearLeaseIsPossible(database);
     return acquireWriterLeaseInTransaction(database, "clear", {
       now: options.now,
       ...(options.token === undefined ? {} : { token: options.token }),
     });
   });
+}
+
+function assertSchemaThreeClearLeaseIsPossible(database: DatabaseSync): void {
+  const row = database
+    .prepare("SELECT purpose FROM sessions_writer_lease WHERE singleton = 1")
+    .get() as { readonly purpose?: unknown } | undefined;
+  if (row?.purpose === "forget") throw new SqliteWriterLeaseError("corrupt-data");
 }
 
 interface ScratchRootState {

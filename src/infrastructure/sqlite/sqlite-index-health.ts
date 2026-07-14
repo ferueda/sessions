@@ -15,7 +15,7 @@ import {
 } from "./migrations.ts";
 import { readWriterLeaseHealth } from "./writer-lease.ts";
 import { readCanonicalDocument } from "./sqlite-session-document.ts";
-import { readSessionSummary } from "./sqlite-session-state.ts";
+import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
@@ -94,30 +94,93 @@ function inspectDatabaseHealth(
 }
 
 function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
+  return sourceInstancesAreValid(database) && sessionTrackingIsValid(database);
+}
+
+function sourceInstancesAreValid(database: DatabaseSync): boolean {
   const rows = database
     .prepare(
-      `SELECT source.kind, source.instance_id, tracking.native_id, tracking.session_id
-       FROM sessions_canonical_sessions AS canonical
-       JOIN sessions_session_tracking AS tracking
-         ON tracking.session_id = canonical.session_id
-       JOIN sessions_source_instances AS source
+      `SELECT source_instance_id, kind, instance_id, coverage_status, coverage_observed_at
+       FROM sessions_source_instances
+       ORDER BY source_instance_id`,
+    )
+    .all() as readonly Record<string, unknown>[];
+  return rows.every((row) => {
+    nonNegativeInteger(row.source_instance_id);
+    // Reuse the public identity grammar to validate a source tuple with a fixed valid native ID.
+    return (
+      isSessionIdentity({
+        source: { kind: row.kind, instanceId: row.instance_id },
+        nativeId: "health-check",
+      }) &&
+      (row.coverage_status === "complete" || row.coverage_status === "unknown") &&
+      optionalCanonicalTimestampIsValid(row.coverage_observed_at)
+    );
+  });
+}
+
+function sessionTrackingIsValid(database: DatabaseSync): boolean {
+  const rows = database
+    .prepare(
+      `SELECT tracking.session_id,
+              tracking.source_instance_id,
+              tracking.native_id,
+              tracking.presence_status,
+              tracking.presence_observed_at,
+              tracking.captured_at,
+              tracking.last_seen_at,
+              source.kind,
+              source.instance_id
+       FROM sessions_session_tracking AS tracking
+       LEFT JOIN sessions_source_instances AS source
          ON source.source_instance_id = tracking.source_instance_id
-       ORDER BY source.kind COLLATE BINARY,
-                source.instance_id COLLATE BINARY,
-                tracking.native_id COLLATE BINARY`,
+       ORDER BY tracking.session_id`,
     )
     .all() as readonly Record<string, unknown>[];
   for (const row of rows) {
+    const sessionId = nonNegativeInteger(row.session_id);
+    nonNegativeInteger(row.source_instance_id);
     const identity = {
       source: { kind: row.kind, instanceId: row.instance_id },
       nativeId: row.native_id,
     };
     if (!isSessionIdentity(identity)) return false;
-    const sessionId = nonNegativeInteger(row.session_id);
-    if (readCanonicalDocument(database, identity, sessionId) === undefined) return false;
-    if (readSessionSummary(database, identity) === undefined) return false;
+    if (
+      (row.presence_status !== "present" && row.presence_status !== "missing") ||
+      !optionalCanonicalTimestampIsValid(row.presence_observed_at) ||
+      !optionalCanonicalTimestampIsValid(row.captured_at) ||
+      !optionalCanonicalTimestampIsValid(row.last_seen_at)
+    ) {
+      return false;
+    }
+
+    const freshness = readSessionFreshness(database, identity);
+    const document = readCanonicalDocument(database, identity, sessionId);
+    const summary = readSessionSummary(database, identity);
+    if (freshness.status === "current" || freshness.status === "stale") {
+      if (document === undefined || summary === undefined) return false;
+      continue;
+    }
+    // First-seen failures and legacy removals legitimately retain tracking without a document.
+    if (freshness.status === "untracked" || document !== undefined || summary !== undefined) {
+      return false;
+    }
+    if (row.captured_at !== null) return false;
+    if (freshness.status === "removed" && row.presence_status !== "missing") return false;
+    if (freshness.status === "unindexed" && row.presence_status !== "present") return false;
   }
   return true;
+}
+
+function optionalCanonicalTimestampIsValid(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) &&
+    Number.isFinite(milliseconds) &&
+    new Date(milliseconds).toISOString() === value
+  );
 }
 
 function foreignKeysAreValid(database: DatabaseSync): boolean {
