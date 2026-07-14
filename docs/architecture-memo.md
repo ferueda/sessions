@@ -74,7 +74,7 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-The implemented foundation through M3 uses this concrete layout:
+The implemented foundation through M4 uses this concrete layout:
 
 ```text
 src/
@@ -87,8 +87,14 @@ src/
     ports/session-index.ts
     ports/runtime-diagnostic.ts
     ports/index-lifecycle.ts
+    ports/index-health.ts
+    ports/index-maintenance.ts
     validate-session.ts
     read-session-document.ts
+    discover-sessions.ts
+    run-index.ts
+    index-report.ts
+    clear-index.ts
     get-paths.ts
     run-doctor.ts
   infrastructure/
@@ -101,14 +107,20 @@ src/
       migrations.ts
       migrations/0001-bootstrap.ts
       migrations/0002-canonical-repository.ts
+      migrations/0003-writer-coordination.ts
       permissions.ts
       sqlite-diagnostic.ts
       fts5-security.ts
       read-snapshot.ts
+      writer-lease.ts
+      sqlite-writer-database.ts
       sqlite-session-index.ts
       sqlite-session-document.ts
       sqlite-session-state.ts
       sqlite-session-transaction.ts
+      sqlite-index-run-result.ts
+      sqlite-index-health.ts
+      index-maintenance.ts
   cli/
     program.ts
     run.ts
@@ -117,7 +129,9 @@ src/
 
 `src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them.
 
-Migration 2 and the internal SQLite repository now persist and exactly reconstruct validated provider-neutral session documents, last-good and latest-observation freshness, bounded indexing-run diagnostics, collision-safe interned content, and derived FTS5 rows. Repository replacements are atomic, and snapshot readers remain non-migrating and sidecar-free. Source discovery, indexing and reconciliation orchestration, provider adapters, and public index/query commands remain planned work.
+Migration 2 and the internal SQLite repository persist and exactly reconstruct validated provider-neutral session documents, last-good and latest-observation freshness, bounded indexing-run diagnostics, collision-safe interned content, and derived FTS5 rows. Migration 3 adds singleton generation-based writer coordination. Repository replacements are atomic; every write is lease-fenced; expired takeover interrupts abandoned active runs; and snapshot readers remain non-migrating and sidecar-free.
+
+The internal M4 application service now owns admitted source selection, complete discovery preflight, incremental reads, last-good failure behavior, exact-source reconciliation, and durable provider-neutral reports. Internal clear maintenance and immutable ready-index health inspection are also implemented. Concrete provider adapters, public index/clear routes, query behavior, and packaged skills remain planned work.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -221,16 +235,17 @@ This is an internal port in V1, not a stable external plugin ABI.
 
 ## Indexing and reconciliation
 
-`sessions index` is the only operation that reads provider histories for persistence. The application indexing service owns this sequence:
+The implemented internal indexing service is the engine for the planned `sessions index` command, which will be the only operation that reads provider histories for persistence. The service owns this sequence:
 
-1. Resolve selected source instances and run probes.
-2. Ask each adapter to discover candidates.
-3. Compare identity, complete-input fingerprint, and adapter format version with the index.
-4. Skip unchanged candidates.
-5. Read and validate changed candidates into complete canonical documents.
-6. In one transaction per session, replace the prior canonical document and its search rows.
-7. Reconcile candidates no longer discoverable according to explicit source state, without treating a failed/incomplete scan as deletion.
-8. Record run diagnostics and counts.
+1. Validate, deduplicate, and deterministically order exact selected source instances before opening a writer.
+2. Start a durable source run, then probe the selected adapter.
+3. Fully exhaust, snapshot, validate, deduplicate, and deterministically order discovery before session mutation.
+4. Compare identity, complete-input fingerprint, and adapter format version with repository freshness.
+5. Record unchanged candidates without calling `read()`.
+6. Read and validate changed candidates, atomically replacing one complete canonical document and its search rows.
+7. Preserve last-good rows after typed read failure and treat the failed candidate as seen.
+8. Reconcile unseen canonical documents only after a complete scan for that exact source instance.
+9. Finalize provider-neutral counts and bounded ordered diagnostics from durable repository state.
 
 Properties:
 
@@ -239,11 +254,15 @@ Properties:
 - **Transactional:** a session is old or new, never half-written.
 - **Last-good preservation:** failed reads leave the prior indexed document available and report staleness.
 - **Adapter-version aware:** parser corrections trigger controlled re-normalization.
-- **Single writer:** the index service, not adapters, owns writes and reconciliation.
+- **Complete-scan reconciliation:** malformed, conflicting, wrong-source, or interrupted discovery mutates no sessions and removes nothing.
+- **Single writer:** a renewable generation lease admits one high-level writer, and every repository mutation fences stale owners transactionally.
+- **Recoverable:** a later writer can recover valid WAL state, interrupt abandoned runs after lease expiry, and reindex idempotently.
+
+Probe/discovery/read failures are sanitized per-source outcomes and do not prevent later selected sources from running. Repository, lease, or finalization failures abort the invocation because persistence trust is lost. Sources run sequentially; M4 adds no daemon, parallel indexing, retries, or progress surface.
 
 ## Storage and search
 
-SQLite is the canonical local store. FTS5 supplies lexical search. The M3 schema separates source instances, sessions, relations, entries, content values, occurrences, index runs, and migration metadata while using FTS shadow tables only as derived search structures. Application query translation, ranking, and tokenizer tuning remain planned.
+SQLite is the canonical local store. FTS5 supplies lexical search. The schema separates source instances, sessions, relations, entries, content values, occurrences, index runs, migration metadata, and schema-v3 writer coordination while using FTS shadow tables only as derived search structures. Application query translation, ranking, and tokenizer tuning remain planned.
 
 Planned application query values—not raw FTS syntax—define search:
 
@@ -272,6 +291,8 @@ SQLite migrations are ordered, transactional, and forward-only for released vers
 - The index stores canonical content needed for faithful show/export, not entire raw provider payloads.
 
 Detailed promises belong to [the privacy contract](privacy.md).
+
+The only-owned-file clear path exists internally in M4 but is not a public command. It validates canonical path safety, acquires a `clear` lease and checkpoints a current schema, then removes only database/WAL/SHM files. It never recurses or opens provider paths. Registration and CLI rendering belong to M5.
 
 ## CLI contract
 
@@ -305,7 +326,7 @@ Behavioral rules:
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
 
-The exact current surface is generated help; stable semantics live in [the CLI contract](reference/cli-contract.md). No public command opens the implemented SQLite writer yet.
+The exact current surface is generated help; stable semantics live in [the CLI contract](reference/cli-contract.md). No public command opens the implemented SQLite writer or clear maintenance yet.
 
 ## Doctor
 
@@ -337,7 +358,7 @@ Check order is stable. Every check runs even when an earlier check fails. A thro
 
 The complete human or JSON report is requested data and goes to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. An unexpected failure outside aggregation writes a concise diagnostic to stderr, emits no fabricated report, and exits `1`. Invalid format or other usage exits `2` through normal CLI error handling.
 
-The current checks are `node-runtime`, `sqlite-fts5`, and `index-state`. The SQLite capability probe uses `:memory:`. An uninitialized index passes with guidance. Doctor never resolves provider sources, creates or migrates the index, or persists data.
+The current checks are `node-runtime`, `sqlite-fts5`, and `index-state`. The SQLite capability probe uses `:memory:`. An uninitialized index passes with guidance. A ready index is checked through an immutable snapshot for bounded SQLite integrity, foreign keys, FTS structure/content/security, run-record readability, writer-lease state, and active/interrupted run counts. An active run requires a live indexing lease; interrupted history alone is informational. Doctor never resolves provider sources, creates or migrates the index, executes write-shaped FTS integrity commands, or persists data.
 
 ## Agent Skill design
 

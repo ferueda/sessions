@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
 import type {
+  IndexHealthInspector,
+  ReadyIndexHealth,
+} from "../../src/application/ports/index-health.ts";
+import type {
   IndexPaths,
   IndexStateInspector,
 } from "../../src/application/ports/index-lifecycle.ts";
@@ -46,7 +50,87 @@ describe("createIndexStateDiagnostic", () => {
     expect(outcome).toMatchObject({
       ok: true,
       summary: "Index schema 1 is ready",
-      details: { state: "ready", schemaVersion: "1" },
+      details: {
+        state: "ready",
+        schemaVersion: "1",
+        integrity: "ok",
+        foreignKeys: "ok",
+        ftsStructure: "ok",
+        ftsContent: "ok",
+        ftsSecureDelete: "enabled",
+        runRecords: "ok",
+        writerLease: "free",
+        activeRuns: "0",
+        interruptedRuns: "0",
+      },
+    });
+  });
+
+  test("reports typed ready-index health failures without sensitive details", async () => {
+    const outcome = await diagnosticFor(
+      {
+        status: "ready",
+        initialized: true,
+        schemaVersion: 3,
+        supportedSchemaVersion: 3,
+      },
+      {
+        ...healthyIndex,
+        ok: false,
+        ftsContent: "failed",
+        writerLease: "expired",
+        activeRuns: 1,
+        interruptedRuns: 2,
+      },
+    ).run();
+
+    expect(outcome).toEqual({
+      ok: false,
+      summary: "Index schema 3 failed health checks",
+      details: {
+        state: "ready",
+        initialized: "true",
+        schemaVersion: "3",
+        supportedSchemaVersion: "3",
+        integrity: "ok",
+        foreignKeys: "ok",
+        ftsStructure: "ok",
+        ftsContent: "failed",
+        ftsSecureDelete: "enabled",
+        runRecords: "ok",
+        writerLease: "expired",
+        activeRuns: "1",
+        interruptedRuns: "2",
+      },
+    });
+  });
+
+  test("sanitizes an unexpected ready-index health inspection failure", async () => {
+    const state: IndexState = {
+      status: "ready",
+      initialized: true,
+      schemaVersion: 3,
+      supportedSchemaVersion: 3,
+    };
+    const inspector: IndexStateInspector & IndexHealthInspector = {
+      async inspect() {
+        return state;
+      },
+      async inspectHealth() {
+        throw new Error("database path and SQL details");
+      },
+    };
+
+    await expect(createIndexStateDiagnostic(() => paths, inspector).run()).resolves.toEqual({
+      ok: false,
+      summary: "Index schema 3 health inspection failed",
+      details: {
+        state: "ready",
+        initialized: "true",
+        schemaVersion: "3",
+        supportedSchemaVersion: "3",
+        health: "inspection-failed",
+      },
     });
   });
 
@@ -109,11 +193,28 @@ describe("createIndexStateDiagnostic", () => {
   });
 });
 
-function diagnosticFor(state: IndexState) {
-  const inspector: IndexStateInspector = {
+const healthyIndex: ReadyIndexHealth = {
+  ok: true,
+  integrity: "ok",
+  foreignKeys: "ok",
+  ftsStructure: "ok",
+  ftsContent: "ok",
+  ftsSecureDelete: "enabled",
+  runRecords: "ok",
+  writerLease: "free",
+  activeRuns: 0,
+  interruptedRuns: 0,
+};
+
+function diagnosticFor(state: IndexState, health: ReadyIndexHealth = healthyIndex) {
+  const inspector: IndexStateInspector & IndexHealthInspector = {
     async inspect(actualPaths) {
       expect(actualPaths).toBe(paths);
       return state;
+    },
+    async inspectHealth(actualPaths) {
+      expect(actualPaths).toBe(paths);
+      return health;
     },
   };
   return createIndexStateDiagnostic(() => paths, inspector);

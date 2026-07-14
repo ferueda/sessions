@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current M3 behavior plus accepted V1 semantics
+- Status: current public M4 behavior plus accepted V1 semantics
 - Last updated: 2026-07-13
 
 Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
@@ -43,7 +43,9 @@ The bare command prints help. `doctor` performs read-only Node.js, in-memory SQL
 
 Check IDs, field names, and `schemaVersion` are machine-facing. Summaries are human-facing. Checks run in declared order and continue after failure. A thrown probe becomes a sanitized failed check.
 
-The current check order is `node-runtime`, `sqlite-fts5`, then `index-state`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete` (`supported` or `unsupported`) in `details`; lack of FTS5 fails the check. The index check passes `uninitialized` with guidance and passes `ready`; every other state fails. Doctor inspection never opens a writer.
+The current check order is `node-runtime`, `sqlite-fts5`, then `index-state`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete` (`supported` or `unsupported`) in `details`; lack of FTS5 fails the check. The index check passes `uninitialized` with guidance. Every non-ready initialized state fails.
+
+For `ready`, the index check uses an immutable snapshot and adds `integrity`, `foreignKeys`, `ftsStructure`, `ftsContent`, `ftsSecureDelete`, `runRecords`, `writerLease`, `activeRuns`, and `interruptedRuns` to `details`. Health check values are stable strings: checks are `ok` or `failed`; FTS secure delete is `enabled`, `missing`, or `unsupported`; writer lease is `free`, `index-live`, `clear-live`, `expired`, or `invalid`; counts are non-negative decimal strings. `unsupported` is healthy only when the current SQLite runtime lacks the optional persistent setting. Integrity, foreign-key, required FTS configuration, run-record, or lease corruption fails the check. An active run without a live indexing lease also fails. Historical interrupted runs are reported but do not fail by themselves. Unexpected health inspection failure is sanitized as `health: inspection-failed`. Doctor inspection never opens a writer, runs migrations, or uses the write-shaped FTS integrity command.
 
 All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
 
@@ -63,7 +65,7 @@ All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed c
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 2
+    "supportedSchemaVersion": 3
   }
 }
 ```
@@ -84,6 +86,8 @@ sessions index clear
 ```
 
 These names describe the accepted direction. They are added to generated help only when implemented and contract-tested.
+
+M4 implements provider-neutral indexing/reconciliation and clear report values internally, but does not register either route. Generated help remains the authority: `sessions index`, `sessions index clear`, and all query commands are unavailable until later milestones compose their complete user-facing paths.
 
 ## Planned identity and filters
 

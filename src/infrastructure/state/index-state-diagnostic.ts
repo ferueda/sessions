@@ -1,22 +1,59 @@
+import type {
+  IndexHealthInspector,
+  ReadyIndexHealth,
+} from "../../application/ports/index-health.ts";
 import type { IndexPaths, IndexStateInspector } from "../../application/ports/index-lifecycle.ts";
 import type { RuntimeDiagnostic } from "../../application/ports/runtime-diagnostic.ts";
 import type { IndexState } from "../../domain/index-state.ts";
 
 export function createIndexStateDiagnostic(
   resolvePaths: () => IndexPaths,
-  inspector: IndexStateInspector,
+  inspector: IndexStateInspector & IndexHealthInspector,
 ): RuntimeDiagnostic {
   return {
     id: "index-state",
     label: "Sessions index",
     async run() {
-      const state = await inspector.inspect(resolvePaths());
+      const paths = resolvePaths();
+      const state = await inspector.inspect(paths);
+      if (state.status === "ready") {
+        try {
+          const health = await inspector.inspectHealth(paths);
+          return {
+            ok: health.ok,
+            summary: health.ok
+              ? `Index schema ${String(state.schemaVersion)} is ready`
+              : `Index schema ${String(state.schemaVersion)} failed health checks`,
+            details: { ...detailsFor(state), ...healthDetails(health) },
+          };
+        } catch {
+          return {
+            ok: false,
+            summary: `Index schema ${String(state.schemaVersion)} health inspection failed`,
+            details: { ...detailsFor(state), health: "inspection-failed" },
+          };
+        }
+      }
       return {
-        ok: state.status === "ready" || state.status === "uninitialized",
+        ok: state.status === "uninitialized",
         summary: summarize(state),
         details: detailsFor(state),
       };
     },
+  };
+}
+
+function healthDetails(health: ReadyIndexHealth): Readonly<Record<string, string>> {
+  return {
+    integrity: health.integrity,
+    foreignKeys: health.foreignKeys,
+    ftsStructure: health.ftsStructure,
+    ftsContent: health.ftsContent,
+    ftsSecureDelete: health.ftsSecureDelete,
+    runRecords: health.runRecords,
+    writerLease: health.writerLease,
+    activeRuns: String(health.activeRuns),
+    interruptedRuns: String(health.interruptedRuns),
   };
 }
 

@@ -1,8 +1,10 @@
 import type { DiscoveredSession, SessionSource } from "./ports/session-source.ts";
 import { isSourceFailureError, SourceFailureError } from "./source-failure.ts";
 import {
-  admitSessionObservation,
+  admitDiscoveredSession,
   admitSessionReplacement,
+  isAdmittedDiscoveredSession,
+  type AdmittedDiscoveredSession,
   type ValidatedSessionReplacement,
 } from "./validate-session.ts";
 import { snapshotPlainRecord } from "../domain/data-snapshot.ts";
@@ -11,20 +13,22 @@ import type { SessionDocument, SourceInstance } from "../domain/session.ts";
 
 export async function readSessionDocument(
   source: SessionSource,
-  candidate: DiscoveredSession,
+  candidate: DiscoveredSession | AdmittedDiscoveredSession,
 ): Promise<SessionDocument> {
   return (await readSessionReplacement(source, candidate)).document;
 }
 
 export async function readSessionReplacement(
   source: SessionSource,
-  candidate: DiscoveredSession,
+  candidate: DiscoveredSession | AdmittedDiscoveredSession,
 ): Promise<ValidatedSessionReplacement> {
-  const admittedObservation = admitSessionObservation(candidate);
-  if (!admittedObservation.ok) {
+  const admission = isAdmittedDiscoveredSession(candidate)
+    ? { ok: true as const, admitted: candidate }
+    : admitDiscoveredSession(candidate);
+  if (!admission.ok) {
     const sourceInstance = safeCandidateSource(candidate, source.kind);
     if (
-      admittedObservation.issues.some(
+      admission.issues.some(
         ({ code }) =>
           code === "invalid-aggregate-fingerprint" ||
           code === "invalid-input" ||
@@ -36,7 +40,8 @@ export async function readSessionReplacement(
     throw new SourceFailureError({ kind: "malformed", source: sourceInstance });
   }
 
-  const { observation } = admittedObservation;
+  const { admitted } = admission;
+  const { observation } = admitted;
   if (source.kind !== observation.identity.source.kind) {
     throw new SourceFailureError({
       kind: "malformed",
@@ -47,10 +52,10 @@ export async function readSessionReplacement(
 
   let value: unknown;
   try {
-    value = await source.read(candidate);
+    value = await source.read(admitted.candidate);
   } catch (error) {
     if (isSourceFailureError(error)) {
-      throw error;
+      if (sameSource(error.failure.source, observation.identity.source)) throw error;
     }
 
     throw new SourceFailureError(
@@ -87,6 +92,10 @@ export async function readSessionReplacement(
   }
 
   return result.replacement;
+}
+
+function sameSource(left: SourceInstance, right: SourceInstance): boolean {
+  return left.kind === right.kind && left.instanceId === right.instanceId;
 }
 
 function safeCandidateSource(candidate: unknown, fallbackKind: string): SourceInstance {

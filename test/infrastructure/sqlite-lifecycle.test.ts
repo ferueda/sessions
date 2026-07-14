@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -248,7 +249,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     await expect(stat(paths.shm)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  test("reports existing WAL or SHM files as recovery-required", async () => {
+  test("keeps readers immutable while a writer resolves recovery sidecars", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
     const writer = await lifecycle.openWriter(paths);
@@ -261,12 +262,81 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       schemaVersion: null,
       supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
-    await expect(lifecycle.openWriter(paths)).rejects.toMatchObject({
-      state: { status: "recovery-required" },
-    });
     await expect(lifecycle.openReader(paths)).rejects.toMatchObject({
       state: { status: "recovery-required" },
     });
+
+    const recoveredWriter = await lifecycle.openWriter(paths);
+    await recoveredWriter.close();
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  test("refuses sidecar-only recovery without creating a database", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    await writeFile(paths.wal, "orphaned recovery state", { mode: 0o600 });
+
+    await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+      state: { status: "recovery-required" },
+    });
+    await expect(stat(paths.database)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(paths.wal, "utf8")).resolves.toBe("orphaned recovery state");
+  });
+
+  test("recovers a valid WAL and interrupts the abandoned run before new work", async () => {
+    const paths = await fixturePaths();
+    const databaseModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/database.ts"),
+    ).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createSqliteIndexLifecycle } from ${JSON.stringify(databaseModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+const lifecycle = createSqliteIndexLifecycle({
+  now: () => new Date("2026-07-13T12:00:00.000Z"),
+  writerToken: () => "abandoned-child-owner",
+});
+const writer = await lifecycle.openWriter(paths);
+await writer.sessions.startRun({
+  source: { kind: "synthetic", instanceId: "recovery-profile" },
+  startedAt: "2026-07-13T12:00:00.000Z",
+});
+process.exit(0);`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+      },
+    );
+    expect(child.status).toBe(0);
+    await expect(stat(paths.wal)).resolves.toMatchObject({ size: expect.any(Number) });
+
+    const lifecycle = createSqliteIndexLifecycle({
+      now: () => new Date("2026-07-13T12:01:00.000Z"),
+      writerToken: () => "recovery-owner",
+    });
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
+      status: "recovery-required",
+    });
+
+    const writer = await lifecycle.openWriter(paths);
+    expect(
+      writer.database
+        .prepare(
+          `SELECT status, finished_at, failure_code
+           FROM sessions_index_runs`,
+        )
+        .get(),
+    ).toEqual({
+      status: "interrupted",
+      finished_at: "2026-07-13T12:01:00.000Z",
+      failure_code: "interrupted",
+    });
+    await writer.close();
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({ status: "ready" });
   });
 
   test("treats a protected empty database as a recoverable pending schema", async () => {
@@ -561,6 +631,10 @@ describe("FTS5 security", () => {
         .get(),
     ).toBeUndefined();
     await writer.close();
+    await expect(lifecycle.inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      ftsSecureDelete: "unsupported",
+    });
   });
 
   test("distinguishes unsupported FTS secure-delete from persistent-table failure", () => {

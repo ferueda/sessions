@@ -2,8 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 
 import {
   createSessionIndexRunId,
-  type IndexRunCounts,
   type SessionIndexFailureCode,
+  type SessionIndexReader,
   type SessionIndexRun,
   type SessionIndexWriter,
 } from "../../application/ports/session-index.ts";
@@ -15,6 +15,7 @@ import {
   readCanonicalDocument,
   replaceCanonicalDocument,
 } from "./sqlite-session-document.ts";
+import { readImmutableIndexRunResult } from "./sqlite-index-run-result.ts";
 import {
   findSessionTracking,
   hasCanonicalDocument,
@@ -24,6 +25,7 @@ import {
   sameRevision,
 } from "./sqlite-session-state.ts";
 import { runImmediateTransaction, SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+import { assertWriterLease, type WriterLeaseIdentity } from "./writer-lease.ts";
 
 const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
   "unavailable",
@@ -36,6 +38,7 @@ const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
 const RUN_FAILURE_CODES: ReadonlySet<string> = new Set([
   "source-unavailable",
   "source-unreadable",
+  "probe-failed",
   "discovery-failed",
   "interrupted",
   "repository-write",
@@ -43,8 +46,8 @@ const RUN_FAILURE_CODES: ReadonlySet<string> = new Set([
 
 export { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
-export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWriter {
-  const index: SessionIndexWriter = {
+export function createSqliteSessionIndexReader(database: DatabaseSync): SessionIndexReader {
+  return {
     async getFreshness(identity) {
       assertIdentity(identity);
       return readSessionFreshness(database, identity);
@@ -61,11 +64,36 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
       if (row === undefined) return undefined;
       return readCanonicalDocument(database, identity, integerAt(row.session_id));
     },
+  };
+}
+
+export interface CoordinatedSqliteSessionIndexOptions {
+  readonly lease: WriterLeaseIdentity;
+  readonly now: () => Date;
+}
+
+export function createCoordinatedSqliteSessionIndex(
+  database: DatabaseSync,
+  options: CoordinatedSqliteSessionIndexOptions,
+): SessionIndexWriter {
+  if (options.lease.purpose !== "index") {
+    throw new TypeError("Session index writer requires an index-purpose lease");
+  }
+  const reader = createSqliteSessionIndexReader(database);
+  const assertLease = (): void => assertWriterLease(database, options.lease, options);
+  const index: SessionIndexWriter = {
+    ...reader,
+
+    async listIndexedIdentities(source) {
+      assertSource(source);
+      return listIndexedIdentities(database, source);
+    },
 
     async startRun(input) {
       assertSource(input.source);
       assertCanonicalTimestamp(input.startedAt, "Index run start");
       return runImmediateTransaction(database, () => {
+        assertLease();
         const sourceInstanceId = ensureSourceInstance(database, input.source);
         const row = database
           .prepare(
@@ -85,6 +113,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
     async recordUnchanged(run, observation) {
       assertIdentity(observation.identity);
       runImmediateTransaction(database, () => {
+        assertLease();
         const context = assertActiveRun(database, run, observation.identity.source);
         const tracking = findSessionTracking(database, observation.identity);
         if (
@@ -104,6 +133,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
       assertIdentity(observation.identity);
       assertFailureCode(failure);
       runImmediateTransaction(database, () => {
+        assertLease();
         recordFailure(database, run, observation, failure);
       });
     },
@@ -113,6 +143,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
       let activeRunValidated = false;
       try {
         runImmediateTransaction(database, () => {
+          assertLease();
           const context = assertActiveRun(database, run, replacement.observation.identity.source);
           activeRunValidated = true;
           const sessionId = ensureTracking(database, context, replacement.observation, "indexed");
@@ -124,6 +155,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
         if (!activeRunValidated) throw operationError;
         try {
           runImmediateTransaction(database, () => {
+            assertLease();
             recordFailure(database, run, replacement.observation, "repository-write");
           });
         } catch (failureRecordingError) {
@@ -140,6 +172,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
     async removeSession(run, identity) {
       assertIdentity(identity);
       runImmediateTransaction(database, () => {
+        assertLease();
         const context = assertActiveRun(database, run, identity.source);
         const tracking = findSessionTracking(database, identity);
         if (
@@ -176,16 +209,13 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
 
     async finishRun(run, completion) {
       assertCanonicalTimestamp(completion.finishedAt, "Index run finish");
-      assertCounts(completion.counts);
       if (completion.status === "incomplete" && !RUN_FAILURE_CODES.has(completion.failure)) {
         throw new TypeError("Invalid index run failure code");
       }
-      runImmediateTransaction(database, () => {
+      return runImmediateTransaction(database, () => {
+        assertLease();
         const context = assertActiveRun(database, run);
-        const actual = readRunCounts(database, context.runId);
-        if (!sameCounts(actual, completion.counts)) {
-          throw new SqliteSessionIndexError("invalid-state");
-        }
+        const result = readImmutableIndexRunResult(database, context.runId, run, completion);
         const status =
           completion.status === "completed"
             ? "completed"
@@ -205,6 +235,7 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
             context.runId,
           );
         pruneFinishedRuns(database, context.sourceInstanceId);
+        return result;
       });
     },
   };
@@ -214,6 +245,37 @@ export function createSqliteSessionIndex(database: DatabaseSync): SessionIndexWr
 interface RunContext {
   readonly runId: number;
   readonly sourceInstanceId: number;
+}
+
+function listIndexedIdentities(
+  database: DatabaseSync,
+  source: SourceInstance,
+): readonly SessionIdentity[] {
+  const rows = database
+    .prepare(
+      `SELECT tracking.native_id
+       FROM sessions_session_tracking AS tracking
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       JOIN sessions_canonical_sessions AS canonical
+         ON canonical.session_id = tracking.session_id
+       WHERE source.kind = ? AND source.instance_id = ?
+       ORDER BY tracking.native_id COLLATE BINARY`,
+    )
+    .all(source.kind, source.instanceId) as readonly { readonly native_id?: unknown }[];
+  return Object.freeze(
+    rows.map((row) => {
+      const identity = {
+        source: { ...source },
+        nativeId: row.native_id,
+      };
+      if (!isSessionIdentity(identity)) throw new SqliteSessionIndexError("corrupt-data");
+      return Object.freeze({
+        source: Object.freeze({ ...identity.source }),
+        nativeId: identity.nativeId,
+      });
+    }),
+  );
 }
 
 function assertActiveRun(
@@ -445,26 +507,6 @@ function addRunItem(
     .run(runId, maximum + 1, sessionId, outcome, failure);
 }
 
-function readRunCounts(database: DatabaseSync, runId: number): IndexRunCounts {
-  const row = database
-    .prepare(
-      `SELECT discovered_count, unchanged_count, indexed_count,
-              failed_count, removed_count, stale_count
-       FROM sessions_index_runs
-       WHERE run_id = ?`,
-    )
-    .get(runId) as CountRow | undefined;
-  if (row === undefined) throw new SqliteSessionIndexError("invalid-run");
-  return {
-    discovered: integerAt(row.discovered_count),
-    unchanged: integerAt(row.unchanged_count),
-    updated: integerAt(row.indexed_count),
-    failed: integerAt(row.failed_count),
-    removed: integerAt(row.removed_count),
-    stale: integerAt(row.stale_count),
-  };
-}
-
 function pruneFinishedRuns(database: DatabaseSync, sourceInstanceId: number): void {
   database
     .prepare(
@@ -478,31 +520,6 @@ function pruneFinishedRuns(database: DatabaseSync, sourceInstanceId: number): vo
        )`,
     )
     .run(sourceInstanceId);
-}
-
-function sameCounts(left: IndexRunCounts, right: IndexRunCounts): boolean {
-  return (
-    left.discovered === right.discovered &&
-    left.unchanged === right.unchanged &&
-    left.updated === right.updated &&
-    left.failed === right.failed &&
-    left.removed === right.removed &&
-    left.stale === right.stale
-  );
-}
-
-function assertCounts(counts: IndexRunCounts): void {
-  for (const value of Object.values(counts)) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError("Index run counts must be non-negative safe integers");
-    }
-  }
-  if (counts.discovered !== counts.unchanged + counts.updated + counts.failed) {
-    throw new TypeError("Index run discovered count does not match candidate outcomes");
-  }
-  if (counts.stale > counts.failed) {
-    throw new TypeError("Index run stale count cannot exceed failed count");
-  }
 }
 
 function assertIdentity(identity: SessionIdentity): void {
@@ -563,13 +580,4 @@ interface RunRow {
   readonly started_at: string;
   readonly kind: string;
   readonly instance_id: string;
-}
-
-interface CountRow {
-  readonly discovered_count: number | bigint;
-  readonly unchanged_count: number | bigint;
-  readonly indexed_count: number | bigint;
-  readonly failed_count: number | bigint;
-  readonly removed_count: number | bigint;
-  readonly stale_count: number | bigint;
 }

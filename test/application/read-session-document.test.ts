@@ -41,8 +41,10 @@ describe("readSessionDocument", () => {
       })),
       aggregateFingerprint: { ...discovered.aggregateFingerprint },
     };
+    let readCandidate: DiscoveredSession | undefined;
     const source = sourceReturning(validDocument(), {
-      onRead() {
+      onRead(value) {
+        readCandidate = value;
         candidate.identity.nativeId = "mutated-session";
         candidate.aggregateFingerprint.digest = "0".repeat(64);
         candidate.adapterVersion = "mutated-adapter";
@@ -59,6 +61,9 @@ describe("readSessionDocument", () => {
       },
     });
     expect(replacement.document).toEqual(validDocument());
+    expect(readCandidate).toEqual(discovered);
+    expect(readCandidate).not.toBe(candidate);
+    expect(Object.isFrozen(readCandidate)).toBe(true);
   });
 
   test("rejects a candidate owned by another adapter before reading", async () => {
@@ -197,6 +202,25 @@ describe("readSessionDocument", () => {
     expect(error).toBe(expected);
   });
 
+  test("sanitizes a typed adapter failure attributed to another source instance", async () => {
+    const cause = new SourceFailureError({
+      kind: "unreadable",
+      source: { ...identity.source, instanceId: "other" },
+    });
+
+    const error = await captureFailure(
+      readSessionDocument(sourceReturning(validDocument(), { error: cause }), discoveredSession()),
+    );
+
+    expect(error).not.toBe(cause);
+    expect(error.failure).toMatchObject({
+      kind: "malformed",
+      source: identity.source,
+      reason: "adapter-read-failed",
+    });
+    expect(error.cause).toBe(cause);
+  });
+
   test("wraps an unexpected adapter error without exposing its raw message", async () => {
     const cause = new Error("secret transcript fragment");
     const source = sourceReturning(validDocument(), { error: cause });
@@ -254,7 +278,7 @@ function sourceReturning(
   options: {
     readonly kind?: string;
     readonly error?: Error;
-    readonly onRead?: () => void;
+    readonly onRead?: (candidate: DiscoveredSession) => void;
   } = {},
 ): SessionSource {
   return {
@@ -268,8 +292,8 @@ function sourceReturning(
     async *discover() {
       yield discoveredSession();
     },
-    async read() {
-      options.onRead?.();
+    async read(candidate) {
+      options.onRead?.(candidate);
       if (options.error !== undefined) throw options.error;
       return document;
     },

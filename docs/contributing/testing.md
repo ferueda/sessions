@@ -16,9 +16,11 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
 Canonical domain/application contracts, the synthetic adapter conformance suite,
-path/state behavior, SQLite lifecycle and canonical repository integration, and
-`doctor`/`paths` CLI contracts run today. Provider golden fixtures and query
-contracts arrive with their corresponding vertical slices.
+programmable fake-source indexing, real-SQLite reconciliation, schema-v3 writer
+coordination and recovery, clear maintenance, immutable ready-index health,
+path/state behavior, canonical repository integration, and `doctor`/`paths` CLI
+contracts run today. Provider golden fixtures and query contracts arrive with
+their corresponding vertical slices.
 
 ## Commands
 
@@ -50,5 +52,8 @@ optimization, not a substitute for `pnpm check` before merging implementation.
 - Use synthetic provider data and temporary home/cache paths.
 - Never call provider services or the network in unit/integration tests.
 - Test an operational failure as well as success when adding a state boundary.
-- Prove inspection commands leave absent state absent; exercise writer behavior only through explicit lifecycle tests.
+- Fully exhaust discovery before mutation; prove incomplete scans cannot reconcile deletions.
+- Use injected clocks and fake schedulers for lease/heartbeat tests; do not sleep.
+- Prove inspection commands preserve database bytes, timestamps, run rows, directory entries, and absent state.
+- Exercise writer behavior only through the coordinated lifecycle; do not construct an unguarded production writer.
 - Keep hooks cheap; passing a hook is not repository approval.
