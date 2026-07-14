@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
+export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
+
 export interface Fts5SecurityCapability {
   readonly sqliteVersion: string;
   readonly fts5: true;
@@ -16,18 +18,52 @@ export class Fts5UnavailableError extends Error {
   }
 }
 
-export function enableFts5SecureDelete(database: DatabaseSync, tableName: string): boolean {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(tableName)) {
-    throw new TypeError("FTS5 table name must be a simple SQLite identifier");
-  }
+export class Fts5SecureDeleteConfigurationError extends Error {
+  readonly tableName: string;
 
-  const identifier = `"${tableName}"`;
+  constructor(tableName: string, cause: unknown) {
+    super("SQLite FTS5 secure-delete could not be enabled for the persistent index", { cause });
+    this.name = "Fts5SecureDeleteConfigurationError";
+    this.tableName = tableName;
+  }
+}
+
+export function enableFts5SecureDelete(database: DatabaseSync, tableName: string): boolean {
+  const identifier = quoteFts5Identifier(tableName);
   try {
-    database.exec(`INSERT INTO ${identifier} (${identifier}, rank) VALUES ('secure-delete', 1)`);
+    enableFts5SecureDeleteCommand(database, identifier);
     return true;
   } catch {
     return false;
   }
+}
+
+export function configureFts5SecureDelete(
+  database: DatabaseSync,
+  tableName: string,
+  capability: Fts5SecurityCapability,
+): boolean {
+  if (!capability.secureDelete) return false;
+  const identifier = quoteFts5Identifier(tableName);
+  try {
+    enableFts5SecureDeleteCommand(database, identifier);
+    return true;
+  } catch (error) {
+    // A positive probe means failure here is a persistent-index configuration error,
+    // not evidence that this SQLite runtime lacks the feature.
+    throw new Fts5SecureDeleteConfigurationError(tableName, error);
+  }
+}
+
+function quoteFts5Identifier(tableName: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(tableName)) {
+    throw new TypeError("FTS5 table name must be a simple SQLite identifier");
+  }
+  return `"${tableName}"`;
+}
+
+function enableFts5SecureDeleteCommand(database: DatabaseSync, identifier: string): void {
+  database.exec(`INSERT INTO ${identifier} (${identifier}, rank) VALUES ('secure-delete', 1)`);
 }
 
 export function probeFts5Security(): Fts5SecurityCapability {

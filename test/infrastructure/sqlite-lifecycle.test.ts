@@ -23,11 +23,14 @@ import {
   SqliteIndexLifecycleError,
 } from "../../src/infrastructure/sqlite/database.ts";
 import {
+  configureFts5SecureDelete,
   enableFts5SecureDelete,
+  Fts5SecureDeleteConfigurationError,
   Fts5UnavailableError,
   probeFts5Security,
 } from "../../src/infrastructure/sqlite/fts5-security.ts";
 import {
+  CURRENT_INDEX_SCHEMA_VERSION,
   migrationChecksum,
   sqliteMigrations,
   type SqliteMigration,
@@ -52,7 +55,7 @@ describe("SQLite index lifecycle", () => {
       status: "uninitialized",
       initialized: false,
       schemaVersion: null,
-      supportedSchemaVersion: 1,
+      supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
 
     const firstWriter = await lifecycle.openWriter(paths);
@@ -62,13 +65,15 @@ describe("SQLite index lifecycle", () => {
          FROM sessions_schema_migrations`,
       )
       .all() as Record<string, unknown>[];
-    expect(firstHistory).toHaveLength(1);
-    expect(firstHistory[0]).toMatchObject({
-      version: 1,
-      name: "bootstrap",
-      checksum: migrationChecksum(sqliteMigrations[0]!),
-    });
-    expect(firstHistory[0]?.checksum).toMatch(/^sha256-utf8-v1:[a-f0-9]{64}$/u);
+    expect(firstHistory).toHaveLength(sqliteMigrations.length);
+    for (const [index, migration] of sqliteMigrations.entries()) {
+      expect(firstHistory[index]).toMatchObject({
+        version: migration.version,
+        name: migration.name,
+        checksum: migrationChecksum(migration),
+      });
+      expect(firstHistory[index]?.checksum).toMatch(/^sha256-utf8-v1:[a-f0-9]{64}$/u);
+    }
     await firstWriter.close();
 
     const secondWriter = await lifecycle.openWriter(paths);
@@ -80,23 +85,24 @@ describe("SQLite index lifecycle", () => {
     await secondWriter.close();
     await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
       status: "ready",
-      schemaVersion: 1,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
   });
 
   test("applies a contiguous catalog in order", async () => {
     const paths = await fixturePaths();
+    const firstMarkerVersion = sqliteMigrations.length + 1;
     const migrations: readonly SqliteMigration[] = [
-      sqliteMigrations[0]!,
+      ...sqliteMigrations,
       {
-        version: 2,
+        version: firstMarkerVersion,
         name: "create_marker",
         sql: "CREATE TABLE marker (position INTEGER NOT NULL) STRICT;",
       },
       {
-        version: 3,
+        version: firstMarkerVersion + 1,
         name: "populate_marker",
-        sql: "INSERT INTO marker (position) VALUES (3);",
+        sql: `INSERT INTO marker (position) VALUES (${firstMarkerVersion + 1});`,
       },
     ];
     const lifecycle = createSqliteIndexLifecycle({ migrations });
@@ -107,22 +113,23 @@ describe("SQLite index lifecycle", () => {
         .prepare("SELECT version, name FROM sessions_schema_migrations ORDER BY version")
         .all(),
     ).toEqual([
-      { version: 1, name: "bootstrap" },
-      { version: 2, name: "create_marker" },
-      { version: 3, name: "populate_marker" },
+      ...sqliteMigrations.map(({ version, name }) => ({ version, name })),
+      { version: firstMarkerVersion, name: "create_marker" },
+      { version: firstMarkerVersion + 1, name: "populate_marker" },
     ]);
     expect(writer.database.prepare("SELECT position FROM marker").get()).toEqual({
-      position: 3,
+      position: firstMarkerVersion + 1,
     });
     await writer.close();
   });
 
   test("rolls back a failed release, retains prior releases, and retries", async () => {
     const paths = await fixturePaths();
+    const stableVersion = sqliteMigrations.length + 1;
     const firstTwo: readonly SqliteMigration[] = [
-      sqliteMigrations[0]!,
+      ...sqliteMigrations,
       {
-        version: 2,
+        version: stableVersion,
         name: "stable_release",
         sql: "CREATE TABLE stable_release (value TEXT NOT NULL) STRICT;",
       },
@@ -130,7 +137,7 @@ describe("SQLite index lifecycle", () => {
     const failing = [
       ...firstTwo,
       {
-        version: 3,
+        version: stableVersion + 1,
         name: "retryable_release",
         sql: `CREATE TABLE rolled_back (value TEXT) STRICT;
 INSERT INTO table_that_does_not_exist VALUES (1);`,
@@ -152,8 +159,8 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     });
     await expect(failedLifecycle.inspect(paths)).resolves.toMatchObject({
       status: "migration-required",
-      schemaVersion: 2,
-      supportedSchemaVersion: 3,
+      schemaVersion: stableVersion,
+      supportedSchemaVersion: stableVersion + 1,
     });
     const afterFailure = openReadOnly(paths.database);
     expect(
@@ -161,13 +168,13 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     ).toBeUndefined();
     expect(
       afterFailure.prepare("SELECT version FROM sessions_schema_migrations ORDER BY version").all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual(Array.from({ length: stableVersion }, (_, index) => ({ version: index + 1 })));
     afterFailure.close();
 
     const corrected = [
       ...firstTwo,
       {
-        version: 3,
+        version: stableVersion + 1,
         name: "retryable_release",
         sql: "CREATE TABLE recovered_release (value TEXT) STRICT;",
       },
@@ -178,7 +185,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       writer.database
         .prepare("SELECT version FROM sessions_schema_migrations ORDER BY version")
         .all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    ).toEqual(Array.from({ length: stableVersion + 1 }, (_, index) => ({ version: index + 1 })));
     await writer.close();
   });
 
@@ -210,15 +217,15 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
         .prepare(
           `INSERT INTO sessions_schema_migrations
              (version, name, checksum, applied_at)
-           VALUES (2, 'future_release', 'sha256-utf8-v2:future', ?)`,
+           VALUES (?, 'future_release', 'sha256-utf8-v2:future', ?)`,
         )
-        .run(new Date().toISOString());
+        .run(CURRENT_INDEX_SCHEMA_VERSION + 1, new Date().toISOString());
     });
     await expect(lifecycle.inspect(newerPaths)).resolves.toEqual({
       status: "newer-schema",
       initialized: true,
-      schemaVersion: 2,
-      supportedSchemaVersion: 1,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION + 1,
+      supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
     await expect(lifecycle.openWriter(newerPaths)).rejects.toBeInstanceOf(
       SqliteIndexLifecycleError,
@@ -252,9 +259,12 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       status: "recovery-required",
       initialized: true,
       schemaVersion: null,
-      supportedSchemaVersion: 1,
+      supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
     await expect(lifecycle.openWriter(paths)).rejects.toMatchObject({
+      state: { status: "recovery-required" },
+    });
+    await expect(lifecycle.openReader(paths)).rejects.toMatchObject({
       state: { status: "recovery-required" },
     });
   });
@@ -271,7 +281,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       schemaVersion: 0,
     });
     const writer = await lifecycle.openWriter(paths);
-    expect(writer.state.schemaVersion).toBe(1);
+    expect(writer.state.schemaVersion).toBe(CURRENT_INDEX_SCHEMA_VERSION);
     await writer.close();
   });
 
@@ -318,6 +328,10 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     expect(pragma("writable_schema")).toBe(0);
     expect(writer.fts5Security).toMatchObject({ fts5: true });
     expect(writer.fts5Security.sqliteVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    const persistentFtsSecurity = writer.database
+      .prepare("SELECT v FROM sessions_content_fts_config WHERE k = 'secure-delete'")
+      .get();
+    expect(persistentFtsSecurity).toEqual(writer.fts5SecureDelete ? { v: 1 } : undefined);
     expect(() => writer.database.prepare('SELECT "not a string literal"').get()).toThrow(
       /no such column/u,
     );
@@ -489,12 +503,26 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
   test("requires a contiguous migration catalog with unique names", () => {
     expect(() =>
       createSqliteIndexLifecycle({
-        migrations: [sqliteMigrations[0]!, { version: 3, name: "gap", sql: "SELECT 1;" }],
+        migrations: [
+          ...sqliteMigrations,
+          {
+            version: CURRENT_INDEX_SCHEMA_VERSION + 2,
+            name: "gap",
+            sql: "SELECT 1;",
+          },
+        ],
       }),
     ).toThrow("contiguous");
     expect(() =>
       createSqliteIndexLifecycle({
-        migrations: [sqliteMigrations[0]!, { version: 2, name: "bootstrap", sql: "SELECT 1;" }],
+        migrations: [
+          ...sqliteMigrations,
+          {
+            version: CURRENT_INDEX_SCHEMA_VERSION + 1,
+            name: "bootstrap",
+            sql: "SELECT 1;",
+          },
+        ],
       }),
     ).toThrow("unique");
   });
@@ -527,7 +555,70 @@ describe("FTS5 security", () => {
 
     const writer = await lifecycle.openWriter(paths);
     expect(writer.fts5SecureDelete).toBe(false);
+    expect(
+      writer.database
+        .prepare("SELECT v FROM sessions_content_fts_config WHERE k = 'secure-delete'")
+        .get(),
+    ).toBeUndefined();
     await writer.close();
+  });
+
+  test("distinguishes unsupported FTS secure-delete from persistent-table failure", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      const unsupported = {
+        fts5: true,
+        secureDelete: false,
+        sqliteVersion: "3.41.0",
+      } as const;
+      const supported = { ...unsupported, secureDelete: true } as const;
+
+      expect(configureFts5SecureDelete(database, "missing_fts_table", unsupported)).toBe(false);
+      let failure: unknown;
+      try {
+        configureFts5SecureDelete(database, "missing_fts_table", supported);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Fts5SecureDeleteConfigurationError);
+      expect((failure as Fts5SecureDeleteConfigurationError).cause).toMatchObject({
+        code: "ERR_SQLITE_ERROR",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("fails writer setup when a positive probe cannot configure the persistent table", async () => {
+    const paths = await fixturePaths();
+    const migrations = [
+      ...sqliteMigrations,
+      {
+        version: CURRENT_INDEX_SCHEMA_VERSION + 1,
+        name: "test_remove_content_fts",
+        sql: "DROP TABLE sessions_content_fts;",
+      },
+    ] satisfies readonly SqliteMigration[];
+    const lifecycle = createSqliteIndexLifecycle({
+      migrations,
+      fts5Probe: () => ({
+        fts5: true,
+        secureDelete: true,
+        sqliteVersion: "3.50.0",
+      }),
+    });
+
+    const failure: unknown = await lifecycle.openWriter(paths).then(
+      async (unexpectedWriter) => {
+        await unexpectedWriter.close();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Fts5SecureDeleteConfigurationError);
+    expect((failure as Fts5SecureDeleteConfigurationError).cause).toMatchObject({
+      code: "ERR_SQLITE_ERROR",
+    });
   });
 
   test("treats missing FTS5 as fatal before creating persistent state", async () => {

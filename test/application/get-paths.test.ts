@@ -111,7 +111,7 @@ describe("getPaths", () => {
     },
   );
 
-  test("uses only the inspector capability and never opens a writer", async () => {
+  test("uses only the inspector capability and never opens a reader or writer", async () => {
     const lifecycle: IndexLifecycle = {
       inspect: vi.fn<IndexLifecycle["inspect"]>().mockResolvedValue({
         status: "uninitialized",
@@ -122,11 +122,15 @@ describe("getPaths", () => {
       openWriter: vi
         .fn<IndexLifecycle["openWriter"]>()
         .mockRejectedValue(new Error("writer must remain unavailable")),
+      openReader: vi
+        .fn<IndexLifecycle["openReader"]>()
+        .mockRejectedValue(new Error("reader must remain unavailable")),
     };
 
     await expect(getPaths(paths, lifecycle)).resolves.toMatchObject({
       index: { initialized: false, state: "uninitialized" },
     });
+    expect(lifecycle.openReader).not.toHaveBeenCalled();
     expect(lifecycle.openWriter).not.toHaveBeenCalled();
   });
 });

@@ -5,10 +5,18 @@ import { pathToFileURL } from "node:url";
 import type {
   IndexLifecycle,
   IndexPaths,
+  IndexReader,
   IndexWriter,
 } from "../../application/ports/index-lifecycle.ts";
+import type { SessionIndexReader } from "../../application/ports/session-index.ts";
 import type { IndexState, ReadyIndexState } from "../../domain/index-state.ts";
-import { type Fts5SecurityCapability, probeFts5Security } from "./fts5-security.ts";
+import {
+  configureFts5SecureDelete,
+  type Fts5SecurityCapability,
+  probeFts5Security,
+  SESSIONS_CONTENT_FTS_TABLE,
+} from "./fts5-security.ts";
+import { SqliteIndexLifecycleError } from "./lifecycle-error.ts";
 import {
   applyMigrations,
   CURRENT_INDEX_SCHEMA_VERSION,
@@ -24,8 +32,12 @@ import {
   prepareIndexPathsForWriter,
   secureIndexFiles,
 } from "./permissions.ts";
+import { createSqliteReadSnapshot, type SqliteReadSnapshot } from "./read-snapshot.ts";
+import { createSqliteSessionIndex } from "./sqlite-session-index.ts";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+
+export type SqliteIndexReader = IndexReader;
 
 export interface SqliteIndexWriter extends IndexWriter {
   readonly database: DatabaseSync;
@@ -34,6 +46,7 @@ export interface SqliteIndexWriter extends IndexWriter {
 }
 
 export interface SqliteIndexLifecycle extends IndexLifecycle {
+  openReader(paths: IndexPaths): Promise<SqliteIndexReader>;
   openWriter(paths: IndexPaths): Promise<SqliteIndexWriter>;
 }
 
@@ -45,15 +58,7 @@ export interface SqliteIndexLifecycleOptions {
   readonly fts5Probe?: () => Fts5SecurityCapability;
 }
 
-export class SqliteIndexLifecycleError extends Error {
-  readonly state: IndexState;
-
-  constructor(state: IndexState) {
-    super(`SQLite index cannot be opened while state is ${state.status}`);
-    this.name = "SqliteIndexLifecycleError";
-    this.state = state;
-  }
-}
+export { SqliteIndexLifecycleError } from "./lifecycle-error.ts";
 
 export function createSqliteIndexLifecycle(
   options: SqliteIndexLifecycleOptions = {},
@@ -81,6 +86,25 @@ export function createSqliteIndexLifecycle(
         platform,
         supportedSchemaVersion,
       });
+    },
+
+    async openReader(paths) {
+      const state = await inspectSqliteIndex(paths, {
+        migrations,
+        platform,
+        supportedSchemaVersion,
+      });
+      if (state.status !== "ready") {
+        throw new SqliteIndexLifecycleError(state);
+      }
+
+      const snapshot = createSqliteReadSnapshot(paths, {
+        migrations,
+        platform,
+        supportedSchemaVersion,
+        timeoutMs: busyTimeoutMs,
+      });
+      return createReader(snapshot, state);
     },
 
     async openWriter(paths) {
@@ -117,12 +141,48 @@ export function createSqliteIndexLifecycle(
         if (history.currentVersion !== supportedSchemaVersion) {
           throw new Error("SQLite migrations did not reach the supported schema");
         }
+        const fts5SecureDelete = configureFts5SecureDelete(
+          database,
+          SESSIONS_CONTENT_FTS_TABLE,
+          fts5Security,
+        );
+        const sessions = createSqliteSessionIndex(database);
         await secureIndexFiles(paths, { platform });
 
-        return createWriter(database, paths, platform, supportedSchemaVersion, fts5Security);
+        return createWriter(
+          database,
+          paths,
+          platform,
+          supportedSchemaVersion,
+          fts5Security,
+          fts5SecureDelete,
+          sessions,
+        );
       } catch (error) {
         return throwAfterDatabaseCleanup(error, database, paths, platform);
       }
+    },
+  };
+}
+
+function createReader(snapshot: SqliteReadSnapshot, state: ReadyIndexState): SqliteIndexReader {
+  const sessions: SessionIndexReader = {
+    getFreshness(identity) {
+      return snapshot.run((database) => createSqliteSessionIndex(database).getFreshness(identity));
+    },
+    getSummary(identity) {
+      return snapshot.run((database) => createSqliteSessionIndex(database).getSummary(identity));
+    },
+    getDocument(identity) {
+      return snapshot.run((database) => createSqliteSessionIndex(database).getDocument(identity));
+    },
+  };
+
+  return {
+    state,
+    sessions,
+    close() {
+      return snapshot.close();
     },
   };
 }
@@ -284,6 +344,8 @@ function createWriter(
   platform: NodeJS.Platform,
   supportedSchemaVersion: number,
   fts5Security: Fts5SecurityCapability,
+  fts5SecureDelete: boolean,
+  sessions: SqliteIndexWriter["sessions"],
 ): SqliteIndexWriter {
   let closed = false;
   let databaseClosed = false;
@@ -292,8 +354,9 @@ function createWriter(
   return {
     database,
     state,
+    sessions,
     fts5Security,
-    fts5SecureDelete: fts5Security.secureDelete,
+    fts5SecureDelete,
     async close() {
       if (closed) return;
       const cleanupErrors: unknown[] = [];

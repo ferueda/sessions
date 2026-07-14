@@ -256,6 +256,50 @@ describe("validateSessionDocument", () => {
     );
   });
 
+  test.each(illFormedPersistedStringCases())(
+    "rejects ill-formed Unicode in persisted $label",
+    ({ value, issue }) => {
+      const result = invalidResult(value);
+
+      expect(result.issues).toContainEqual(issue);
+      expect(JSON.stringify(result)).not.toContain("private");
+    },
+  );
+
+  test("preserves well-formed Unicode exactly without normalization", () => {
+    const decomposed = "Cafe\u0301";
+    const document = validDocument();
+    const entry = document.entries[0]!;
+    const segment = canonicalSegment(0, decomposed);
+
+    const result = validateSessionDocument({
+      ...document,
+      title: decomposed,
+      entries: [
+        {
+          ...entry,
+          kind: decomposed,
+          content: [
+            {
+              ...segment,
+              sourceMetadata: { [decomposed]: decomposed },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error("expected well-formed Unicode");
+    expect(result.document.title).toBe(decomposed);
+    expect(result.document.entries[0]?.kind).toBe(decomposed);
+    expect(result.document.entries[0]?.content[0]?.text).toBe(decomposed);
+    expect(result.document.entries[0]?.content[0]?.sourceMetadata).toEqual({
+      [decomposed]: decomposed,
+    });
+    expect(decomposed).not.toBe(decomposed.normalize("NFC"));
+  });
+
   test.each([
     "2026-07-13T12:00:00Z",
     "2026-07-13T12:00:00.00Z",
@@ -288,6 +332,157 @@ describe("validateSessionDocument", () => {
     expect(result.issues.every(({ code }) => code === "invalid-literal")).toBe(true);
   });
 });
+
+function illFormedPersistedStringCases(): readonly {
+  readonly label: string;
+  readonly value: unknown;
+  readonly issue: { readonly code: string; readonly path: string };
+}[] {
+  const invalid = "private\ud800value";
+  const entryDocument = validDocument();
+  const entry = entryDocument.entries[0]!;
+  const segment = entry.content[0]!;
+  const relation = entryDocument.relations[0]!;
+  const withEntry = (overrides: Readonly<Record<string, unknown>>): unknown => ({
+    ...entryDocument,
+    entries: [{ ...entry, ...overrides }],
+  });
+  const withSegment = (overrides: Readonly<Record<string, unknown>>): unknown =>
+    withEntry({ content: [{ ...segment, ...overrides }] });
+
+  return [
+    {
+      label: "source kind",
+      value: {
+        ...validDocument(),
+        identity: {
+          ...validDocument().identity,
+          source: { ...validDocument().identity.source, kind: invalid },
+        },
+      },
+      issue: { code: "invalid-string", path: "/identity/source/kind" },
+    },
+    {
+      label: "source instance ID",
+      value: {
+        ...validDocument(),
+        identity: {
+          ...validDocument().identity,
+          source: { ...validDocument().identity.source, instanceId: invalid },
+        },
+      },
+      issue: { code: "invalid-string", path: "/identity/source/instanceId" },
+    },
+    {
+      label: "native session ID",
+      value: { ...validDocument(), identity: { ...validDocument().identity, nativeId: invalid } },
+      issue: { code: "invalid-string", path: "/identity/nativeId" },
+    },
+    {
+      label: "title",
+      value: { ...validDocument(), title: invalid },
+      issue: { code: "invalid-string", path: "/title" },
+    },
+    {
+      label: "workspace",
+      value: { ...validDocument(), workspace: invalid },
+      issue: { code: "invalid-string", path: "/workspace" },
+    },
+    {
+      label: "created timestamp",
+      value: { ...validDocument(), createdAt: invalid },
+      issue: { code: "invalid-string", path: "/createdAt" },
+    },
+    {
+      label: "updated timestamp",
+      value: { ...validDocument(), updatedAt: invalid },
+      issue: { code: "invalid-string", path: "/updatedAt" },
+    },
+    {
+      label: "relation target identity",
+      value: {
+        ...entryDocument,
+        relations: [{ ...relation, target: { ...relation.target, nativeId: invalid } }],
+      },
+      issue: { code: "invalid-string", path: "/relations/0/target/nativeId" },
+    },
+    {
+      label: "relation kind",
+      value: { ...entryDocument, relations: [{ ...relation, kind: invalid }] },
+      issue: { code: "invalid-literal", path: "/relations/0/kind" },
+    },
+    {
+      label: "relation confidence",
+      value: { ...entryDocument, relations: [{ ...relation, confidence: invalid }] },
+      issue: { code: "invalid-literal", path: "/relations/0/confidence" },
+    },
+    {
+      label: "entry kind",
+      value: withEntry({ kind: invalid }),
+      issue: { code: "invalid-string", path: "/entries/0/kind" },
+    },
+    {
+      label: "entry actor",
+      value: withEntry({ actor: invalid }),
+      issue: { code: "invalid-literal", path: "/entries/0/actor" },
+    },
+    {
+      label: "entry timestamp",
+      value: withEntry({ timestamp: invalid }),
+      issue: { code: "invalid-string", path: "/entries/0/timestamp" },
+    },
+    {
+      label: "tool call ID",
+      value: withEntry({ toolCallId: invalid }),
+      issue: { code: "invalid-string", path: "/entries/0/toolCallId" },
+    },
+    {
+      label: "source locator URI",
+      value: withEntry({ sourceLocator: { ...entry.sourceLocator, uri: invalid } }),
+      issue: { code: "invalid-string", path: "/entries/0/sourceLocator/uri" },
+    },
+    {
+      label: "source locator record ID",
+      value: withEntry({ sourceLocator: { ...entry.sourceLocator, recordId: invalid } }),
+      issue: { code: "invalid-string", path: "/entries/0/sourceLocator/recordId" },
+    },
+    {
+      label: "content text",
+      value: withSegment({ text: invalid }),
+      issue: { code: "invalid-text", path: "/entries/0/content/0/text" },
+    },
+    {
+      label: "content hash scheme",
+      value: withSegment({ contentHash: { ...segment.contentHash, scheme: invalid } }),
+      issue: { code: "invalid-content-hash", path: "/entries/0/content/0/contentHash" },
+    },
+    {
+      label: "content hash digest",
+      value: withSegment({ contentHash: { ...segment.contentHash, digest: invalid } }),
+      issue: { code: "invalid-content-hash", path: "/entries/0/content/0/contentHash" },
+    },
+    {
+      label: "content origin",
+      value: withSegment({ origin: invalid }),
+      issue: { code: "invalid-literal", path: "/entries/0/content/0/origin" },
+    },
+    {
+      label: "origin confidence",
+      value: withSegment({ originConfidence: invalid }),
+      issue: { code: "invalid-literal", path: "/entries/0/content/0/originConfidence" },
+    },
+    {
+      label: "source metadata key",
+      value: withSegment({ sourceMetadata: { [invalid]: "synthetic" } }),
+      issue: { code: "invalid-source-metadata", path: "/entries/0/content/0/sourceMetadata" },
+    },
+    {
+      label: "source metadata value",
+      value: withSegment({ sourceMetadata: { fixture: invalid } }),
+      issue: { code: "invalid-source-metadata", path: "/entries/0/content/0/sourceMetadata" },
+    },
+  ];
+}
 
 function validDocument(): SessionDocument {
   return {
