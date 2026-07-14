@@ -243,9 +243,9 @@ Properties:
 
 ## Storage and search
 
-SQLite is the canonical local store. FTS5 supplies lexical search. The schema will separate source instances, sessions, relations, entries, content segments, occurrences, index runs, and migration metadata while using FTS shadow tables only as derived search structures.
+SQLite is the canonical local store. FTS5 supplies lexical search. The M3 schema separates source instances, sessions, relations, entries, content values, occurrences, index runs, and migration metadata while using FTS shadow tables only as derived search structures. Application query translation, ranking, and tokenizer tuning remain planned.
 
-Application query values—not raw FTS syntax—define search:
+Planned application query values—not raw FTS syntax—define search:
 
 - text;
 - source/source-instance;
