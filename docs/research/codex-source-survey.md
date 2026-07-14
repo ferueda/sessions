@@ -56,6 +56,12 @@ The referenced rollout is the content source. V1 requires both. A missing or
 unreadable state database produces a typed unavailable/unreadable result rather
 than silently scanning the filesystem and changing discovery semantics.
 
+Those sources are capture authority, not retention or deletion authority. After
+a successful canonical capture, a later complete state scan that omits the
+thread marks the Sessions copy missing and retains it. Missing/corrupt state or
+incomplete discovery proves no thread absence. The Codex adapter reports only
+source evidence; the provider-neutral engine owns that lifecycle.
+
 Use one active state root. Do not merge root and legacy databases: an installation
 can retain a stale nested database beside the current root database.
 
@@ -189,8 +195,9 @@ Results link to calls but do not duplicate either identity field.
   the format-support matrix.
 - Do not read or store attachment bytes, data URLs, remote URLs, or local
   attachment paths. Preserve an ordered provider-neutral omitted segment with
-  broad class, provenance, and sanitized source type. It has no text or hash and
-  does not participate in FTS, deduplication, or recurrence.
+  broad class, provenance, and the canonical bounded source-type token defined by
+  the architecture contract. It has no text or hash and does not participate in
+  FTS, deduplication, or recurrence.
 
 ### Replay and lineage
 
@@ -232,6 +239,23 @@ The first adapter must:
    profile, project, and runtime config-layer parity and explicit multiple Codex
    instances remain later work.
 
+The persistent source-instance preimage is exact. After the path rules above,
+serialize with unspaced `JSON.stringify`:
+
+```json
+[
+  "sessions-codex-source-instance-v1",
+  ["codex-home", "<resolved-codex-home>"],
+  ["sqlite-home", "<resolved-sqlite-home>"]
+]
+```
+
+Hash those exact UTF-8 bytes with SHA-256 and prefix the lowercase hex digest
+with `local-sha256-v1:`. Do not perform additional case folding, separator
+conversion, or Unicode normalization. This versioned role-tagged tuple is the
+identity contract; config provenance, state filename, rollout roots, and adapter
+version are not part of it.
+
 M5 should add a small typed ESM TOML parser only after the roadmap's production-
 dependency review. `smol-toml` is the current candidate. Node supplies Zstandard
 streaming and SQLite, so neither needs a new package.
@@ -247,12 +271,49 @@ For each candidate, declare independent ordered inputs:
 - the exact parent-edge row, or an explicit absence sentinel;
 - the selected rollout representation and a robust physical descriptor.
 
-Read the state values in one read-only, query-only SQLite snapshot. Re-query and
-compare candidate inputs at the source-read boundary. Stream the rollout and
-verify its representation and physical descriptor before and after consumption.
-Any mismatch is `source-changed`; no partial document reaches the index. Tests
-must prove that opening state creates no SQLite sidecars and that the entire
-provider tree remains unchanged.
+Do not give SQLite a provider-owned state path: even a read-only WAL connection
+can coordinate through provider SHM. M5 first copies a cryptographically
+pre/post-verified stable database/WAL byte set from the same validated read-only
+filesystem handles into a random private directory granted by the leased
+provider-neutral discovery workspace. Its hidden root is the exact Sessions-
+owned `.scratch` path; the adapter sees neither that root nor `IndexPaths`. It
+then opens only that private copy read-only/query-only so SQLite
+can rebuild only a private SHM. Provider SHM is derived coordination state and is
+neither opened, copied, nor used to gate capture; otherwise unrelated provider
+read marks could cause false retries. This reads committed live WAL state without
+provider writes; direct immutable opens are not authoritative for that state.
+
+One capture per complete discovery materializes all admitted thread/edge values
+into an adapter-private immutable generation map, then closes SQLite and removes
+the staging child before yielding. Candidate reads require matching frozen
+descriptors and never recopy or reopen state. Stream only the rollout as a live
+input and verify its representation and physical descriptor before and after
+consumption. Any stale candidate or rollout mismatch is `source-changed`; no
+partial document reaches the index. Tests must prove the provider database/WAL/
+SHM bytes and identity/mtime/ctime metadata remain unchanged and that any created
+sidecar exists only under private staging.
+
+The staging copy is ephemeral execution state, not a retained raw-provider
+backup. Normal completion removes it in `finally`; writer close attempts to
+remove the empty root before releasing its lease. An abrupt process/host crash or
+surfaced cleanup failure can leave raw
+state bytes in the permission-restricted Sessions-owned subtree until the next
+leased index sweep or explicit data clear. A concurrent writer/checkpointer/WAL-
+reset stress gate must prove that every accepted copy equals one complete
+committed cross-table generation. This raw-copy protocol is not an SQLite backup
+guarantee; failure of that gate fails closed and never falls back to opening the
+provider database.
+
+This design follows SQLite's distinction between persistent WAL frames and the
+derived shared-memory WAL index, and its warning that `immutable=1` asserts the
+underlying file will not change. SQLite's supported online-backup API requires a
+source connection, which would reintroduce provider SHM coordination here. The
+raw-copy acceptance window therefore remains explicitly conditional on the
+stress gate rather than being described as an SQLite-supported backup:
+[WAL](https://sqlite.org/wal.html),
+[WAL format](https://sqlite.org/walformat.html),
+[online backup](https://sqlite.org/backup.html), and
+[URI `immutable`](https://sqlite.org/uri.html).
 
 ## Harness reuse boundary
 
@@ -276,6 +337,16 @@ The standalone parser should be written against the canonical contract and a
 new synthetic format matrix. Harness proves useful workflows and a few source
 behaviors; it is not the normalization specification.
 
+The scoped M5 plan intentionally closes a smaller first format revision than the
+full observed corpus. It maps messages, explicit inter-agent text, visible
+reasoning summaries, function/custom calls and results, compaction, lifecycle,
+and diagnostics. Exact local-shell, dynamic/MCP, tool-search, web-search,
+image-generation, exec, patch, review, collaboration, and sub-agent
+discriminators remain visible as privacy-safe unknown evidence without inspecting
+their payloads. This deferral tests forward compatibility without freezing
+speculative mappings; later adapter-format increments can promote one family at a
+time with pinned fixtures.
+
 ## M5 pre-implementation gates
 
 The scoped M5 executor plan must settle and test:
@@ -288,10 +359,13 @@ The scoped M5 executor plan must settle and test:
 - streaming JSONL/Zstandard parsing and bounded per-record memory;
 - required versus optional state-schema fields;
 - the logical state-row/edge and physical rollout fingerprint schemes;
+- durable capture metadata, present/missing/unknown source observation, and
+  post-reconciliation retention without adapter-owned policy;
 - a record-by-record support/omission matrix;
 - synthetic fixtures for path precedence, legacy lookup, compressed rollouts,
-  adjacent paired messages, every supported call/result family, structured
-  results, injected content, non-text content, lineage/replay, lifecycle markers,
-  unknown records, malformed input, and live source mutation.
+  adjacent paired messages, every supported call/result family, every exact
+  deferred and skipped discriminator treatment, structured results, injected
+  content, non-text content, lineage/replay, lifecycle markers, unknown records,
+  malformed input, and live source mutation.
 
 No personal provider database or rollout becomes a committed fixture.

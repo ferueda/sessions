@@ -26,6 +26,12 @@ pnpm check
 
 The current public CLI writes no user state. `sessions paths` resolves the platform-local `sessions` cache directory, or the exact absolute `SESSIONS_CACHE_DIR` override, without creating it. Tests exercise the internal indexing/reconciliation service, schema-v3 coordinated writer, canonical repository, clear maintenance, and immutable health inspection. Concrete adapters and public index/clear/query commands remain planned. Index paths, ownership, and deletion limits are governed by [privacy](../privacy.md).
 
+That cache path is the pre-M5 implementation baseline. The accepted public
+design moves durable canonical data to platform application data under
+`SESSIONS_DATA_DIR`; it does not silently reuse or migrate the pre-public cache.
+Its planned `.scratch` child is an ephemeral writer-leased discovery workspace,
+not a second library or provider backup.
+
 ## Hooks
 
 The pre-commit hook formats/lints staged files and runs the full typecheck. Bypass only when diagnosing hook behavior; always run `pnpm check` before handoff.

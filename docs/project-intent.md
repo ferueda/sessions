@@ -5,9 +5,9 @@
 
 ## Purpose
 
-Sessions is a local-first command-line tool and packaged Agent Skill for finding, inspecting, and learning from AI coding-agent session history.
+Sessions is a local-first command-line tool and packaged Agent Skill for retaining, finding, inspecting, and learning from AI coding-agent session history.
 
-It turns provider-specific histories into one faithful, queryable local index so people and agents can recover context, audit outcomes, understand recurring work, and improve future collaboration without uploading transcripts.
+It turns provider-specific histories into one faithful, queryable local library so people and agents can preserve normalized sessions beyond provider retention, recover context, audit outcomes, understand recurring work, and improve future collaboration without uploading transcripts.
 
 ## Audience
 
@@ -27,7 +27,7 @@ It turns provider-specific histories into one faithful, queryable local index so
 
 ## V1 outcome
 
-V1 supports Cursor and Codex histories with equivalent index, list, search, show, and export behavior. Indexing is incremental, idempotent, transactional, and preserves the last good indexed session when a refresh fails. Human-readable output works interactively; versioned JSON and JSONL work for scripts and agents.
+V1 supports Cursor and Codex histories with equivalent index, list, search, show, and export behavior. Explicit indexing creates a durable normalized local copy, is incremental, idempotent, and transactional, and preserves the latest successful snapshot when refresh fails or a complete later scan no longer observes the provider session. Human-readable output works interactively; versioned JSON and JSONL work for scripts and agents, and provider-neutral Markdown export can be attached, pasted, or piped as historical context elsewhere.
 
 The first repository scaffold is intentionally smaller: help, version, doctor, internal canonical contracts, docs, packaging, and verification guardrails. Planned commands are not represented as shipped until implemented.
 
@@ -39,6 +39,14 @@ The first repository scaffold is intentionally smaller: help, version, doctor, i
 - Semantic/vector search.
 - A public third-party plugin ABI.
 - Workflow orchestration or automatic edits based on session analysis.
+- Delivering exported context into a provider, creating destination conversations,
+  or managing destination context limits.
+- Raw provider backups, attachment/media archives, or immutable history of every
+  observed provider revision. Permission-restricted, lease-scoped working copies
+  needed to read an active provider WAL are transient execution artifacts, not a
+  restore/archive feature.
+- Protection against local disk loss, malware, or another process running as the
+  same user.
 - Harness-specific workflow analysis, automation classification, or default filtering.
 - Perfect reconstruction when a provider omits or rewrites source information.
 
@@ -46,10 +54,18 @@ The first repository scaffold is intentionally smaller: help, version, doctor, i
 
 - Source histories are read-only.
 - Indexing begins only through an explicit user command.
+- A successful index stores the latest normalized canonical snapshot as durable
+  Sessions-owned user data until explicit Sessions deletion.
+- A session absent from a complete source scan is marked no longer observed; its
+  last successful canonical snapshot is not deleted. Unavailable, unreadable, or
+  incomplete discovery never proves source absence.
+- Canonical session data and rebuildable search projections have separate
+  lifecycles even when they share one SQLite database. Rebuilding search state
+  never deletes retained sessions.
 - Normalized content remains local; core operation requires no network access.
 - Domain, indexing, storage, and query code contain no provider branches.
 - Adapters discover and normalize source data; they do not own persistence, querying, rendering, or business policy.
-- Show and export read the canonical index, not mutable provider files.
+- Show and export read the canonical library, not mutable provider files.
 - Provenance distinguishes human, injected, delegated, replayed/copied, model, tool, system, and unknown content when evidence allows.
 - Unsupported non-text content is an explicit omission, never generated
   searchable placeholder text or retained media bytes/references.
@@ -60,6 +76,10 @@ The first repository scaffold is intentionally smaller: help, version, doctor, i
   adherence, and observed outcomes; unknowns remain unknown and association is
   not reported as causation.
 - Failed refreshes never replace a last-good indexed session with partial data.
+- No automatic TTL, pruning, or provider-deletion propagation removes retained
+  canonical content.
+- Portable exports never expose diagnostic source locators or local paths by
+  default and frame transcript instructions as untrusted historical data.
 - Structured output is versioned. Stdout carries requested data; stderr carries diagnostics.
 - Empty results are successful. Usage errors and operational failures have different exit codes.
 - Published users execute compiled JavaScript and do not need pnpm or TypeScript.
@@ -68,6 +88,10 @@ The first repository scaffold is intentionally smaller: help, version, doctor, i
 ## Unsafe assumptions
 
 - A provider's on-disk format, location, or schema is stable.
+- A provider session that disappears was intentionally deleted by the user.
+- A normalized retained snapshot is an exact raw-provider backup or preserves
+  every historical revision.
+- A local application-data database is itself a backup against disk loss.
 - Every apparent user message was authored directly by the user.
 - A mentioned or declared skill was actually invoked.
 - An observed task result was caused by a skill that appeared in the session.

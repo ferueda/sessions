@@ -10,5 +10,6 @@ Statuses: Proposed, Accepted, Superseded. A later ADR supersedes an accepted dec
 - [0004 — Publish a compiled Node.js CLI](0004-publish-a-compiled-node-cli.md)
 - [0005 — Keep one-way ownership with Harness](0005-keep-one-way-ownership-with-harness.md)
 - [0006 — Evaluate skills from canonical evidence](0006-evaluate-skills-from-canonical-evidence.md)
+- [0007 — Retain a durable canonical library](0007-retain-a-durable-canonical-library.md)
 
 New ADRs should contain status/date, context, decision, consequences, and supersession links when relevant.
