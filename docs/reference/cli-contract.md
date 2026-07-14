@@ -60,7 +60,13 @@ These names describe the accepted direction. They are added to generated help on
 
 ## Planned identity and filters
 
-Canonical printable IDs use `<source-instance>:<native-id>`. Both portions are opaque to callers. Filters are provider-neutral and may cover source/source-instance, workspace, time bounds, actor, origin, exact identity, limit, and continuation cursor. Raw SQLite FTS syntax is not a public API.
+Canonical printable IDs use
+`<kind>@<percent-encoded-instance-id>:<percent-encoded-native-id>`, for example
+`cursor@default:opaque-id`. Kind is an open lowercase adapter slug. Instance and
+native IDs are case-sensitive opaque values; delimiters are escaped and values
+are never Unicode-normalized. Filters are provider-neutral and may cover
+source/source-instance, workspace, time bounds, actor, origin, exact identity,
+limit, and continuation cursor. Raw SQLite FTS syntax is not a public API.
 
 ## Streams and exit codes
 

@@ -15,21 +15,31 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
-Only the implemented foundation layers run today. Planned layers arrive with their corresponding vertical slice.
+Canonical domain/application contracts and the synthetic adapter conformance
+suite run today. Provider golden fixtures, SQLite integration, and later CLI
+contracts arrive with their corresponding vertical slice.
 
 ## Commands
 
 ```bash
 pnpm test
+pnpm test:docs
 pnpm test:watch
 pnpm typecheck
 pnpm deps:check
 pnpm smoke:dist
 pnpm smoke:package
 pnpm check
+pnpm check:docs
 ```
 
 `pnpm check` is the definition of done: format, lint, dependency graph, types, tests, build, dist smoke, then packed-install smoke. CI invokes the same gate.
+
+CI classifies the complete pull-request or push diff. A diff containing only
+Markdown files runs `pnpm check:docs` on Ubuntu; the required macOS and Windows
+check contexts complete without dependency setup or tests. Any non-Markdown path
+runs the full gate on all three operating systems. `pnpm check:docs` is a CI
+optimization, not a substitute for `pnpm check` before merging implementation.
 
 ## Test rules
 

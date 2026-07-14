@@ -1,6 +1,8 @@
 # Current architecture
 
-Status: foundation scaffold. This map describes code that exists now; the [architecture memo](../architecture-memo.md) describes the accepted target.
+Status: foundation plus canonical-contract slice. This map describes code that
+exists now; the [architecture memo](../architecture-memo.md) describes the
+accepted target.
 
 ## Runtime flow
 
@@ -16,18 +18,21 @@ The composition root reads the package version, wires concrete diagnostics, and 
 
 ## Ownership
 
-| Path                            | Current owner                                                  |
-| ------------------------------- | -------------------------------------------------------------- |
-| `src/domain/`                   | Provider-neutral session values                                |
-| `src/application/ports/`        | Inward-facing source and diagnostic contracts                  |
-| `src/application/run-doctor.ts` | Probe aggregation and report contract                          |
-| `src/infrastructure/`           | Concrete runtime capability checks                             |
-| `src/cli/`                      | Command grammar, rendering, stream and exit behavior           |
-| `src/bin/`                      | Sole concrete composition root                                 |
-| `scripts/`                      | Repository build/delivery smoke helpers; not published runtime |
-| `test/`                         | Cross-layer behavior and documentation contracts               |
+| Path                                       | Current owner                                                  |
+| ------------------------------------------ | -------------------------------------------------------------- |
+| `src/domain/`                              | Session values, identity/hash policy, canonical validation     |
+| `src/application/ports/`                   | Inward-facing source and diagnostic contracts                  |
+| `src/application/source-*.ts`              | Complete input fingerprints and typed source failures          |
+| `src/application/read-session-document.ts` | Validated adapter-read boundary                                |
+| `src/application/run-doctor.ts`            | Probe aggregation and report contract                          |
+| `src/infrastructure/`                      | Concrete runtime capability checks                             |
+| `src/cli/`                                 | Command grammar, rendering, stream and exit behavior           |
+| `src/bin/`                                 | Sole concrete composition root                                 |
+| `scripts/`                                 | Repository build/delivery smoke helpers; not published runtime |
+| `test/`                                    | Cross-layer behavior and documentation contracts               |
 
-Indexing, storage, query, provider adapters, and packaged skills do not exist yet.
+The shared synthetic source conformance harness exists. Indexing, storage, query,
+concrete provider adapters, and packaged skills do not exist yet.
 
 ## Dependency direction
 

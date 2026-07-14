@@ -9,5 +9,4 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plans: none. Create one scoped plan for the next roadmap milestone
-before implementation starts.
+Active executor plan: [Harden canonical session and source contracts](260713-canonical-contracts.md).

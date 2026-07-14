@@ -1,3 +1,5 @@
+import type { ContentHash } from "./content-hash.ts";
+
 export type Actor = "human" | "model" | "tool" | "system" | "unknown";
 
 export type ContentOrigin =
@@ -36,10 +38,16 @@ export interface SessionRelation {
 export interface ContentSegment {
   readonly ordinal: number;
   readonly text: string;
-  readonly contentHash: string;
+  readonly contentHash: ContentHash;
   readonly origin: ContentOrigin;
   readonly originConfidence: OriginConfidence;
   readonly sourceMetadata: Readonly<Record<string, string>>;
+}
+
+export interface SegmentOccurrenceKey {
+  readonly session: SessionIdentity;
+  readonly entryOrdinal: number;
+  readonly segmentOrdinal: number;
 }
 
 export interface SessionEntry {
