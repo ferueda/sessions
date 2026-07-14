@@ -3,19 +3,42 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 
+import { createCodexSource } from "../adapters/codex/source.ts";
+import { clearData } from "../application/clear-index.ts";
+import { forgetSession } from "../application/forget-session.ts";
 import { getPaths } from "../application/get-paths.ts";
+import { listSessions } from "../application/list-sessions.ts";
 import { runDoctor } from "../application/run-doctor.ts";
+import { runIndex } from "../application/run-index.ts";
+import { showSession } from "../application/show-session.ts";
+import { createSourceDiagnostic } from "../application/source-diagnostic.ts";
 import { runCli } from "../cli/run.ts";
 import { createNodeDiagnostic } from "../infrastructure/runtime/node-diagnostic.ts";
 import { createIndexStateDiagnostic } from "../infrastructure/state/index-state-diagnostic.ts";
 import { resolveIndexPaths } from "../infrastructure/state/paths.ts";
 import { createSqliteIndexLifecycle } from "../infrastructure/sqlite/database.ts";
 import { createSqliteDiagnostic } from "../infrastructure/sqlite/sqlite-diagnostic.ts";
+import { createSqliteIndexMaintenance } from "../infrastructure/sqlite/index-maintenance.ts";
 
 const require = createRequire(import.meta.url);
 const manifest = require("../../package.json") as { version?: unknown };
 const version = typeof manifest.version === "string" ? manifest.version : "0.0.0";
 const indexLifecycle = createSqliteIndexLifecycle();
+const maintenance = createSqliteIndexMaintenance();
+let codexSource: ReturnType<typeof createCodexSource> | undefined;
+const resolveCodexSource = () => (codexSource ??= createCodexSource());
+const registeredSources = Object.freeze([
+  Object.freeze({ kind: "codex", resolve: resolveCodexSource }),
+]);
+const resolveAllSources = () => Promise.all(registeredSources.map((source) => source.resolve()));
+const resolveIndexSources = async (kind: string | undefined) => {
+  const selected =
+    kind === undefined
+      ? registeredSources
+      : registeredSources.filter((source) => source.kind === kind);
+  if (selected.length === 0) throw new TypeError("Unknown session source");
+  return Promise.all(selected.map((source) => source.resolve()));
+};
 const resolvePaths = () =>
   resolveIndexPaths({
     platform: process.platform,
@@ -29,13 +52,40 @@ const exitCode = await runCli(process.argv.slice(2), {
     writeOut: (text) => process.stdout.write(text),
     writeErr: (text) => process.stderr.write(text),
   },
-  doctor: () =>
-    runDoctor([
+  doctor: async () => {
+    const sources = await resolveAllSources();
+    return runDoctor([
       createNodeDiagnostic(),
       createSqliteDiagnostic(),
       createIndexStateDiagnostic(resolvePaths, indexLifecycle),
-    ]),
-  paths: () => getPaths(resolvePaths(), indexLifecycle),
+      ...sources.map(createSourceDiagnostic),
+    ]);
+  },
+  paths: async () => getPaths(resolvePaths(), indexLifecycle, await resolveAllSources()),
+  indexSources: registeredSources.map(({ kind }) => kind),
+  index: async (source) =>
+    runIndex({
+      paths: resolvePaths(),
+      sources: await resolveIndexSources(source),
+      lifecycle: indexLifecycle,
+      clock: { now: () => new Date() },
+    }),
+  list: (limit) =>
+    listSessions({
+      paths: resolvePaths(),
+      lifecycle: indexLifecycle,
+      ...(limit === undefined ? {} : { limit }),
+    }),
+  show: ({ identity, entry, context }) =>
+    showSession({
+      paths: resolvePaths(),
+      lifecycle: indexLifecycle,
+      identity,
+      ...(entry === undefined ? {} : { entry }),
+      ...(context === undefined ? {} : { context }),
+    }),
+  forget: (identity) => forgetSession(resolvePaths(), maintenance, identity),
+  clearData: () => clearData(resolvePaths(), maintenance),
 });
 
 process.exitCode = exitCode;

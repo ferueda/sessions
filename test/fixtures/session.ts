@@ -2,6 +2,7 @@ import { hashContent } from "../../src/domain/content-hash.ts";
 import type {
   ContentOrigin,
   ContentSegment,
+  OmittedContentSegment,
   OriginConfidence,
   SessionDocument,
   SessionEntry,
@@ -28,9 +29,32 @@ export interface TestSegmentOptions {
 export function createTestSegment(options: TestSegmentOptions = {}): ContentSegment {
   const text = options.text ?? "synthetic session text";
   return {
+    kind: "text",
     ordinal: options.ordinal ?? 0,
     text,
     contentHash: hashContent(text),
+    origin: options.origin ?? "unknown",
+    originConfidence: options.originConfidence ?? "unknown",
+    sourceMetadata: { fixture: "synthetic" },
+  };
+}
+
+export interface TestOmittedSegmentOptions {
+  readonly ordinal?: number;
+  readonly contentClass?: OmittedContentSegment["contentClass"];
+  readonly sourceType?: string;
+  readonly origin?: ContentOrigin;
+  readonly originConfidence?: OriginConfidence;
+}
+
+export function createTestOmittedSegment(
+  options: TestOmittedSegmentOptions = {},
+): OmittedContentSegment {
+  return {
+    kind: "omitted",
+    ordinal: options.ordinal ?? 0,
+    contentClass: options.contentClass ?? "unknown",
+    sourceType: options.sourceType ?? "synthetic-omission",
     origin: options.origin ?? "unknown",
     originConfidence: options.originConfidence ?? "unknown",
     sourceMetadata: { fixture: "synthetic" },

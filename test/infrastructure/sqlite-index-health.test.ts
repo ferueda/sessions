@@ -30,11 +30,12 @@ describe("SQLite ready-index health", () => {
 
     await expect(lifecycle.inspectHealth(paths)).resolves.toEqual({
       ok: true,
-      integrity: "ok",
+      canonicalIntegrity: "ok",
       foreignKeys: "ok",
       ftsStructure: "ok",
       ftsContent: "ok",
       ftsSecureDelete: "enabled",
+      ftsRemediation: "not-needed",
       runRecords: "ok",
       writerLease: "free",
       activeRuns: 0,
@@ -178,9 +179,10 @@ async function initializedPaths(lifecycle = createSqliteIndexLifecycle()): Promi
   const root = await mkdtemp(path.join(tmpdir(), "sessions-health-"));
   temporaryDirectories.push(root);
   const directory = path.join(root, "sessions");
-  const database = path.join(directory, "index.sqlite3");
+  const database = path.join(directory, "sessions.sqlite3");
   const paths: IndexPaths = {
     directory,
+    scratch: path.join(directory, ".scratch"),
     database,
     wal: `${database}-wal`,
     shm: `${database}-shm`,

@@ -10,16 +10,13 @@ import {
 import type { SessionObservation } from "../../application/validate-session.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity, SourceInstance } from "../../domain/session.ts";
-import {
-  garbageCollectContent,
-  readCanonicalDocument,
-  replaceCanonicalDocument,
-} from "./sqlite-session-document.ts";
+import { readCanonicalDocument, replaceCanonicalDocument } from "./sqlite-session-document.ts";
 import { readImmutableIndexRunResult } from "./sqlite-index-run-result.ts";
 import {
   findSessionTracking,
   hasCanonicalDocument,
   lastGoodRevision,
+  listSessionSummaries,
   readSessionFreshness,
   readSessionSummary,
   sameRevision,
@@ -64,6 +61,20 @@ export function createSqliteSessionIndexReader(database: DatabaseSync): SessionI
       if (row === undefined) return undefined;
       return readCanonicalDocument(database, identity, integerAt(row.session_id));
     },
+
+    async getSession(identity) {
+      assertIdentity(identity);
+      const row = findSessionTracking(database, identity);
+      if (row === undefined) return undefined;
+      const document = readCanonicalDocument(database, identity, integerAt(row.session_id));
+      const summary = readSessionSummary(database, identity);
+      if (document === undefined || summary === undefined) return undefined;
+      return { summary, document };
+    },
+
+    async listSummaries(options) {
+      return listSessionSummaries(database, options.limit);
+    },
   };
 }
 
@@ -95,6 +106,13 @@ export function createCoordinatedSqliteSessionIndex(
       return runImmediateTransaction(database, () => {
         assertLease();
         const sourceInstanceId = ensureSourceInstance(database, input.source);
+        database
+          .prepare(
+            `UPDATE sessions_source_instances
+             SET coverage_status = 'unknown', coverage_observed_at = ?
+             WHERE source_instance_id = ?`,
+          )
+          .run(input.startedAt, sourceInstanceId);
         const row = database
           .prepare(
             `INSERT INTO sessions_index_runs (source_instance_id, status, started_at)
@@ -124,7 +142,14 @@ export function createCoordinatedSqliteSessionIndex(
         ) {
           throw new SqliteSessionIndexError("invalid-state");
         }
-        updateLatest(database, integerAt(tracking.session_id), observation, "unchanged", null);
+        updateLatest(
+          database,
+          integerAt(tracking.session_id),
+          observation,
+          "unchanged",
+          null,
+          run.startedAt,
+        );
         incrementRun(database, context.runId, "unchanged");
       });
     },
@@ -146,9 +171,16 @@ export function createCoordinatedSqliteSessionIndex(
           assertLease();
           const context = assertActiveRun(database, run, replacement.observation.identity.source);
           activeRunValidated = true;
-          const sessionId = ensureTracking(database, context, replacement.observation, "indexed");
+          const sessionId = ensureTracking(
+            database,
+            context,
+            replacement.observation,
+            "indexed",
+            null,
+            run.startedAt,
+          );
           replaceCanonicalDocument(database, sessionId, replacement.document);
-          updateSuccessfulRevision(database, sessionId, replacement.observation);
+          updateSuccessfulRevision(database, sessionId, replacement.observation, run.startedAt);
           incrementRun(database, context.runId, "indexed");
         });
       } catch (operationError) {
@@ -169,7 +201,7 @@ export function createCoordinatedSqliteSessionIndex(
       }
     },
 
-    async removeSession(run, identity) {
+    async recordMissing(run, identity) {
       assertIdentity(identity);
       runImmediateTransaction(database, () => {
         assertLease();
@@ -183,27 +215,16 @@ export function createCoordinatedSqliteSessionIndex(
         }
         const sessionId = integerAt(tracking.session_id);
         if (!hasCanonicalDocument(database, sessionId)) return;
-
-        database
-          .prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?")
-          .run(sessionId);
         database
           .prepare(
             `UPDATE sessions_session_tracking
-             SET last_good_fingerprint_scheme = NULL,
-                 last_good_fingerprint_digest = NULL,
-                 last_good_adapter_version = NULL,
-                 latest_fingerprint_scheme = NULL,
-                 latest_fingerprint_digest = NULL,
-                 latest_adapter_version = NULL,
-                 latest_outcome = 'removed',
-                 latest_failure_code = NULL
+             SET presence_status = 'missing',
+                 presence_observed_at = ?
              WHERE session_id = ?`,
           )
-          .run(sessionId);
-        garbageCollectContent(database);
-        incrementRun(database, context.runId, "removed");
-        addRunItem(database, context.runId, sessionId, "removed", null);
+          .run(run.startedAt, sessionId);
+        incrementRun(database, context.runId, "missing");
+        addRunItem(database, context.runId, sessionId, "missing", null);
       });
     },
 
@@ -215,6 +236,15 @@ export function createCoordinatedSqliteSessionIndex(
       return runImmediateTransaction(database, () => {
         assertLease();
         const context = assertActiveRun(database, run);
+        if (completion.status === "completed") {
+          database
+            .prepare(
+              `UPDATE sessions_source_instances
+               SET coverage_status = 'complete'
+               WHERE source_instance_id = ?`,
+            )
+            .run(context.sourceInstanceId);
+        }
         const result = readImmutableIndexRunResult(database, context.runId, run, completion);
         const status =
           completion.status === "completed"
@@ -317,7 +347,14 @@ function recordFailure(
   failure: SessionIndexFailureCode,
 ): void {
   const context = assertActiveRun(database, run, observation.identity.source);
-  const sessionId = ensureTracking(database, context, observation, "failed", failure);
+  const sessionId = ensureTracking(
+    database,
+    context,
+    observation,
+    "failed",
+    failure,
+    run.startedAt,
+  );
   const stale = hasCanonicalDocument(database, sessionId);
   incrementRun(database, context.runId, "failed", stale);
   addRunItem(database, context.runId, sessionId, "failed", failure);
@@ -346,7 +383,8 @@ function ensureTracking(
   context: RunContext,
   observation: SessionObservation,
   outcome: "indexed" | "failed",
-  failure: SessionIndexFailureCode | null = null,
+  failure: SessionIndexFailureCode | null,
+  observedAt: string,
 ): number {
   const revision = observation.revision;
   database
@@ -358,14 +396,20 @@ function ensureTracking(
          latest_fingerprint_digest,
          latest_adapter_version,
          latest_outcome,
-         latest_failure_code
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         latest_failure_code,
+         presence_status,
+         presence_observed_at,
+         last_seen_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)
        ON CONFLICT (source_instance_id, native_id) DO UPDATE SET
          latest_fingerprint_scheme = excluded.latest_fingerprint_scheme,
          latest_fingerprint_digest = excluded.latest_fingerprint_digest,
          latest_adapter_version = excluded.latest_adapter_version,
          latest_outcome = excluded.latest_outcome,
-         latest_failure_code = excluded.latest_failure_code`,
+         latest_failure_code = excluded.latest_failure_code,
+         presence_status = 'present',
+         presence_observed_at = excluded.presence_observed_at,
+         last_seen_at = excluded.last_seen_at`,
     )
     .run(
       context.sourceInstanceId,
@@ -375,6 +419,8 @@ function ensureTracking(
       revision.adapterVersion,
       outcome,
       failure,
+      observedAt,
+      observedAt,
     );
   const tracking = findSessionTracking(database, observation.identity);
   if (
@@ -392,6 +438,7 @@ function updateLatest(
   observation: SessionObservation,
   outcome: "unchanged" | "failed",
   failure: SessionIndexFailureCode | null,
+  observedAt: string,
 ): void {
   const revision = observation.revision;
   database
@@ -401,7 +448,10 @@ function updateLatest(
            latest_fingerprint_digest = ?,
            latest_adapter_version = ?,
            latest_outcome = ?,
-           latest_failure_code = ?
+           latest_failure_code = ?,
+           presence_status = 'present',
+           presence_observed_at = ?,
+           last_seen_at = ?
        WHERE session_id = ?`,
     )
     .run(
@@ -410,6 +460,8 @@ function updateLatest(
       revision.adapterVersion,
       outcome,
       failure,
+      observedAt,
+      observedAt,
       sessionId,
     );
 }
@@ -418,6 +470,7 @@ function updateSuccessfulRevision(
   database: DatabaseSync,
   sessionId: number,
   observation: SessionObservation,
+  observedAt: string,
 ): void {
   const revision = observation.revision;
   database
@@ -430,7 +483,11 @@ function updateSuccessfulRevision(
            latest_fingerprint_digest = ?,
            latest_adapter_version = ?,
            latest_outcome = 'indexed',
-           latest_failure_code = NULL
+           latest_failure_code = NULL,
+           presence_status = 'present',
+           presence_observed_at = ?,
+           captured_at = ?,
+           last_seen_at = ?
        WHERE session_id = ?`,
     )
     .run(
@@ -440,6 +497,9 @@ function updateSuccessfulRevision(
       revision.aggregateFingerprint.scheme,
       revision.aggregateFingerprint.digest,
       revision.adapterVersion,
+      observedAt,
+      observedAt,
+      observedAt,
       sessionId,
     );
 }
@@ -447,16 +507,16 @@ function updateSuccessfulRevision(
 function incrementRun(
   database: DatabaseSync,
   runId: number,
-  outcome: "unchanged" | "indexed" | "failed" | "removed",
+  outcome: "unchanged" | "indexed" | "failed" | "missing",
   stale = false,
 ): void {
   const columns = {
     unchanged: "unchanged_count",
     indexed: "indexed_count",
     failed: "failed_count",
-    removed: "removed_count",
+    missing: "missing_count",
   } as const;
-  const discovered = outcome === "removed" ? 0 : 1;
+  const discovered = outcome === "missing" ? 0 : 1;
   database
     .prepare(
       `UPDATE sessions_index_runs
@@ -472,7 +532,7 @@ function addRunItem(
   database: DatabaseSync,
   runId: number,
   sessionId: number,
-  outcome: "failed" | "removed",
+  outcome: "failed" | "missing",
   failure: SessionIndexFailureCode | null,
 ): void {
   const row = database

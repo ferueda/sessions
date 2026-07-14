@@ -1,4 +1,4 @@
-import { lstat, unlink } from "node:fs/promises";
+import { lstat, rm, unlink } from "node:fs/promises";
 import type { BigIntStats } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -17,16 +17,22 @@ import {
   validateMigrationCatalog,
 } from "./migrations.ts";
 import { assertCanonicalIndexPaths, inspectIndexPathSafety } from "./permissions.ts";
+import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
 import {
   configureSqliteWriterDatabase,
   openSqliteWriterDatabase,
 } from "./sqlite-writer-database.ts";
+import { forgetSqliteSession } from "./sqlite-index-forget.ts";
 import {
-  acquireWriterLease,
+  acquireWriterLeaseInTransaction,
   assertWriterLease,
+  heartbeatWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
   SqliteWriterLeaseError,
+  startWriterLeaseHeartbeat,
+  type WriterLeaseHeartbeat,
   type WriterLeaseIdentity,
+  type WriterLeaseScheduler,
 } from "./writer-lease.ts";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
@@ -40,6 +46,7 @@ export interface SqliteIndexMaintenanceOptions {
   readonly supportedSchemaVersion?: number;
   readonly token?: () => string;
   readonly unlinkFile?: (file: string) => Promise<void>;
+  readonly writerScheduler?: WriterLeaseScheduler;
 }
 
 export function createSqliteIndexMaintenance(
@@ -71,6 +78,22 @@ export function createSqliteIndexMaintenance(
           : { beforeFileRemoval: options.beforeFileRemoval }),
         ...(options.token === undefined ? {} : { token: options.token }),
         ...(options.unlinkFile === undefined ? {} : { unlinkFile: options.unlinkFile }),
+        ...(options.writerScheduler === undefined
+          ? {}
+          : { writerScheduler: options.writerScheduler }),
+      });
+    },
+    async forget(paths, identity) {
+      return forgetSqliteSession(paths, identity, {
+        busyTimeoutMs,
+        migrations,
+        now,
+        platform,
+        supportedSchemaVersion,
+        ...(options.token === undefined ? {} : { token: options.token }),
+        ...(options.writerScheduler === undefined
+          ? {}
+          : { writerScheduler: options.writerScheduler }),
       });
     },
   };
@@ -85,6 +108,7 @@ interface ResolvedMaintenanceOptions {
   readonly beforeFileRemoval?: (paths: IndexPaths) => Promise<void>;
   readonly token?: () => string;
   readonly unlinkFile?: (file: string) => Promise<void>;
+  readonly writerScheduler?: WriterLeaseScheduler;
 }
 
 async function clearSqliteIndex(
@@ -98,7 +122,9 @@ async function clearSqliteIndex(
   }
 
   const safety = await inspectIndexPathSafety(paths, { platform: options.platform });
-  const knownStatePresent = safety.presence.database || safety.presence.wal || safety.presence.shm;
+  const scratch = await inspectScratchPresence(paths.scratch);
+  const knownStatePresent =
+    safety.presence.database || safety.presence.wal || safety.presence.shm || scratch.exists;
   if (!knownStatePresent) return absentResult;
   if (!safety.safe) {
     throw new IndexMaintenanceError("unsafe-index");
@@ -108,32 +134,38 @@ async function clearSqliteIndex(
   }
 
   const hasRecoveryState = safety.presence.wal || safety.presence.shm;
-  const currentSchema = inspectDatabaseSchema(paths.database, hasRecoveryState, options);
-  if (!currentSchema) {
+  const schema = inspectDatabaseSchema(paths.database, hasRecoveryState, options);
+  if (schema === "invalid") {
+    throw new IndexMaintenanceError("corrupt-data");
+  }
+  if (schema === "legacy") {
     if (hasRecoveryState) {
       throw new IndexMaintenanceError("recovery-required");
     }
+    if (scratch.exists) throw new IndexMaintenanceError("recovery-required");
     return removeKnownIndexFiles(paths, options);
   }
 
-  const lease = await checkpointCurrentIndexWhileFenced(paths, options);
-  return removeCurrentIndexFiles(paths, lease, options);
+  return clearCoordinatedIndex(paths, scratch, options);
 }
 
 const absentResult: ClearIndexResult = Object.freeze({
   outcome: "absent",
+  scratchRemoved: false,
   databaseRemoved: false,
   walRemoved: false,
   shmRemoved: false,
 });
 
+type ClearSchema = "coordinated" | "invalid" | "legacy";
+
 function inspectDatabaseSchema(
   file: string,
   includeRecoveryState: boolean,
   options: ResolvedMaintenanceOptions,
-): boolean {
+): ClearSchema {
   let database: DatabaseSync | undefined;
-  let current = false;
+  let schema: ClearSchema = "invalid";
   try {
     const url = pathToFileURL(file);
     url.searchParams.set("mode", "ro");
@@ -147,112 +179,200 @@ function inspectDatabaseSchema(
       timeout: options.busyTimeoutMs,
     });
     const history = readMigrationHistory(database, options.migrations);
-    current =
-      history.currentVersion === options.supportedSchemaVersion && history.pending.length === 0;
+    schema =
+      history.currentVersion === 3 || history.currentVersion === 4
+        ? "coordinated"
+        : history.currentVersion < 3
+          ? "legacy"
+          : "invalid";
   } catch {
-    current = false;
+    schema = "invalid";
   }
   try {
     database?.close();
   } catch (error) {
     throw new IndexMaintenanceError("clear-failed", { cause: error });
   }
-  return current;
+  return schema;
 }
 
-async function checkpointCurrentIndexWhileFenced(
+async function clearCoordinatedIndex(
   paths: IndexPaths,
+  initialScratch: ScratchRootState,
   options: ResolvedMaintenanceOptions,
-): Promise<WriterLeaseIdentity> {
+): Promise<ClearIndexResult> {
   let database: DatabaseSync | undefined;
   let lease: WriterLeaseIdentity | undefined;
+  let heartbeat: WriterLeaseHeartbeat | undefined;
+  let destructiveIntent = false;
+  let scratchRemoved = false;
+  let result: ClearIndexResult | undefined;
   let operationError: unknown;
 
   try {
     database = openSqliteWriterDatabase(paths.database, options.busyTimeoutMs);
     configureSqliteWriterDatabase(database, options.busyTimeoutMs);
-    const history = readMigrationHistory(database, options.migrations);
-    if (history.currentVersion !== options.supportedSchemaVersion || history.pending.length !== 0) {
+    lease = acquireClearLease(database, options);
+    heartbeat = startWriterLeaseHeartbeat(database, lease, {
+      now: options.now,
+      ...(options.writerScheduler === undefined ? {} : { scheduler: options.writerScheduler }),
+    });
+
+    const scratch = await inspectScratchRoot(paths.scratch, options.platform);
+    if (scratch.exists !== initialScratch.exists) {
       throw new IndexMaintenanceError("concurrent-change");
     }
-    lease = acquireWriterLease(database, "clear", {
-      now: options.now,
-      ...(options.token === undefined ? {} : { token: options.token }),
-    });
+    if (scratch.exists) {
+      destructiveIntent = true;
+      await removeScratchRoot(paths.scratch);
+      scratchRemoved = true;
+    }
+
+    heartbeat.stop();
+    if (heartbeat.failure !== undefined) throw heartbeat.failure;
+    // With no scratch, final renewal is the first destructive step. Failures
+    // after this point preserve clear-only recovery intent.
+    destructiveIntent = true;
+    heartbeatWriterLease(database, lease, { now: options.now });
     const checkpoint = database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
       | Record<string, unknown>
       | undefined;
     if (checkpoint === undefined || integer(checkpoint.busy) !== 0) {
       throw new IndexMaintenanceError("clear-failed");
     }
+    assertWriterLease(database, lease, { now: options.now });
     database.close();
     database = undefined;
+
+    const expectedFiles = await snapshotKnownFiles(paths);
+    result = await removeKnownIndexFiles(paths, options, lease, expectedFiles, scratchRemoved);
   } catch (error) {
     operationError = mapClearOperationError(error);
   }
 
-  if (operationError === undefined && lease !== undefined) return lease;
-
   const cleanupErrors: unknown[] = [];
-  if (database !== undefined) {
-    if (lease !== undefined) {
-      try {
-        interruptOwnedRunsAndReleaseWriterLease(database, lease, { now: options.now });
-      } catch (error) {
-        cleanupErrors.push(error);
+  try {
+    heartbeat?.stop();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (heartbeat?.failure !== undefined && operationError === undefined) {
+    cleanupErrors.push(heartbeat.failure);
+  }
+  if (database !== undefined && lease !== undefined && !destructiveIntent) {
+    try {
+      const released = interruptOwnedRunsAndReleaseWriterLease(database, lease, {
+        now: options.now,
+      });
+      if (!released && heartbeat?.failure === undefined) {
+        cleanupErrors.push(new SqliteWriterLeaseError("writer-lease-lost"));
       }
+      if (released) database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    } catch (error) {
+      cleanupErrors.push(error);
     }
+  }
+  if (database !== undefined) {
     try {
       database.close();
     } catch (error) {
       cleanupErrors.push(error);
     }
   }
-  if (cleanupErrors.length === 0) throw operationError;
-  const aggregate = new AggregateError(
-    [operationError, ...cleanupErrors],
-    "Index clear operation and cleanup failed",
-    { cause: operationError },
-  );
+
+  if (operationError === undefined && cleanupErrors.length === 0 && result !== undefined) {
+    return result;
+  }
+  const primary = operationError ?? cleanupErrors[0] ?? new IndexMaintenanceError("clear-failed");
+  if (cleanupErrors.length === 0) throw primary;
   throw new IndexMaintenanceError(
-    operationError instanceof IndexMaintenanceError ? operationError.code : "clear-failed",
-    { cause: aggregate },
+    primary instanceof IndexMaintenanceError ? primary.code : "clear-failed",
+    {
+      cause: new AggregateError(
+        [primary, ...cleanupErrors],
+        "Index clear operation and cleanup failed",
+        { cause: primary },
+      ),
+    },
   );
 }
 
-async function removeCurrentIndexFiles(
-  paths: IndexPaths,
-  lease: WriterLeaseIdentity,
+function acquireClearLease(
+  database: DatabaseSync,
   options: ResolvedMaintenanceOptions,
-): Promise<ClearIndexResult> {
-  let expectedFiles: KnownFileSnapshots | undefined;
-  try {
-    expectedFiles = await snapshotKnownFiles(paths);
-    return await removeKnownIndexFiles(paths, options, lease, expectedFiles);
-  } catch (error) {
-    const operationError =
-      error instanceof IndexMaintenanceError
-        ? error
-        : new IndexMaintenanceError("clear-failed", { cause: error });
-    const cleanupError =
-      expectedFiles === undefined
-        ? undefined
-        : await releaseClearLeaseAfterFailure(paths, expectedFiles.database, lease, options);
-    if (cleanupError === undefined) throw operationError;
-    throw new IndexMaintenanceError(operationError.code, {
-      cause: new AggregateError(
-        [operationError, cleanupError],
-        "Index clear operation and lease cleanup failed",
-        { cause: operationError },
-      ),
+): WriterLeaseIdentity {
+  return runImmediateTransaction(database, () => {
+    const history = readMigrationHistory(database, options.migrations);
+    if (history.currentVersion !== 3 && history.currentVersion !== 4) {
+      throw new IndexMaintenanceError("concurrent-change");
+    }
+    if (history.currentVersion === 4 && history.pending.length !== 0) {
+      throw new IndexMaintenanceError("concurrent-change");
+    }
+    return acquireWriterLeaseInTransaction(database, "clear", {
+      now: options.now,
+      ...(options.token === undefined ? {} : { token: options.token }),
     });
+  });
+}
+
+interface ScratchRootState {
+  readonly exists: boolean;
+}
+
+async function inspectScratchPresence(scratch: string): Promise<ScratchRootState> {
+  try {
+    await lstat(scratch);
+    return { exists: true };
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return { exists: false };
+    throw new IndexMaintenanceError("unsafe-index", { cause: error });
+  }
+}
+
+async function inspectScratchRoot(
+  scratch: string,
+  platform: NodeJS.Platform,
+): Promise<ScratchRootState> {
+  let stats;
+  try {
+    stats = await lstat(scratch);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return { exists: false };
+    throw new IndexMaintenanceError("unsafe-index", { cause: error });
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new IndexMaintenanceError("unsafe-index");
+  }
+  if (platform !== "win32") {
+    const uid = process.getuid?.();
+    if ((uid !== undefined && stats.uid !== uid) || (stats.mode & 0o777) !== 0o700) {
+      throw new IndexMaintenanceError("unsafe-index");
+    }
+  }
+  return { exists: true };
+}
+
+async function removeScratchRoot(scratch: string): Promise<void> {
+  try {
+    // Recursive rm unlinks nested symlinks and never traverses their targets.
+    await rm(scratch, { force: false, recursive: true });
+  } catch (error) {
+    throw new IndexMaintenanceError("clear-failed", { cause: error });
   }
 }
 
 function mapClearOperationError(error: unknown): unknown {
   if (error instanceof IndexMaintenanceError) return error;
-  if (error instanceof SqliteWriterLeaseError && error.code === "writer-busy") {
-    return new IndexMaintenanceError("index-busy", { cause: error });
+  if (error instanceof SqliteWriterLeaseError) {
+    return new IndexMaintenanceError(
+      error.code === "writer-busy"
+        ? "library-busy"
+        : error.code === "corrupt-data"
+          ? "corrupt-data"
+          : "clear-failed",
+      { cause: error },
+    );
   }
   return new IndexMaintenanceError("clear-failed", { cause: error });
 }
@@ -279,6 +399,7 @@ async function removeKnownIndexFiles(
   options: ResolvedMaintenanceOptions,
   lease?: WriterLeaseIdentity,
   expectedFiles?: KnownFileSnapshots,
+  scratchRemoved = false,
 ): Promise<ClearIndexResult> {
   const snapshots = expectedFiles ?? (await snapshotKnownFiles(paths));
   try {
@@ -307,7 +428,9 @@ async function removeKnownIndexFiles(
   }
 
   return {
-    outcome: "cleared",
+    outcome:
+      scratchRemoved || removed.database || removed.wal || removed.shm ? "cleared" : "absent",
+    scratchRemoved,
     databaseRemoved: removed.database,
     walRemoved: removed.wal,
     shmRemoved: removed.shm,
@@ -366,48 +489,6 @@ function assertClearLeaseStillOwned(
   if (operationError !== undefined) throw operationError;
   if (closeError !== undefined)
     throw new IndexMaintenanceError("clear-failed", { cause: closeError });
-}
-
-async function releaseClearLeaseAfterFailure(
-  paths: IndexPaths,
-  expectedDatabase: FileSnapshot,
-  lease: WriterLeaseIdentity,
-  options: ResolvedMaintenanceOptions,
-): Promise<unknown | undefined> {
-  let database: DatabaseSync | undefined;
-  let cleanupError: unknown;
-  try {
-    const safety = await inspectIndexPathSafety(paths, { platform: options.platform });
-    if (!safety.safe) return new IndexMaintenanceError("concurrent-change");
-    if (!safety.presence.database) return undefined;
-    const actualDatabase = await snapshotFile(paths.database);
-    if (!sameFileSnapshot(expectedDatabase, actualDatabase)) {
-      return new IndexMaintenanceError("concurrent-change");
-    }
-
-    database = openSqliteWriterDatabase(paths.database, options.busyTimeoutMs);
-    const released = interruptOwnedRunsAndReleaseWriterLease(database, lease, {
-      now: options.now,
-    });
-    if (released) database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-  } catch (error) {
-    cleanupError = error;
-  }
-  if (database !== undefined) {
-    try {
-      database.close();
-    } catch (error) {
-      cleanupError =
-        cleanupError === undefined
-          ? error
-          : new AggregateError(
-              [cleanupError, error],
-              "Index clear lease release and database close failed",
-              { cause: cleanupError },
-            );
-    }
-  }
-  return cleanupError;
 }
 
 async function snapshotFile(file: string): Promise<FileSnapshot> {

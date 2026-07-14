@@ -1,7 +1,7 @@
 import type { DiagnosticResult, RuntimeDiagnostic } from "./ports/runtime-diagnostic.ts";
 
 export interface DoctorReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly command: "doctor";
   readonly ok: boolean;
   readonly checks: readonly DiagnosticResult[];
@@ -33,7 +33,7 @@ export async function runDoctor(diagnostics: readonly RuntimeDiagnostic[]): Prom
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     command: "doctor",
     ok: checks.every((check) => check.ok),
     checks,

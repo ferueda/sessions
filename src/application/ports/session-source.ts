@@ -37,10 +37,15 @@ export interface DiscoveredSession {
   readonly adapterVersion: string;
 }
 
+/** Opaque, lease-scoped staging supplied only while source discovery runs. */
+export interface SourceDiscoveryWorkspace {
+  withPrivateDirectory<T>(operation: (directory: string) => Promise<T>): Promise<T>;
+}
+
 export interface SessionSource {
   readonly kind: string;
   probe(): Promise<SourceProbe>;
-  discover(): AsyncIterable<DiscoveredSession>;
+  discover(workspace: SourceDiscoveryWorkspace): AsyncIterable<DiscoveredSession>;
   read(candidate: DiscoveredSession): Promise<SessionDocument>;
 }
 

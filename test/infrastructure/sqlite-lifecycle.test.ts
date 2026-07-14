@@ -427,10 +427,12 @@ process.exit(0);`,
       writer.database.close();
       await chmod(paths.database, 0o644);
 
-      await expect(writer.close()).rejects.toMatchObject({
-        code: "ERR_INVALID_STATE",
-        message: "database is not open",
-      });
+      const closeFailure = await writer.close().catch((error: unknown) => error);
+      expect(closeFailure).toBeInstanceOf(AggregateError);
+      expect((closeFailure as AggregateError).errors).toMatchObject([
+        { code: "ERR_INVALID_STATE", message: "database is not open" },
+        { code: "ERR_INVALID_STATE", message: "database is not open" },
+      ]);
       expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
       await expect(writer.close()).resolves.toBeUndefined();
     },
@@ -448,6 +450,7 @@ process.exit(0);`,
     );
     expect(cleanupFailure).toBeInstanceOf(AggregateError);
     expect((cleanupFailure as AggregateError).errors).toMatchObject([
+      { code: "ERR_INVALID_STATE", message: "database is not open" },
       { code: "ERR_INVALID_STATE", message: "database is not open" },
       { code: "ENOENT" },
     ]);
@@ -562,6 +565,7 @@ process.exit(0);`,
     await expect(
       lifecycle.openWriter({
         directory,
+        scratch: path.join(directory, ".scratch"),
         database,
         wal: `${database}-wal`,
         shm: `${database}-shm`,
@@ -714,9 +718,10 @@ async function fixturePaths(): Promise<IndexPaths> {
 }
 
 function indexPaths(directory: string): IndexPaths {
-  const database = path.join(directory, "index.sqlite3");
+  const database = path.join(directory, "sessions.sqlite3");
   return {
     directory,
+    scratch: path.join(directory, ".scratch"),
     database,
     wal: `${database}-wal`,
     shm: `${database}-shm`,

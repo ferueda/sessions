@@ -1,4 +1,6 @@
 import { compareBinaryStrings, discoverSessions } from "./discover-sessions.ts";
+import { admitSourceProbe } from "./admit-source-probe.ts";
+import { mapLibraryBusyError } from "./library-error.ts";
 import {
   createIndexReport,
   createIndexSourceReport,
@@ -13,7 +15,7 @@ import type {
 } from "./ports/session-index.ts";
 import type {
   SelectedSessionSource,
-  SourceProbe,
+  SourceDiscoveryWorkspace,
   SourceProbeStatus,
 } from "./ports/session-source.ts";
 import { readSessionReplacement } from "./read-session-document.ts";
@@ -23,7 +25,6 @@ import {
   type SessionRevision,
   type ValidatedSessionReplacement,
 } from "./validate-session.ts";
-import { snapshotArray, snapshotPlainRecord } from "../domain/data-snapshot.ts";
 import { isSessionIdentity } from "../domain/session-identity.ts";
 import type { SessionIdentity, SourceInstance } from "../domain/session.ts";
 
@@ -51,12 +52,14 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
     writer = await input.lifecycle.openWriter(input.paths);
     const sourceReports: IndexSourceReport[] = [];
     for (const selection of selections) {
-      sourceReports.push(await runSource(writer.sessions, selection, input.clock));
+      sourceReports.push(
+        await runSource(writer.sessions, writer.workspace, selection, input.clock),
+      );
     }
     report = createIndexReport(startedAt, timestamp(input.clock), sourceReports);
   } catch (error) {
     operationFailed = true;
-    operationError = error;
+    operationError = mapLibraryBusyError(error);
   }
 
   let closeError: unknown;
@@ -85,6 +88,7 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
 
 async function runSource(
   index: SessionIndexWriter,
+  workspace: SourceDiscoveryWorkspace,
   selection: SelectedSessionSource,
   clock: IndexClock,
 ): Promise<IndexSourceReport> {
@@ -116,7 +120,7 @@ async function runSource(
     const probeFailure = await probe(selection);
     if (probeFailure !== undefined) return await finish("incomplete", probeFailure);
 
-    const discovery = await discoverSessions(selection);
+    const discovery = await discoverSessions(selection, workspace);
     if (!discovery.complete) return await finish("incomplete", "discovery-failed");
 
     const seen = new Set<string>();
@@ -144,7 +148,7 @@ async function runSource(
     const indexed = await index.listIndexedIdentities(selection.instance);
     const ordered = validateIndexedIdentities(indexed, selection.instance);
     for (const identity of ordered) {
-      if (!seen.has(identity.nativeId)) await index.removeSession(run, identity);
+      if (!seen.has(identity.nativeId)) await index.recordMissing(run, identity);
     }
     return await finish("completed");
   } catch (operationError) {
@@ -199,66 +203,11 @@ async function probe(selection: SelectedSessionSource): Promise<IndexRunFailureC
     return "probe-failed";
   }
 
-  const admitted = admitProbe(value);
+  const admitted = admitSourceProbe(value);
   if (admitted === undefined || !sameSource(admitted.source, selection.instance)) {
     return "probe-failed";
   }
   return probeStatusFailure(admitted.status);
-}
-
-function admitProbe(value: unknown): SourceProbe | undefined {
-  const root = snapshotPlainRecord(value);
-  if (!root.ok || !hasExactKeys(root.record, ["source", "status", "locations", "summary"])) {
-    return undefined;
-  }
-  const source = snapshotPlainRecord(root.record.source);
-  if (
-    !source.ok ||
-    !hasExactKeys(source.record, ["kind", "instanceId"]) ||
-    !isSessionIdentity({ source: source.record, nativeId: "probe" })
-  ) {
-    return undefined;
-  }
-  const status = root.record.status;
-  if (status !== "ready" && status !== "unavailable" && status !== "unreadable") {
-    return undefined;
-  }
-  if (!isNonEmptyWellFormedString(root.record.summary)) return undefined;
-
-  const locations = snapshotArray(root.record.locations);
-  if (!locations.ok || locations.values.length === 0) return undefined;
-  const admittedLocations = [];
-  for (const value of locations.values) {
-    const location = snapshotPlainRecord(value);
-    if (!location.ok || !hasExactKeys(location.record, ["role", "locator"])) return undefined;
-    const locator = snapshotPlainRecord(location.record.locator);
-    if (
-      !locator.ok ||
-      !hasAllowedKeys(locator.record, ["uri", "recordId"], ["uri"]) ||
-      !isNonEmptyWellFormedString(location.record.role) ||
-      !isNonEmptyWellFormedString(locator.record.uri) ||
-      (Object.hasOwn(locator.record, "recordId") &&
-        !isNonEmptyWellFormedString(locator.record.recordId))
-    ) {
-      return undefined;
-    }
-    admittedLocations.push({
-      role: location.record.role,
-      locator: {
-        uri: locator.record.uri,
-        ...(Object.hasOwn(locator.record, "recordId")
-          ? { recordId: locator.record.recordId as string }
-          : {}),
-      },
-    });
-  }
-
-  return {
-    source: { kind: source.record.kind, instanceId: source.record.instanceId },
-    status,
-    locations: admittedLocations,
-    summary: root.record.summary,
-  } as SourceProbe;
 }
 
 function matchesLastGoodRevision(freshness: SessionFreshness, revision: SessionRevision): boolean {
@@ -312,28 +261,4 @@ function timestamp(clock: IndexClock): string {
 
 function sameSource(left: SourceInstance, right: SourceInstance): boolean {
   return left.kind === right.kind && left.instanceId === right.instanceId;
-}
-
-function hasExactKeys(
-  record: Readonly<Record<PropertyKey, unknown>>,
-  expected: readonly string[],
-): boolean {
-  const keys = Reflect.ownKeys(record);
-  return keys.length === expected.length && keys.every((key) => expected.includes(String(key)));
-}
-
-function hasAllowedKeys(
-  record: Readonly<Record<PropertyKey, unknown>>,
-  allowed: readonly string[],
-  required: readonly string[],
-): boolean {
-  const keys = Reflect.ownKeys(record);
-  return (
-    required.every((key) => Object.hasOwn(record, key)) &&
-    keys.every((key) => typeof key === "string" && allowed.includes(key))
-  );
-}
-
-function isNonEmptyWellFormedString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.isWellFormed();
 }

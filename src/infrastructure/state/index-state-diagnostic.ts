@@ -11,8 +11,8 @@ export function createIndexStateDiagnostic(
   inspector: IndexStateInspector & IndexHealthInspector,
 ): RuntimeDiagnostic {
   return {
-    id: "index-state",
-    label: "Sessions index",
+    id: "library-state",
+    label: "Sessions library",
     async run() {
       const paths = resolvePaths();
       const state = await inspector.inspect(paths);
@@ -45,11 +45,12 @@ export function createIndexStateDiagnostic(
 
 function healthDetails(health: ReadyIndexHealth): Readonly<Record<string, string>> {
   return {
-    integrity: health.integrity,
+    canonicalIntegrity: health.canonicalIntegrity,
     foreignKeys: health.foreignKeys,
     ftsStructure: health.ftsStructure,
     ftsContent: health.ftsContent,
     ftsSecureDelete: health.ftsSecureDelete,
+    ftsRemediation: health.ftsRemediation,
     runRecords: health.runRecords,
     writerLease: health.writerLease,
     activeRuns: String(health.activeRuns),

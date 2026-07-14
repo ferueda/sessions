@@ -13,9 +13,10 @@ import { createIndexStateDiagnostic } from "../../src/infrastructure/state/index
 
 const paths: IndexPaths = {
   directory: "/cache/sessions",
-  database: "/cache/sessions/index.sqlite3",
-  wal: "/cache/sessions/index.sqlite3-wal",
-  shm: "/cache/sessions/index.sqlite3-shm",
+  scratch: "/cache/sessions/.scratch",
+  database: "/cache/sessions/sessions.sqlite3",
+  wal: "/cache/sessions/sessions.sqlite3-wal",
+  shm: "/cache/sessions/sessions.sqlite3-shm",
 };
 
 describe("createIndexStateDiagnostic", () => {
@@ -53,11 +54,12 @@ describe("createIndexStateDiagnostic", () => {
       details: {
         state: "ready",
         schemaVersion: "1",
-        integrity: "ok",
+        canonicalIntegrity: "ok",
         foreignKeys: "ok",
         ftsStructure: "ok",
         ftsContent: "ok",
         ftsSecureDelete: "enabled",
+        ftsRemediation: "not-needed",
         runRecords: "ok",
         writerLease: "free",
         activeRuns: "0",
@@ -78,6 +80,7 @@ describe("createIndexStateDiagnostic", () => {
         ...healthyIndex,
         ok: false,
         ftsContent: "failed",
+        ftsRemediation: "rebuild-required",
         writerLease: "expired",
         activeRuns: 1,
         interruptedRuns: 2,
@@ -92,11 +95,12 @@ describe("createIndexStateDiagnostic", () => {
         initialized: "true",
         schemaVersion: "3",
         supportedSchemaVersion: "3",
-        integrity: "ok",
+        canonicalIntegrity: "ok",
         foreignKeys: "ok",
         ftsStructure: "ok",
         ftsContent: "failed",
         ftsSecureDelete: "enabled",
+        ftsRemediation: "rebuild-required",
         runRecords: "ok",
         writerLease: "expired",
         activeRuns: "1",
@@ -195,11 +199,12 @@ describe("createIndexStateDiagnostic", () => {
 
 const healthyIndex: ReadyIndexHealth = {
   ok: true,
-  integrity: "ok",
+  canonicalIntegrity: "ok",
   foreignKeys: "ok",
   ftsStructure: "ok",
   ftsContent: "ok",
   ftsSecureDelete: "enabled",
+  ftsRemediation: "not-needed",
   runRecords: "ok",
   writerLease: "free",
   activeRuns: 0,

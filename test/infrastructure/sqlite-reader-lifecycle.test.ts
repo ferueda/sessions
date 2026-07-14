@@ -193,8 +193,14 @@ async function fixturePaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-sqlite-reader-"));
   temporaryDirectories.push(root);
   const directory = path.join(root, "sessions");
-  const database = path.join(directory, "index.sqlite3");
-  return { directory, database, wal: `${database}-wal`, shm: `${database}-shm` };
+  const database = path.join(directory, "sessions.sqlite3");
+  return {
+    directory,
+    scratch: path.join(directory, ".scratch"),
+    database,
+    wal: `${database}-wal`,
+    shm: `${database}-shm`,
+  };
 }
 
 function openReadOnly(file: string): DatabaseSync {

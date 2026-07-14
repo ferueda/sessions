@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { validateSessionDocument } from "../../domain/session-validation.ts";
+import { isCanonicalSourceType, isContentClass } from "../../domain/source-type.ts";
 import type {
   ContentSegment,
   SessionDocument,
   SessionEntry,
   SessionIdentity,
   SessionRelation,
+  TextContentSegment,
 } from "../../domain/session.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
@@ -123,9 +125,11 @@ function insertEntries(
        timestamp,
        related_entry_ordinal,
        tool_call_id,
+       tool_name,
+       tool_namespace,
        source_locator_uri,
        source_locator_record_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const occurrenceStatement = database.prepare(
     `INSERT INTO sessions_content_occurrences (
@@ -133,10 +137,12 @@ function insertEntries(
        entry_ordinal,
        segment_ordinal,
        content_id,
+       content_class,
+       source_type,
        origin,
        confidence,
        source_metadata_json
-     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
   for (const entry of entries) {
@@ -148,16 +154,20 @@ function insertEntries(
       entry.timestamp ?? null,
       entry.relatedEntryOrdinal ?? null,
       entry.toolCallId ?? null,
+      entry.toolName ?? null,
+      entry.toolNamespace ?? null,
       entry.sourceLocator.uri,
       entry.sourceLocator.recordId ?? null,
     );
     for (const segment of entry.content) {
-      const contentId = internContent(database, segment);
+      const contentId = segment.kind === "text" ? internContent(database, segment) : null;
       occurrenceStatement.run(
         sessionId,
         entry.ordinal,
         segment.ordinal,
         contentId,
+        segment.kind === "omitted" ? segment.contentClass : null,
+        segment.kind === "omitted" ? segment.sourceType : null,
         segment.origin,
         segment.originConfidence,
         serializeMetadata(segment.sourceMetadata),
@@ -166,7 +176,7 @@ function insertEntries(
   }
 }
 
-function internContent(database: DatabaseSync, segment: ContentSegment): number {
+function internContent(database: DatabaseSync, segment: TextContentSegment): number {
   database
     .prepare(
       `INSERT INTO sessions_content_values (hash_scheme, digest, text)
@@ -212,7 +222,7 @@ function readEntries(database: DatabaseSync, sessionId: number): readonly Sessio
   const entryRows = database
     .prepare(
       `SELECT ordinal, kind, actor, timestamp, related_entry_ordinal, tool_call_id,
-              source_locator_uri, source_locator_record_id
+              tool_name, tool_namespace, source_locator_uri, source_locator_record_id
        FROM sessions_entries
        WHERE session_id = ?
        ORDER BY ordinal`,
@@ -222,6 +232,14 @@ function readEntries(database: DatabaseSync, sessionId: number): readonly Sessio
 
   return entryRows.map((row, ordinal) => {
     if (integerAt(row.ordinal) !== ordinal) throw new SqliteSessionIndexError("corrupt-data");
+    const toolName = optionalStoredString(row.tool_name);
+    const toolNamespace = optionalStoredString(row.tool_namespace);
+    if (
+      (row.kind !== "tool-call" && (toolName !== undefined || toolNamespace !== undefined)) ||
+      (toolNamespace !== undefined && toolName === undefined)
+    ) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
     return {
       ordinal,
       kind: row.kind,
@@ -229,6 +247,8 @@ function readEntries(database: DatabaseSync, sessionId: number): readonly Sessio
       ...optional("timestamp", row.timestamp),
       ...optionalInteger("relatedEntryOrdinal", row.related_entry_ordinal),
       ...optional("toolCallId", row.tool_call_id),
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(toolNamespace === undefined ? {} : { toolNamespace }),
       sourceLocator: {
         uri: row.source_locator_uri,
         ...optional("recordId", row.source_locator_record_id),
@@ -249,11 +269,14 @@ function readSegments(
               occurrence.origin,
               occurrence.confidence,
               occurrence.source_metadata_json,
+              occurrence.content_id,
+              occurrence.content_class,
+              occurrence.source_type,
               content.hash_scheme,
               content.digest,
               content.text
        FROM sessions_content_occurrences AS occurrence
-       JOIN sessions_content_values AS content
+       LEFT JOIN sessions_content_values AS content
          ON content.content_id = occurrence.content_id
        WHERE occurrence.session_id = ?
        ORDER BY occurrence.entry_ordinal, occurrence.segment_ordinal`,
@@ -265,14 +288,46 @@ function readSegments(
     const segmentOrdinal = integerAt(row.segment_ordinal);
     const segments = result.get(entryOrdinal) ?? [];
     if (segmentOrdinal !== segments.length) throw new SqliteSessionIndexError("corrupt-data");
-    segments.push({
+    const common = {
       ordinal: segmentOrdinal,
-      text: row.text,
-      contentHash: { scheme: row.hash_scheme, digest: row.digest },
       origin: row.origin,
       originConfidence: row.confidence,
       sourceMetadata: parseMetadata(row.source_metadata_json),
-    });
+    } as const;
+    if (row.content_id === null) {
+      if (
+        row.hash_scheme !== null ||
+        row.digest !== null ||
+        row.text !== null ||
+        !isContentClass(row.content_class) ||
+        !isCanonicalSourceType(row.source_type)
+      ) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      segments.push({
+        kind: "omitted",
+        ...common,
+        contentClass: row.content_class,
+        sourceType: row.source_type,
+      });
+    } else {
+      integerAt(row.content_id);
+      if (
+        row.content_class !== null ||
+        row.source_type !== null ||
+        row.hash_scheme !== "sha256-utf8-v1" ||
+        typeof row.digest !== "string" ||
+        typeof row.text !== "string"
+      ) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      segments.push({
+        kind: "text",
+        ...common,
+        text: row.text,
+        contentHash: { scheme: row.hash_scheme, digest: row.digest },
+      });
+    }
     result.set(entryOrdinal, segments);
   }
   return result;
@@ -306,6 +361,14 @@ function parseMetadata(value: string): Readonly<Record<string, string>> {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   return Object.fromEntries(entries) as Readonly<Record<string, string>>;
+}
+
+function optionalStoredString(value: unknown): string | undefined {
+  if (value === null) return undefined;
+  if (typeof value !== "string" || !value.isWellFormed()) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return value;
 }
 
 function copyIdentity(identity: SessionIdentity): SessionIdentity {
@@ -357,6 +420,8 @@ interface EntryRow {
   readonly timestamp: string | null;
   readonly related_entry_ordinal: number | bigint | null;
   readonly tool_call_id: string | null;
+  readonly tool_name: unknown;
+  readonly tool_namespace: unknown;
   readonly source_locator_uri: string;
   readonly source_locator_record_id: string | null;
 }
@@ -367,7 +432,10 @@ interface SegmentRow {
   readonly origin: ContentSegment["origin"];
   readonly confidence: ContentSegment["originConfidence"];
   readonly source_metadata_json: string;
-  readonly hash_scheme: ContentSegment["contentHash"]["scheme"];
-  readonly digest: string;
-  readonly text: string;
+  readonly content_id: number | bigint | null;
+  readonly content_class: unknown;
+  readonly source_type: unknown;
+  readonly hash_scheme: unknown;
+  readonly digest: unknown;
+  readonly text: unknown;
 }

@@ -96,13 +96,15 @@ describe("session admission", () => {
 
   test("deeply snapshots a validated replacement independently of adapter data", () => {
     const observation = admittedObservation();
+    const originalSegment = createTestDocument().entries[0]!.content[0]!;
+    if (originalSegment.kind !== "text") throw new Error("expected fixture text segment");
     const entry = {
       ...createTestDocument().entries[0]!,
       sourceLocator: { ...createTestDocument().entries[0]!.sourceLocator },
       content: [
         {
-          ...createTestDocument().entries[0]!.content[0]!,
-          contentHash: { ...createTestDocument().entries[0]!.content[0]!.contentHash },
+          ...originalSegment,
+          contentHash: { ...originalSegment.contentHash },
           sourceMetadata: { fixture: "synthetic" },
         },
       ],

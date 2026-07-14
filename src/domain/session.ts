@@ -1,4 +1,5 @@
 import type { ContentHash } from "./content-hash.ts";
+import type { ContentClass } from "./source-type.ts";
 
 export type Actor = "human" | "model" | "tool" | "system" | "unknown";
 
@@ -35,14 +36,26 @@ export interface SessionRelation {
   readonly confidence: OriginConfidence;
 }
 
-export interface ContentSegment {
+export interface ContentSegmentBase {
   readonly ordinal: number;
-  readonly text: string;
-  readonly contentHash: ContentHash;
   readonly origin: ContentOrigin;
   readonly originConfidence: OriginConfidence;
   readonly sourceMetadata: Readonly<Record<string, string>>;
 }
+
+export interface TextContentSegment extends ContentSegmentBase {
+  readonly kind: "text";
+  readonly text: string;
+  readonly contentHash: ContentHash;
+}
+
+export interface OmittedContentSegment extends ContentSegmentBase {
+  readonly kind: "omitted";
+  readonly contentClass: ContentClass;
+  readonly sourceType: string;
+}
+
+export type ContentSegment = TextContentSegment | OmittedContentSegment;
 
 export interface SegmentOccurrenceKey {
   readonly session: SessionIdentity;
@@ -57,6 +70,8 @@ export interface SessionEntry {
   readonly timestamp?: string;
   readonly relatedEntryOrdinal?: number;
   readonly toolCallId?: string;
+  readonly toolName?: string;
+  readonly toolNamespace?: string;
   readonly sourceLocator: SourceLocator;
   readonly content: readonly ContentSegment[];
 }

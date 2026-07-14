@@ -27,20 +27,30 @@ describe("paths persistence boundary", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        SESSIONS_CACHE_DIR: ownedDirectory,
+        CODEX_HOME: path.join(sandbox, "codex"),
+        CODEX_SQLITE_HOME: undefined,
+        HOME: path.join(sandbox, "home"),
+        USERPROFILE: path.join(sandbox, "home"),
+        SESSIONS_DATA_DIR: ownedDirectory,
       },
     });
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       command: "paths",
-      index: {
+      library: {
         directory: ownedDirectory,
         initialized: false,
         state: "uninitialized",
       },
+      sources: [
+        {
+          source: { kind: "codex" },
+          probe: { status: "unavailable" },
+        },
+      ],
     });
     await expect(readdir(sandbox, { recursive: true })).resolves.toEqual([]);
   });

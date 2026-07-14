@@ -260,6 +260,7 @@ function validDocument(documentIdentity: SessionIdentity = identity): SessionDoc
         sourceLocator: { uri: "memory:///session-1#entry-0" },
         content: [
           {
+            kind: "text",
             ordinal: 0,
             text: "hello",
             contentHash: hashContent("hello"),

@@ -51,10 +51,14 @@ export function runSessionIndexContract(
         createdAt: "2026-07-13T12:00:00.000Z",
         updatedAt: "2026-07-13T12:01:00.000Z",
         freshness: "current",
+        sourceState: "unknown",
+        capturedAt: "2026-07-13T12:00:00.000Z",
       });
       await expect(fixture.index.getSummary(secondIdentity)).resolves.toEqual({
         identity: secondIdentity,
         freshness: "current",
+        sourceState: "unknown",
+        capturedAt: "2026-07-13T12:00:00.000Z",
       });
 
       await finishCompleted(fixture.index, firstRun, counts({ discovered: 1, updated: 1 }));
@@ -118,7 +122,7 @@ export function runSessionIndexContract(
     }
   });
 
-  test("tracks failed first observations and removes canonical content without losing identity", async () => {
+  test("tracks failed first observations and retains missing canonical content", async () => {
     const fixture = await createFixture();
     try {
       const failedIdentity = identity("profile-one", "never-indexed");
@@ -137,21 +141,21 @@ export function runSessionIndexContract(
       await expect(fixture.index.getDocument(failedIdentity)).resolves.toBeUndefined();
       await finishCompleted(fixture.index, failedRun, counts({ discovered: 1, failed: 1 }));
 
-      const indexedIdentity = identity("profile-one", "removed-session");
+      const indexedIdentity = identity("profile-one", "missing-session");
       const indexed = replacement(indexedIdentity, "revision-a", minimalDocument(indexedIdentity));
       const indexRun = await fixture.index.startRun({
         source: indexedIdentity.source,
         startedAt: "2026-07-13T13:00:00.000Z",
       });
       await fixture.index.replaceSession(indexRun, indexed);
-      await fixture.index.removeSession(indexRun, indexedIdentity);
+      await fixture.index.recordMissing(indexRun, indexedIdentity);
       await expect(fixture.index.getFreshness(indexedIdentity)).resolves.toEqual({
-        status: "removed",
+        status: "current",
         identity: indexedIdentity,
-        latest: { outcome: "removed" },
+        lastGood: indexed.observation.revision,
+        latest: { outcome: "indexed", revision: indexed.observation.revision },
       });
-      await expect(fixture.index.getDocument(indexedIdentity)).resolves.toBeUndefined();
-      await expect(fixture.index.getSummary(indexedIdentity)).resolves.toBeUndefined();
+      await expect(fixture.index.getDocument(indexedIdentity)).resolves.toEqual(indexed.document);
       await fixture.index.replaceSession(indexRun, indexed);
       await expect(fixture.index.getFreshness(indexedIdentity)).resolves.toEqual({
         status: "current",
@@ -163,9 +167,9 @@ export function runSessionIndexContract(
       const result = await finishCompleted(
         fixture.index,
         indexRun,
-        counts({ discovered: 2, updated: 2, removed: 1 }),
+        counts({ discovered: 2, updated: 2, missing: 1 }),
       );
-      expect(result.items).toEqual([{ identity: indexedIdentity, outcome: "removed" }]);
+      expect(result.items).toEqual([{ identity: indexedIdentity, outcome: "missing" }]);
     } finally {
       await fixture.close();
     }
@@ -274,6 +278,7 @@ export function entry(
     },
     content: [
       {
+        kind: "text",
         ordinal: 0,
         text,
         contentHash: hashContent(text),
@@ -291,7 +296,7 @@ export function counts(overrides: Partial<IndexRunCounts> = {}): IndexRunCounts 
     unchanged: 0,
     updated: 0,
     failed: 0,
-    removed: 0,
+    missing: 0,
     stale: 0,
     ...overrides,
   };

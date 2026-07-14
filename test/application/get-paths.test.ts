@@ -10,9 +10,10 @@ import type { IndexState } from "../../src/domain/index-state.ts";
 
 const paths: IndexPaths = {
   directory: "/cache/sessions",
-  database: "/cache/sessions/index.sqlite3",
-  wal: "/cache/sessions/index.sqlite3-wal",
-  shm: "/cache/sessions/index.sqlite3-shm",
+  scratch: "/cache/sessions/.scratch",
+  database: "/cache/sessions/sessions.sqlite3",
+  wal: "/cache/sessions/sessions.sqlite3-wal",
+  shm: "/cache/sessions/sessions.sqlite3-shm",
 };
 
 describe("getPaths", () => {
@@ -87,19 +88,21 @@ describe("getPaths", () => {
       expect(inspector.inspect).toHaveBeenCalledOnce();
       expect(inspector.inspect).toHaveBeenCalledWith(paths);
       expect(report).toEqual({
-        schemaVersion: 1,
+        schemaVersion: 2,
         command: "paths",
-        index: {
+        library: {
           ...paths,
           initialized: state.initialized,
           state: state.status,
           schemaVersion: state.schemaVersion,
           supportedSchemaVersion: state.supportedSchemaVersion,
         },
+        sources: [],
       });
-      expect(Object.keys(report)).toEqual(["schemaVersion", "command", "index"]);
-      expect(Object.keys(report.index)).toEqual([
+      expect(Object.keys(report)).toEqual(["schemaVersion", "command", "library", "sources"]);
+      expect(Object.keys(report.library)).toEqual([
         "directory",
+        "scratch",
         "database",
         "wal",
         "shm",
@@ -131,7 +134,7 @@ describe("getPaths", () => {
     };
 
     await expect(getPaths(paths, lifecycle)).resolves.toMatchObject({
-      index: { initialized: false, state: "uninitialized" },
+      library: { initialized: false, state: "uninitialized" },
     });
     expect(lifecycle.openReader).not.toHaveBeenCalled();
     expect(lifecycle.openWriter).not.toHaveBeenCalled();

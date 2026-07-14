@@ -9,6 +9,7 @@ import { verifySourceInputFingerprint } from "../../src/application/source-input
 import type {
   DiscoveredSession,
   SessionSource,
+  SourceDiscoveryWorkspace,
   SourceInputDescriptor,
 } from "../../src/application/ports/session-source.ts";
 import { formatSessionIdentity, sameSessionIdentity } from "../../src/domain/session-identity.ts";
@@ -21,25 +22,34 @@ export type SessionSourceContractScenario =
   | "malformed"
   | "unsupported-format";
 
+export type SourceInputOwnership = "live" | "snapshot-owned";
+
 export interface ExpectedSourceInput {
   readonly identity: SessionIdentity;
   readonly inputIndex: number;
   readonly descriptor: Pick<SourceInputDescriptor, "role" | "locator">;
+  readonly ownership: SourceInputOwnership;
 }
 
 export interface SessionSourceContractFixture {
   readonly source: SessionSource;
+  readonly discoveryWorkspace: SourceDiscoveryWorkspace;
   readonly sourceInstance: SourceInstance;
   readonly identities: readonly SessionIdentity[];
   readonly primaryIdentity: SessionIdentity;
   readonly missingMetadataIdentity: SessionIdentity;
   readonly repeatedText: string;
+  readonly repeatedTextProvenance: Readonly<{
+    origin: SessionDocument["entries"][number]["content"][number]["origin"];
+    originConfidence: SessionDocument["entries"][number]["content"][number]["originConfidence"];
+  }>;
   readonly expectedInputs: readonly ExpectedSourceInput[];
   readonly sensitiveValues: readonly string[];
+  readonly failureSensitiveValues?: readonly string[];
   snapshotSource(): string;
   contentReadCount(): number;
-  mutateInput(identity: SessionIdentity, inputIndex: number): void;
-  mutateDuringNextRead(identity: SessionIdentity, inputIndex: number): void;
+  mutateInput(identity: SessionIdentity, inputIndex: number): void | Promise<void>;
+  mutateDuringNextRead(identity: SessionIdentity, inputIndex: number): void | Promise<void>;
   reverseDiscoveryOrder(): void;
   dispose(): Promise<void>;
 }
@@ -75,10 +85,10 @@ export function registerSessionSourceContract(
       "reports and types a %s source",
       async (scenario) => {
         await withFixture(createFixture, scenario, async (fixture) => {
-          const error = await captureSourceFailure(() => discover(fixture.source));
+          const error = await captureSourceFailure(() => discover(fixture));
 
           expect(error.failure.kind).toBe(scenario);
-          expectSafeFailure(error, fixture.sensitiveValues);
+          expectSafeFailureForFixture(error, fixture);
         });
       },
     );
@@ -86,9 +96,9 @@ export function registerSessionSourceContract(
     test("discovers deterministic candidates with complete aggregate fingerprints", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {
         const before = fixture.snapshotSource();
-        const first = await discover(fixture.source);
+        const first = await discover(fixture);
         fixture.reverseDiscoveryOrder();
-        const second = await discover(fixture.source);
+        const second = await discover(fixture);
 
         expect(candidateMap(second)).toEqual(candidateMap(first));
         expect(first).toHaveLength(fixture.identities.length);
@@ -109,13 +119,14 @@ export function registerSessionSourceContract(
     });
 
     test("invalidates the aggregate when any complete input changes", async () => {
-      const expectedInputs = await loadExpectedInputs(createFixture);
+      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const expectedInput of expectedInputs) {
+      for (const key of expectedInputKeys) {
         await withFixture(createFixture, "ready", async (fixture) => {
-          const before = requireCandidate(await discover(fixture.source), expectedInput.identity);
-          fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
-          const after = requireCandidate(await discover(fixture.source), expectedInput.identity);
+          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+          const before = requireCandidate(await discover(fixture), expectedInput.identity);
+          await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
+          const after = requireCandidate(await discover(fixture), expectedInput.identity);
 
           expect(after.aggregateFingerprint).not.toEqual(before.aggregateFingerprint);
           expect(after.inputs[expectedInput.inputIndex]?.fingerprint).not.toBe(
@@ -132,7 +143,7 @@ export function registerSessionSourceContract(
     test("reads deterministic canonical documents independent of candidate order", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {
         const before = fixture.snapshotSource();
-        const candidates = await discover(fixture.source);
+        const candidates = await discover(fixture);
         const first = await readAll(fixture.source, candidates);
         const second = await readAll(fixture.source, [...candidates].reverse());
 
@@ -141,53 +152,63 @@ export function registerSessionSourceContract(
       });
     });
 
-    test("rejects every input changed before read without returning a document", async () => {
-      const expectedInputs = await loadExpectedInputs(createFixture);
+    test("applies each input's ownership when it changes before read", async () => {
+      expect.hasAssertions();
+      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const expectedInput of expectedInputs) {
+      for (const key of expectedInputKeys) {
         await withFixture(createFixture, "ready", async (fixture) => {
-          const candidate = requireCandidate(
-            await discover(fixture.source),
-            expectedInput.identity,
+          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+          const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
+          const frozenDocument = await readSessionDocument(fixture.source, candidate);
+          await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
+          await ownershipAssertions[expectedInput.ownership](
+            fixture,
+            expectedInput,
+            candidate,
+            frozenDocument,
           );
-          fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
-          const error = await captureSourceFailure(() =>
-            readSessionDocument(fixture.source, candidate),
-          );
-
-          expect(error.failure.kind).toBe("source-changed");
-          expectSafeFailure(error, fixture.sensitiveValues);
         });
       }
     });
 
-    test("rejects every input changed after it was consumed", async () => {
-      const expectedInputs = await loadExpectedInputs(createFixture);
+    test("applies each input's ownership when it changes during read", async () => {
+      expect.hasAssertions();
+      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const expectedInput of expectedInputs) {
+      for (const key of expectedInputKeys) {
         await withFixture(createFixture, "ready", async (fixture) => {
-          const candidate = requireCandidate(
-            await discover(fixture.source),
-            expectedInput.identity,
+          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+          const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
+          const frozenDocument = await readSessionDocument(fixture.source, candidate);
+          await fixture.mutateDuringNextRead(expectedInput.identity, expectedInput.inputIndex);
+          await ownershipAssertions[expectedInput.ownership](
+            fixture,
+            expectedInput,
+            candidate,
+            frozenDocument,
           );
-          fixture.mutateDuringNextRead(expectedInput.identity, expectedInput.inputIndex);
-          const error = await captureSourceFailure(() =>
-            readSessionDocument(fixture.source, candidate),
-          );
-
-          expect(error.failure.kind).toBe("source-changed");
-          expectSafeFailure(error, fixture.sensitiveValues);
         });
       }
     });
 
     test("preserves missing metadata and unknown provenance without recurrence inference", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {
-        const documents = await readAll(fixture.source, await discover(fixture.source));
+        const documents = await readAll(fixture.source, await discover(fixture));
         const missing = requireDocument(documents, fixture.missingMetadataIdentity);
         const repeatedSegments = documents.flatMap((document) =>
           document.entries.flatMap((entry) =>
-            entry.content.filter((segment) => segment.text === fixture.repeatedText),
+            entry.content.filter(
+              (segment) => segment.kind === "text" && segment.text === fixture.repeatedText,
+            ),
+          ),
+        );
+        const unknownProvenanceSegments = documents.flatMap((document) =>
+          document.entries.flatMap((entry) =>
+            entry.content.filter(
+              ({ origin, originConfidence }) =>
+                origin === "unknown" && originConfidence === "unknown",
+            ),
           ),
         );
 
@@ -198,10 +219,8 @@ export function registerSessionSourceContract(
         expect(repeatedSegments).toHaveLength(2);
         expect(
           repeatedSegments.map(({ origin, originConfidence }) => ({ origin, originConfidence })),
-        ).toEqual([
-          { origin: "unknown", originConfidence: "unknown" },
-          { origin: "unknown", originConfidence: "unknown" },
-        ]);
+        ).toEqual([fixture.repeatedTextProvenance, fixture.repeatedTextProvenance]);
+        expect(unknownProvenanceSegments.length).toBeGreaterThan(0);
       });
     });
 
@@ -209,16 +228,13 @@ export function registerSessionSourceContract(
       "returns a safe typed %s read failure",
       async (scenario) => {
         await withFixture(createFixture, scenario, async (fixture) => {
-          const candidate = requireCandidate(
-            await discover(fixture.source),
-            fixture.primaryIdentity,
-          );
+          const candidate = requireCandidate(await discover(fixture), fixture.primaryIdentity);
           const error = await captureSourceFailure(() =>
             readSessionDocument(fixture.source, candidate),
           );
 
           expect(error.failure.kind).toBe(scenario);
-          expectSafeFailure(error, fixture.sensitiveValues);
+          expectSafeFailureForFixture(error, fixture);
         });
       },
     );
@@ -238,25 +254,45 @@ async function withFixture(
   }
 }
 
-async function discover(source: SessionSource): Promise<readonly DiscoveredSession[]> {
+async function discover(
+  fixture: SessionSourceContractFixture,
+): Promise<readonly DiscoveredSession[]> {
   const candidates: DiscoveredSession[] = [];
-  for await (const candidate of source.discover()) candidates.push(candidate);
+  for await (const candidate of fixture.source.discover(fixture.discoveryWorkspace)) {
+    candidates.push(candidate);
+  }
   return candidates;
 }
 
-async function loadExpectedInputs(
+interface ExpectedSourceInputKey {
+  readonly nativeId: string;
+  readonly inputIndex: number;
+}
+
+async function loadExpectedInputKeys(
   createFixture: SessionSourceContractFactory,
-): Promise<readonly ExpectedSourceInput[]> {
+): Promise<readonly ExpectedSourceInputKey[]> {
   const fixture = await createFixture("ready");
   try {
     return fixture.expectedInputs.map((input) => ({
-      identity: input.identity,
+      nativeId: input.identity.nativeId,
       inputIndex: input.inputIndex,
-      descriptor: input.descriptor,
     }));
   } finally {
     await fixture.dispose();
   }
+}
+
+function requireExpectedInput(
+  inputs: readonly ExpectedSourceInput[],
+  key: ExpectedSourceInputKey,
+): ExpectedSourceInput {
+  const input = inputs.find(
+    (candidate) =>
+      candidate.identity.nativeId === key.nativeId && candidate.inputIndex === key.inputIndex,
+  );
+  if (input === undefined) throw new Error("Expected contract input");
+  return input;
 }
 
 async function readAll(
@@ -329,6 +365,62 @@ function expectSafeFailure(error: SourceFailureError, sensitiveValues: readonly 
     expect(error.message).not.toContain(sensitiveValue);
     expect(JSON.stringify(error.failure)).not.toContain(sensitiveValue);
   }
+}
+
+function expectSafeFailureForFixture(
+  error: SourceFailureError,
+  fixture: SessionSourceContractFixture,
+): void {
+  expectSafeFailure(error, [...fixture.sensitiveValues, ...(fixture.failureSensitiveValues ?? [])]);
+}
+
+type OwnershipAssertion = (
+  fixture: SessionSourceContractFixture,
+  expectedInput: ExpectedSourceInput,
+  candidate: DiscoveredSession,
+  frozenDocument: SessionDocument,
+) => Promise<void>;
+
+const ownershipAssertions: Readonly<Record<SourceInputOwnership, OwnershipAssertion>> = {
+  live: expectLiveInputChange,
+  "snapshot-owned": expectSnapshotOwnedInputChange,
+};
+
+async function expectLiveInputChange(
+  fixture: SessionSourceContractFixture,
+  _expectedInput: ExpectedSourceInput,
+  candidate: DiscoveredSession,
+): Promise<void> {
+  const error = await captureSourceFailure(() => readSessionDocument(fixture.source, candidate));
+  expect(error.failure.kind).toBe("source-changed");
+  expectSafeFailureForFixture(error, fixture);
+}
+
+async function expectSnapshotOwnedInputChange(
+  fixture: SessionSourceContractFixture,
+  expectedInput: ExpectedSourceInput,
+  candidate: DiscoveredSession,
+  frozenDocument: SessionDocument,
+): Promise<void> {
+  await expect(readSessionDocument(fixture.source, candidate)).resolves.toEqual(frozenDocument);
+  await expectSnapshotChangeOnNextDiscovery(fixture, expectedInput, candidate);
+}
+
+async function expectSnapshotChangeOnNextDiscovery(
+  fixture: SessionSourceContractFixture,
+  expectedInput: ExpectedSourceInput,
+  staleCandidate: DiscoveredSession,
+): Promise<void> {
+  const refreshed = requireCandidate(await discover(fixture), expectedInput.identity);
+
+  expect(refreshed.inputs[expectedInput.inputIndex]?.fingerprint).not.toBe(
+    staleCandidate.inputs[expectedInput.inputIndex]?.fingerprint,
+  );
+  const error = await captureSourceFailure(() =>
+    readSessionDocument(fixture.source, staleCandidate),
+  );
+  expect(error.failure.kind).toBe("source-changed");
+  expectSafeFailureForFixture(error, fixture);
 }
 
 async function captureSourceFailure(action: () => Promise<unknown>): Promise<SourceFailureError> {

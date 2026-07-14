@@ -2,6 +2,7 @@ import type {
   DiscoveredSession,
   SelectedSessionSource,
   SessionSource,
+  SourceDiscoveryWorkspace,
   SourceProbe,
 } from "../../src/application/ports/session-source.ts";
 import { SourceFailureError, type SourceFailure } from "../../src/application/source-failure.ts";
@@ -14,6 +15,7 @@ export interface FakeIndexingSource {
   readonly adapter: SessionSource;
   readonly selected: SelectedSessionSource;
   readonly readNativeIds: readonly string[];
+  readonly discoveryWorkspaces: readonly SourceDiscoveryWorkspace[];
   candidate(nativeId: string, revision?: string, adapterVersion?: string): DiscoveredSession;
   setDiscovery(candidates: readonly DiscoveredSession[]): void;
   failDiscovery(error: unknown, afterCandidates?: number): void;
@@ -35,6 +37,7 @@ export function createFakeIndexingSource(
   const documents = new Map<string, SessionDocument>();
   const readFailures = new Map<string, SourceFailure["kind"]>();
   const readNativeIds: string[] = [];
+  const discoveryWorkspaces: SourceDiscoveryWorkspace[] = [];
 
   const adapter: SessionSource = {
     kind: instance.kind,
@@ -42,7 +45,8 @@ export function createFakeIndexingSource(
       if (hasProbeFailure) throw probeFailure;
       return probe;
     },
-    async *discover() {
+    async *discover(workspace) {
+      discoveryWorkspaces.push(workspace);
       for (const [index, candidate] of candidates.entries()) {
         if (discoveryFailure !== undefined && index === discoveryFailure.after) {
           throw discoveryFailure.error;
@@ -69,6 +73,7 @@ export function createFakeIndexingSource(
     adapter,
     selected,
     readNativeIds,
+    discoveryWorkspaces,
     candidate(nativeId, revision = "revision-1", adapterVersion = "synthetic-v1") {
       return createDiscoveredSession({
         identity: { source: instance, nativeId },

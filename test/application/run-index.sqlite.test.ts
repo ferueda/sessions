@@ -50,7 +50,7 @@ describe("runIndex with SQLite", () => {
       unchanged: 0,
       updated: 2,
       failed: 0,
-      removed: 0,
+      missing: 0,
       stale: 0,
     });
     expect(source.readNativeIds).toEqual(["Alpha", "zeta"]);
@@ -60,7 +60,7 @@ describe("runIndex with SQLite", () => {
       unchanged: 2,
       updated: 0,
       failed: 0,
-      removed: 0,
+      missing: 0,
       stale: 0,
     });
   });
@@ -94,7 +94,7 @@ describe("runIndex with SQLite", () => {
     const recovered = await index(lifecycle, paths, source.selected);
 
     expect(refreshed.counts.updated).toBe(1);
-    expect(failed.counts).toMatchObject({ failed: 1, stale: 1, removed: 0 });
+    expect(failed.counts).toMatchObject({ failed: 1, stale: 1, missing: 0 });
     expect(source.readNativeIds).toHaveLength(readsBeforeRecovery);
     expect(recovered.counts).toMatchObject({ unchanged: 1, failed: 0 });
     const currentReader = await lifecycle.openReader(paths);
@@ -135,7 +135,7 @@ describe("runIndex with SQLite", () => {
     await currentReader.close();
   });
 
-  test("re-reads an unchanged revision after removal and reports the durable removal", async () => {
+  test("retains and restores an unchanged revision after provider disappearance", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
     const source = createFakeIndexingSource();
@@ -145,23 +145,23 @@ describe("runIndex with SQLite", () => {
     await index(lifecycle, paths, source.selected);
 
     source.setDiscovery([]);
-    const removed = await index(lifecycle, paths, source.selected);
+    const missing = await index(lifecycle, paths, source.selected);
     source.setDiscovery([candidate]);
     const restored = await index(lifecycle, paths, source.selected);
 
-    expect(removed.sources[0]).toMatchObject({
-      counts: { removed: 1 },
-      items: [{ identity, outcome: "removed" }],
+    expect(missing.sources[0]).toMatchObject({
+      counts: { missing: 1 },
+      items: [{ identity, outcome: "missing" }],
       omittedItemCount: 0,
     });
-    expect(restored.counts).toMatchObject({ discovered: 1, updated: 1, unchanged: 0 });
-    expect(source.readNativeIds).toEqual(["session", "session"]);
+    expect(restored.counts).toMatchObject({ discovered: 1, updated: 0, unchanged: 1 });
+    expect(source.readNativeIds).toEqual(["session"]);
     const reader = await lifecycle.openReader(paths);
     await expect(reader.sessions.getDocument(identity)).resolves.toBeDefined();
     await reader.close();
   });
 
-  test("keeps canonical content through invalid scans and removes it on a later complete scan", async () => {
+  test("keeps canonical content through invalid and complete missing scans", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
     const source = createFakeIndexingSource();
@@ -192,7 +192,7 @@ describe("runIndex with SQLite", () => {
           unchanged: 0,
           updated: 0,
           failed: 0,
-          removed: 0,
+          missing: 0,
           stale: 0,
         },
       });
@@ -205,10 +205,15 @@ describe("runIndex with SQLite", () => {
     }
 
     source.setDiscovery([]);
-    const removed = await index(lifecycle, paths, source.selected);
-    expect(removed.counts.removed).toBe(1);
+    const missing = await index(lifecycle, paths, source.selected);
+    expect(missing.counts.missing).toBe(1);
     const reader = await lifecycle.openReader(paths);
-    await expect(reader.sessions.getDocument(identity)).resolves.toBeUndefined();
+    await expect(reader.sessions.getDocument(identity)).resolves.toMatchObject({
+      title: "retained evidence",
+    });
+    await expect(reader.sessions.getSummary(identity)).resolves.toMatchObject({
+      sourceState: "missing",
+    });
     await reader.close();
   });
 
@@ -238,7 +243,7 @@ describe("runIndex with SQLite", () => {
     await reader.close();
   });
 
-  test("reconciles removals only within the exact source instance", async () => {
+  test("reconciles missing state only within the exact source instance", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
     const first = createFakeIndexingSource({ kind: "synthetic", instanceId: "first" });
@@ -258,11 +263,11 @@ describe("runIndex with SQLite", () => {
     const report = await index(lifecycle, paths, first.selected);
 
     expect(report.sources[0]).toMatchObject({
-      counts: { removed: 1 },
-      items: [{ identity: firstIdentity, outcome: "removed" }],
+      counts: { missing: 1 },
+      items: [{ identity: firstIdentity, outcome: "missing" }],
     });
     const reader = await lifecycle.openReader(paths);
-    await expect(reader.sessions.getDocument(firstIdentity)).resolves.toBeUndefined();
+    await expect(reader.sessions.getDocument(firstIdentity)).resolves.toBeDefined();
     await expect(reader.sessions.getDocument(secondIdentity)).resolves.toBeDefined();
     await reader.close();
   });
@@ -280,8 +285,14 @@ async function fixturePaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-run-index-"));
   temporaryDirectories.push(root);
   const directory = path.join(root, "cache");
-  const database = path.join(directory, "index.sqlite3");
-  return { directory, database, wal: `${database}-wal`, shm: `${database}-shm` };
+  const database = path.join(directory, "sessions.sqlite3");
+  return {
+    directory,
+    scratch: path.join(directory, ".scratch"),
+    database,
+    wal: `${database}-wal`,
+    shm: `${database}-shm`,
+  };
 }
 
 function clock() {

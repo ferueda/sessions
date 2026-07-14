@@ -46,6 +46,7 @@ export class IndexPathSecurityError extends Error {
 export function assertCanonicalIndexPaths(paths: IndexPaths): void {
   if (
     !path.isAbsolute(paths.directory) ||
+    !path.isAbsolute(paths.scratch) ||
     !path.isAbsolute(paths.database) ||
     !path.isAbsolute(paths.wal) ||
     !path.isAbsolute(paths.shm)
@@ -53,9 +54,10 @@ export function assertCanonicalIndexPaths(paths: IndexPaths): void {
     throw new TypeError("SQLite index paths must be absolute");
   }
   const directory = path.resolve(paths.directory);
-  const database = path.join(directory, "index.sqlite3");
+  const database = path.join(directory, "sessions.sqlite3");
 
   if (
+    path.resolve(paths.scratch) !== path.join(directory, ".scratch") ||
     path.resolve(paths.database) !== database ||
     path.resolve(paths.wal) !== `${database}-wal` ||
     path.resolve(paths.shm) !== `${database}-shm`

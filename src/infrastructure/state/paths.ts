@@ -3,7 +3,7 @@ import path from "node:path";
 import type { IndexPaths } from "../../application/ports/index-lifecycle.ts";
 
 export type StatePathErrorCode =
-  | "invalid-cache-override"
+  | "invalid-data-override"
   | "invalid-home-directory"
   | "invalid-local-app-data"
   | "missing-local-app-data"
@@ -27,15 +27,16 @@ export interface ResolveIndexPathsOptions {
 
 export function resolveIndexPaths(options: ResolveIndexPathsOptions): IndexPaths {
   const pathImplementation = implementationFor(options.platform);
-  const override = options.env.SESSIONS_CACHE_DIR;
+  const override = options.env.SESSIONS_DATA_DIR;
   const directory =
     override === undefined
       ? resolveDefaultDirectory(options, pathImplementation)
       : resolveOverride(override, options.platform, pathImplementation);
-  const database = pathImplementation.join(directory, "index.sqlite3");
+  const database = pathImplementation.join(directory, "sessions.sqlite3");
 
   return {
     directory,
+    scratch: pathImplementation.join(directory, ".scratch"),
     database,
     wal: `${database}-wal`,
     shm: `${database}-shm`,
@@ -63,10 +64,7 @@ function resolveOverride(
   pathImplementation: typeof path.posix,
 ): string {
   if (!isFullyQualified(override, platform, pathImplementation)) {
-    throw new StatePathError(
-      "invalid-cache-override",
-      "SESSIONS_CACHE_DIR must be an absolute path",
-    );
+    throw new StatePathError("invalid-data-override", "SESSIONS_DATA_DIR must be an absolute path");
   }
 
   return pathImplementation.normalize(override);
@@ -81,16 +79,16 @@ function resolveDefaultDirectory(
       return pathImplementation.join(
         requireAbsoluteHome(options.homeDirectory),
         "Library",
-        "Caches",
+        "Application Support",
         "sessions",
       );
     case "linux": {
-      const xdgCache = options.env.XDG_CACHE_HOME;
-      const cacheRoot =
-        xdgCache !== undefined && pathImplementation.isAbsolute(xdgCache)
-          ? xdgCache
-          : pathImplementation.join(requireAbsoluteHome(options.homeDirectory), ".cache");
-      return pathImplementation.join(cacheRoot, "sessions");
+      const xdgData = options.env.XDG_DATA_HOME;
+      const dataRoot =
+        xdgData !== undefined && pathImplementation.isAbsolute(xdgData)
+          ? xdgData
+          : pathImplementation.join(requireAbsoluteHome(options.homeDirectory), ".local", "share");
+      return pathImplementation.join(dataRoot, "sessions");
     }
     case "win32": {
       const localAppData = options.env.LOCALAPPDATA;
