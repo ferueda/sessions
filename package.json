@@ -79,7 +79,7 @@
     "*.{md,json,yml,yaml}": "pnpm exec oxfmt --write"
   },
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=24.16.0"
   },
   "packageManager": "pnpm@11.10.0"
 }

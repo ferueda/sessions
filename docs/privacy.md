@@ -9,7 +9,7 @@ Sessions handles sensitive local history. Privacy behavior is a product contract
 
 The current CLI exposes help, version, `doctor`, and `paths`. `paths` reports only Sessions-owned index locations and existing state. `doctor` checks Node.js, probes SQLite FTS5 and its per-table secure-delete capability in memory, and inspects the existing index state. An uninitialized index is healthy. Neither command creates directories, initializes or migrates a database, locates provider histories, uses telemetry, or accesses the network.
 
-An internal writer lifecycle is available to future explicit indexing commands and is exercised by tests. It currently creates only migration metadata; there are no canonical content tables, source adapters, or public indexing command.
+An internal writer lifecycle and canonical repository are available to future explicit indexing commands and are exercised by tests. The repository stores validated provider-neutral session documents, freshness state, bounded run diagnostics, and derived FTS data. There are no source adapters or public indexing command, so the current CLI still cannot populate transcript content.
 
 ## V1 promises
 
@@ -38,7 +38,7 @@ The index is rebuildable derived data. Clearing it does not alter provider histo
 
 ## Deletion limitations
 
-The current writer enables SQLite core `secure_delete`. Doctor reports whether the runtime accepts FTS5's per-table secure-delete command, but M2 has no persistent FTS table on which to apply it; the canonical content schema arrives later. V1 will enable the setting for each FTS table when supported.
+The writer enables SQLite core `secure_delete`. It also enables FTS5's persistent per-table secure-delete setting on the canonical content index when the runtime supports it; a supported runtime that cannot configure the real table fails writer opening. Doctor reports runtime support using an in-memory capability probe.
 
 These settings reduce recoverable deleted content inside SQLite pages; they do not provide encryption, guaranteed physical overwrite, or forensic secure erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain copies.
 

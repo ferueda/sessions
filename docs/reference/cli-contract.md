@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current M2 behavior plus accepted V1 semantics
+- Status: current M3 behavior plus accepted V1 semantics
 - Last updated: 2026-07-13
 
 Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
@@ -31,10 +31,10 @@ The bare command prints help. `doctor` performs read-only Node.js, in-memory SQL
       "id": "node-runtime",
       "label": "Node.js runtime",
       "ok": true,
-      "summary": "Node.js 26.4.0 satisfies >=24.15.0",
+      "summary": "Node.js 26.4.0 satisfies >=24.16.0",
       "details": {
         "version": "26.4.0",
-        "minimumVersion": "24.15.0"
+        "minimumVersion": "24.16.0"
       }
     }
   ]
@@ -63,7 +63,7 @@ All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed c
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 1
+    "supportedSchemaVersion": 2
   }
 }
 ```

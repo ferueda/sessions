@@ -4,7 +4,10 @@ import type {
   DiscoveredSession,
   SessionSource,
 } from "../../src/application/ports/session-source.ts";
-import { readSessionDocument } from "../../src/application/read-session-document.ts";
+import {
+  readSessionDocument,
+  readSessionReplacement,
+} from "../../src/application/read-session-document.ts";
 import { SourceFailureError } from "../../src/application/source-failure.ts";
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
@@ -22,6 +25,40 @@ describe("readSessionDocument", () => {
     const document = await readSessionDocument(sourceReturning(validDocument()), candidate);
 
     expect(document).toEqual(validDocument());
+  });
+
+  test("returns one admitted replacement snapshot even when the candidate mutates during read", async () => {
+    const discovered = discoveredSession();
+    const candidate = {
+      ...discovered,
+      identity: {
+        source: { ...discovered.identity.source },
+        nativeId: discovered.identity.nativeId,
+      },
+      inputs: discovered.inputs.map((input) => ({
+        ...input,
+        locator: { ...input.locator },
+      })),
+      aggregateFingerprint: { ...discovered.aggregateFingerprint },
+    };
+    const source = sourceReturning(validDocument(), {
+      onRead() {
+        candidate.identity.nativeId = "mutated-session";
+        candidate.aggregateFingerprint.digest = "0".repeat(64);
+        candidate.adapterVersion = "mutated-adapter";
+      },
+    });
+
+    const replacement = await readSessionReplacement(source, candidate);
+
+    expect(replacement.observation).toMatchObject({
+      identity,
+      revision: {
+        adapterVersion: "1",
+        aggregateFingerprint: discovered.aggregateFingerprint,
+      },
+    });
+    expect(replacement.document).toEqual(validDocument());
   });
 
   test("rejects a candidate owned by another adapter before reading", async () => {
@@ -127,6 +164,27 @@ describe("readSessionDocument", () => {
     expect(JSON.stringify(error.failure)).not.toContain("private getter payload");
   });
 
+  test("rejects accessor-bearing candidates without invoking or exposing their getters", async () => {
+    const candidate = { ...discoveredSession() };
+    let getterCalls = 0;
+    Object.defineProperty(candidate, "identity", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("private candidate getter payload");
+      },
+    });
+
+    const error = await captureFailure(
+      readSessionDocument(sourceReturning(validDocument()), candidate),
+    );
+
+    expect(error.failure).toMatchObject({ kind: "malformed" });
+    expect(getterCalls).toBe(0);
+    expect(error.message).not.toContain("private candidate getter payload");
+    expect(JSON.stringify(error.failure)).not.toContain("private candidate getter payload");
+  });
+
   test("preserves a typed adapter failure", async () => {
     const expected = new SourceFailureError({
       kind: "unsupported-format",
@@ -218,7 +276,7 @@ function sourceReturning(
   };
 }
 
-async function captureFailure(promise: Promise<SessionDocument>): Promise<SourceFailureError> {
+async function captureFailure(promise: Promise<unknown>): Promise<SourceFailureError> {
   try {
     await promise;
   } catch (error) {

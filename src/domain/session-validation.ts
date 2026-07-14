@@ -33,6 +33,7 @@ export type SessionValidationIssueCode =
   | "invalid-object"
   | "invalid-ordinal"
   | "invalid-source-metadata"
+  | "invalid-string"
   | "invalid-text"
   | "invalid-timestamp"
   | "missing-property"
@@ -445,9 +446,15 @@ function requireProperty(
 }
 
 function stringAt(value: unknown, path: string, collector: IssueCollector): string | undefined {
-  if (typeof value === "string") return value;
-  addIssue(collector, "expected-string", path);
-  return undefined;
+  if (typeof value !== "string") {
+    addIssue(collector, "expected-string", path);
+    return undefined;
+  }
+  if (!value.isWellFormed()) {
+    addIssue(collector, "invalid-string", path);
+    return undefined;
+  }
+  return value;
 }
 
 function optionalStringAt(
@@ -461,13 +468,15 @@ function optionalStringAt(
 }
 
 function textAt(value: unknown, path: string, collector: IssueCollector): string | undefined {
-  const text = stringAt(value, path, collector);
-  if (text === undefined) return undefined;
-  if (!text.isWellFormed()) {
+  if (typeof value !== "string") {
+    addIssue(collector, "expected-string", path);
+    return undefined;
+  }
+  if (!value.isWellFormed()) {
     addIssue(collector, "invalid-text", path);
     return undefined;
   }
-  return text;
+  return value;
 }
 
 function optionalTimestampAt(
@@ -570,11 +579,17 @@ function sourceMetadataAt(
 
   const entries: [string, string][] = [];
   for (const key of snapshot.keys) {
-    if (typeof key !== "string" || typeof snapshot.record[key] !== "string") {
+    const metadataValue = snapshot.record[key];
+    if (
+      typeof key !== "string" ||
+      !key.isWellFormed() ||
+      typeof metadataValue !== "string" ||
+      !metadataValue.isWellFormed()
+    ) {
       addIssue(collector, "invalid-source-metadata", path);
       return undefined;
     }
-    entries.push([key, snapshot.record[key]]);
+    entries.push([key, metadataValue]);
   }
   return Object.fromEntries(entries);
 }

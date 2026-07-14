@@ -30,7 +30,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.4.0
         with:
-          node-version: 24.15.0
+          node-version: 24.16.0
 
       - name: Detect documentation-only changes
         id: scope
@@ -67,7 +67,7 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true' || matrix.os == 'ubuntu-latest'
         uses: actions/setup-node@v6.4.0
         with:
-          node-version: 24.15.0
+          node-version: 24.16.0
           cache: pnpm
 
       - name: Install dependencies

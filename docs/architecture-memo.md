@@ -10,7 +10,7 @@ Build Sessions as a new local-first product, using the Harness implementation as
 
 The core owns a provider-neutral session model, indexing lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; the canonical index is the only source for list, search, show, and export.
 
-The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.15 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
+The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
 
 ## Context
 
@@ -74,16 +74,21 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-The implemented foundation through M2 uses this concrete layout:
+The implemented foundation through M3 uses this concrete layout:
 
 ```text
 src/
-  domain/session.ts
-  domain/index-state.ts
+  domain/
+    session.ts
+    session-validation.ts
+    index-state.ts
   application/
     ports/session-source.ts
+    ports/session-index.ts
     ports/runtime-diagnostic.ts
     ports/index-lifecycle.ts
+    validate-session.ts
+    read-session-document.ts
     get-paths.ts
     run-doctor.ts
   infrastructure/
@@ -95,16 +100,24 @@ src/
       database.ts
       migrations.ts
       migrations/0001-bootstrap.ts
+      migrations/0002-canonical-repository.ts
       permissions.ts
       sqlite-diagnostic.ts
       fts5-security.ts
+      read-snapshot.ts
+      sqlite-session-index.ts
+      sqlite-session-document.ts
+      sqlite-session-state.ts
+      sqlite-session-transaction.ts
   cli/
     program.ts
     run.ts
   bin/sessions.ts
 ```
 
-`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them. The current SQLite migration creates metadata only; canonical content tables, repository behavior, and adapters remain future work.
+`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them.
+
+Migration 2 and the internal SQLite repository now persist and exactly reconstruct validated provider-neutral session documents, last-good and latest-observation freshness, bounded indexing-run diagnostics, collision-safe interned content, and derived FTS5 rows. Repository replacements are atomic, and snapshot readers remain non-migrating and sidecar-free. Source discovery, indexing and reconciliation orchestration, provider adapters, and public index/query commands remain planned work.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -230,9 +243,9 @@ Properties:
 
 ## Storage and search
 
-SQLite is the canonical local store. FTS5 supplies lexical search. The schema will separate source instances, sessions, relations, entries, content segments, occurrences, index runs, and migration metadata while using FTS shadow tables only as derived search structures.
+SQLite is the canonical local store. FTS5 supplies lexical search. The M3 schema separates source instances, sessions, relations, entries, content values, occurrences, index runs, and migration metadata while using FTS shadow tables only as derived search structures. Application query translation, ranking, and tokenizer tuning remain planned.
 
-Application query values—not raw FTS syntax—define search:
+Planned application query values—not raw FTS syntax—define search:
 
 - text;
 - source/source-instance;
@@ -313,7 +326,7 @@ Doctor supports human output through `sessions doctor` and JSON through `session
       "summary": "Node.js meets the minimum version",
       "details": {
         "version": "26.4.0",
-        "minimumVersion": "24.15.0"
+        "minimumVersion": "24.16.0"
       }
     }
   ]
@@ -372,7 +385,7 @@ Additional derived uses include adoption/friction analysis and persistence of un
 ## Delivery and repository guardrails
 
 - TypeScript ESM in source; compiled ESM JavaScript in the published tarball.
-- Node.js `>=24.15`; native TypeScript is a contributor convenience, never a user requirement.
+- Node.js `>=24.16`; native TypeScript is a contributor convenience, never a user requirement.
 - Intended package `@ferueda/sessions`; binary `sessions`. Scope ownership is a release gate.
 - Users install with npm-compatible tooling or invoke through `npx`; they do not need pnpm.
 - The package allowlists compiled output, the packaged skill, README, and license.
