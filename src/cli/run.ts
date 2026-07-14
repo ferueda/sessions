@@ -1,5 +1,6 @@
 import { CommanderError } from "commander";
 
+import type { PathsReport } from "../application/get-paths.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import { createProgram, OperationalExit, type CliOutput } from "./program.ts";
 
@@ -7,6 +8,7 @@ export interface CliOptions {
   readonly version: string;
   readonly output: CliOutput;
   readonly doctor: () => Promise<DoctorReport>;
+  readonly paths: () => Promise<PathsReport>;
 }
 
 export async function runCli(argv: readonly string[], options: CliOptions): Promise<number> {

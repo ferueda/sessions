@@ -26,6 +26,7 @@ describe("doctor persistence boundary", () => {
       encoding: "utf8",
       env: {
         ...process.env,
+        SESSIONS_CACHE_DIR: path.join(sandbox, "sessions-cache"),
         HOME: path.join(sandbox, "home"),
         USERPROFILE: path.join(sandbox, "home"),
         XDG_CACHE_HOME: path.join(sandbox, "cache"),
@@ -40,11 +41,19 @@ describe("doctor persistence boundary", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    const report = JSON.parse(result.stdout) as {
+      readonly checks?: readonly { readonly id?: unknown }[];
+    };
+    expect(report).toMatchObject({
       schemaVersion: 1,
       command: "doctor",
       ok: true,
     });
+    expect(report.checks?.map((check) => check.id)).toEqual([
+      "node-runtime",
+      "sqlite-fts5",
+      "index-state",
+    ]);
     await expect(readdir(sandbox, { recursive: true })).resolves.toEqual([]);
   });
 });

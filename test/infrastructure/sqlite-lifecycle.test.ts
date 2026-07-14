@@ -1,0 +1,581 @@
+import {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+
+import { afterEach, describe, expect, test } from "vitest";
+
+import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import {
+  createSqliteIndexLifecycle,
+  SqliteIndexLifecycleError,
+} from "../../src/infrastructure/sqlite/database.ts";
+import {
+  enableFts5SecureDelete,
+  Fts5UnavailableError,
+  probeFts5Security,
+} from "../../src/infrastructure/sqlite/fts5-security.ts";
+import {
+  migrationChecksum,
+  sqliteMigrations,
+  type SqliteMigration,
+} from "../../src/infrastructure/sqlite/migrations.ts";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { force: true, recursive: true })),
+  );
+});
+
+describe("SQLite index lifecycle", () => {
+  test("initializes a fresh index once and reopens it without changing history", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+
+    await expect(lifecycle.inspect(paths)).resolves.toEqual({
+      status: "uninitialized",
+      initialized: false,
+      schemaVersion: null,
+      supportedSchemaVersion: 1,
+    });
+
+    const firstWriter = await lifecycle.openWriter(paths);
+    const firstHistory = firstWriter.database
+      .prepare(
+        `SELECT version, name, checksum, applied_at
+         FROM sessions_schema_migrations`,
+      )
+      .all() as Record<string, unknown>[];
+    expect(firstHistory).toHaveLength(1);
+    expect(firstHistory[0]).toMatchObject({
+      version: 1,
+      name: "bootstrap",
+      checksum: migrationChecksum(sqliteMigrations[0]!),
+    });
+    expect(firstHistory[0]?.checksum).toMatch(/^sha256-utf8-v1:[a-f0-9]{64}$/u);
+    await firstWriter.close();
+
+    const secondWriter = await lifecycle.openWriter(paths);
+    expect(
+      secondWriter.database
+        .prepare("SELECT version, name, checksum, applied_at FROM sessions_schema_migrations")
+        .all(),
+    ).toEqual(firstHistory);
+    await secondWriter.close();
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
+      status: "ready",
+      schemaVersion: 1,
+    });
+  });
+
+  test("applies a contiguous catalog in order", async () => {
+    const paths = await fixturePaths();
+    const migrations: readonly SqliteMigration[] = [
+      sqliteMigrations[0]!,
+      {
+        version: 2,
+        name: "create_marker",
+        sql: "CREATE TABLE marker (position INTEGER NOT NULL) STRICT;",
+      },
+      {
+        version: 3,
+        name: "populate_marker",
+        sql: "INSERT INTO marker (position) VALUES (3);",
+      },
+    ];
+    const lifecycle = createSqliteIndexLifecycle({ migrations });
+
+    const writer = await lifecycle.openWriter(paths);
+    expect(
+      writer.database
+        .prepare("SELECT version, name FROM sessions_schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([
+      { version: 1, name: "bootstrap" },
+      { version: 2, name: "create_marker" },
+      { version: 3, name: "populate_marker" },
+    ]);
+    expect(writer.database.prepare("SELECT position FROM marker").get()).toEqual({
+      position: 3,
+    });
+    await writer.close();
+  });
+
+  test("rolls back a failed release, retains prior releases, and retries", async () => {
+    const paths = await fixturePaths();
+    const firstTwo: readonly SqliteMigration[] = [
+      sqliteMigrations[0]!,
+      {
+        version: 2,
+        name: "stable_release",
+        sql: "CREATE TABLE stable_release (value TEXT NOT NULL) STRICT;",
+      },
+    ];
+    const failing = [
+      ...firstTwo,
+      {
+        version: 3,
+        name: "retryable_release",
+        sql: `CREATE TABLE rolled_back (value TEXT) STRICT;
+INSERT INTO table_that_does_not_exist VALUES (1);`,
+      },
+    ] satisfies readonly SqliteMigration[];
+    const failedLifecycle = createSqliteIndexLifecycle({ migrations: failing });
+
+    const migrationFailure: unknown = await failedLifecycle.openWriter(paths).then(
+      async (unexpectedWriter) => {
+        await unexpectedWriter.close();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    expect(migrationFailure).not.toBeInstanceOf(AggregateError);
+    expect(migrationFailure).toMatchObject({
+      code: "ERR_SQLITE_ERROR",
+      message: "no such table: table_that_does_not_exist",
+    });
+    await expect(failedLifecycle.inspect(paths)).resolves.toMatchObject({
+      status: "migration-required",
+      schemaVersion: 2,
+      supportedSchemaVersion: 3,
+    });
+    const afterFailure = openReadOnly(paths.database);
+    expect(
+      afterFailure.prepare("SELECT name FROM sqlite_schema WHERE name = 'rolled_back'").get(),
+    ).toBeUndefined();
+    expect(
+      afterFailure.prepare("SELECT version FROM sessions_schema_migrations ORDER BY version").all(),
+    ).toEqual([{ version: 1 }, { version: 2 }]);
+    afterFailure.close();
+
+    const corrected = [
+      ...firstTwo,
+      {
+        version: 3,
+        name: "retryable_release",
+        sql: "CREATE TABLE recovered_release (value TEXT) STRICT;",
+      },
+    ] satisfies readonly SqliteMigration[];
+    const retryLifecycle = createSqliteIndexLifecycle({ migrations: corrected });
+    const writer = await retryLifecycle.openWriter(paths);
+    expect(
+      writer.database
+        .prepare("SELECT version FROM sessions_schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    await writer.close();
+  });
+
+  test("refuses changed checksums and newer schemas", async () => {
+    const checksumPaths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const writer = await lifecycle.openWriter(checksumPaths);
+    await writer.close();
+
+    mutateDatabase(checksumPaths.database, (database) => {
+      database
+        .prepare("UPDATE sessions_schema_migrations SET checksum = ? WHERE version = 1")
+        .run("sha256-utf8-v1:".padEnd(79, "0"));
+    });
+    await expect(lifecycle.inspect(checksumPaths)).resolves.toMatchObject({
+      status: "incompatible",
+      reason: "migration-checksum-mismatch",
+      schemaVersion: 1,
+    });
+    await expect(lifecycle.openWriter(checksumPaths)).rejects.toMatchObject({
+      state: { status: "incompatible", reason: "migration-checksum-mismatch" },
+    });
+
+    const newerPaths = await fixturePaths();
+    const newerWriter = await lifecycle.openWriter(newerPaths);
+    await newerWriter.close();
+    mutateDatabase(newerPaths.database, (database) => {
+      database
+        .prepare(
+          `INSERT INTO sessions_schema_migrations
+             (version, name, checksum, applied_at)
+           VALUES (2, 'future_release', 'sha256-utf8-v2:future', ?)`,
+        )
+        .run(new Date().toISOString());
+    });
+    await expect(lifecycle.inspect(newerPaths)).resolves.toEqual({
+      status: "newer-schema",
+      initialized: true,
+      schemaVersion: 2,
+      supportedSchemaVersion: 1,
+    });
+    await expect(lifecycle.openWriter(newerPaths)).rejects.toBeInstanceOf(
+      SqliteIndexLifecycleError,
+    );
+  });
+
+  test("inspects immutable state without creating sidecars", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const writer = await lifecycle.openWriter(paths);
+    await writer.close();
+    const beforeEntries = await readdir(paths.directory);
+    const beforeBytes = await readFile(paths.database);
+
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({ status: "ready" });
+
+    expect(await readdir(paths.directory)).toEqual(beforeEntries);
+    expect(await readFile(paths.database)).toEqual(beforeBytes);
+    await expect(stat(paths.wal)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(paths.shm)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("reports existing WAL or SHM files as recovery-required", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const writer = await lifecycle.openWriter(paths);
+    await writer.close();
+    await writeFile(paths.wal, "active-or-stale", { mode: 0o600 });
+
+    await expect(lifecycle.inspect(paths)).resolves.toEqual({
+      status: "recovery-required",
+      initialized: true,
+      schemaVersion: null,
+      supportedSchemaVersion: 1,
+    });
+    await expect(lifecycle.openWriter(paths)).rejects.toMatchObject({
+      state: { status: "recovery-required" },
+    });
+  });
+
+  test("treats a protected empty database as a recoverable pending schema", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    await writeFile(paths.database, "", { mode: 0o600 });
+    const lifecycle = createSqliteIndexLifecycle();
+
+    await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
+      status: "migration-required",
+      initialized: true,
+      schemaVersion: 0,
+    });
+    const writer = await lifecycle.openWriter(paths);
+    expect(writer.state.schemaVersion).toBe(1);
+    await writer.close();
+  });
+
+  test("rejects an existing empty migration table as invalid history", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    mutateDatabase(paths.database, (database) => {
+      database.exec(sqliteMigrations[0]!.sql);
+    });
+    await chmod(paths.database, 0o600);
+
+    await expect(createSqliteIndexLifecycle().inspect(paths)).resolves.toMatchObject({
+      status: "incompatible",
+      reason: "invalid-migration-history",
+    });
+  });
+
+  test("rejects an arbitrary SQLite database without migration history", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    mutateDatabase(paths.database, (database) => {
+      database.exec("CREATE TABLE unrelated (value TEXT) STRICT;");
+    });
+    await chmod(paths.database, 0o600);
+
+    await expect(createSqliteIndexLifecycle().inspect(paths)).resolves.toMatchObject({
+      status: "incompatible",
+      reason: "unrecognized-database",
+    });
+  });
+
+  test("configures the writer security pragmas and FTS5 capability", async () => {
+    const paths = await fixturePaths();
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    const pragma = (name: string): unknown =>
+      Object.values(writer.database.prepare(`PRAGMA ${name}`).get() ?? {})[0];
+
+    expect(pragma("journal_mode")).toBe("wal");
+    expect(pragma("foreign_keys")).toBe(1);
+    expect(pragma("secure_delete")).toBe(1);
+    expect(pragma("trusted_schema")).toBe(0);
+    expect(pragma("busy_timeout")).toBe(5_000);
+    writer.database.exec("PRAGMA writable_schema = ON");
+    expect(pragma("writable_schema")).toBe(0);
+    expect(writer.fts5Security).toMatchObject({ fts5: true });
+    expect(writer.fts5Security.sqliteVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(() => writer.database.prepare('SELECT "not a string literal"').get()).toThrow(
+      /no such column/u,
+    );
+    expect(() => writer.database.prepare("SELECT load_extension('missing')").get()).toThrow(
+      /not authorized/u,
+    );
+
+    writer.database.exec(`
+      CREATE TABLE parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE child (parent_id INTEGER REFERENCES parent(id));
+    `);
+    expect(() => writer.database.prepare("INSERT INTO child VALUES (999)").run()).toThrow(
+      /FOREIGN KEY constraint failed/u,
+    );
+    await writer.close();
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "hardens database permissions even when connection close throws",
+    async () => {
+      const paths = await fixturePaths();
+      const writer = await createSqliteIndexLifecycle().openWriter(paths);
+      writer.database.close();
+      await chmod(paths.database, 0o644);
+
+      await expect(writer.close()).rejects.toMatchObject({
+        code: "ERR_INVALID_STATE",
+        message: "database is not open",
+      });
+      expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
+      await expect(writer.close()).resolves.toBeUndefined();
+    },
+  );
+
+  test("aggregates independent close and file-hardening failures", async () => {
+    const paths = await fixturePaths();
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    writer.database.close();
+    await rm(paths.database);
+
+    const cleanupFailure: unknown = await writer.close().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(cleanupFailure).toBeInstanceOf(AggregateError);
+    expect((cleanupFailure as AggregateError).errors).toMatchObject([
+      { code: "ERR_INVALID_STATE", message: "database is not open" },
+      { code: "ENOENT" },
+    ]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "tightens owned POSIX paths and protects database sidecars",
+    async () => {
+      const paths = await fixturePaths();
+      await mkdir(paths.directory, { mode: 0o755 });
+      await writeFile(paths.database, "", { mode: 0o644 });
+      await chmod(paths.directory, 0o755);
+      await chmod(paths.database, 0o644);
+
+      const writer = await createSqliteIndexLifecycle().openWriter(paths);
+      expect((await stat(paths.directory)).mode & 0o777).toBe(0o700);
+      expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
+      expect((await stat(paths.wal)).mode & 0o777).toBe(0o600);
+      expect((await stat(paths.shm)).mode & 0o777).toBe(0o600);
+      await writer.close();
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "reports permissive POSIX state without tightening it during inspection",
+    async () => {
+      const paths = await fixturePaths();
+      await mkdir(paths.directory, { mode: 0o755 });
+      await chmod(paths.directory, 0o755);
+
+      await expect(createSqliteIndexLifecycle().inspect(paths)).resolves.toMatchObject({
+        status: "unsafe",
+        target: "directory",
+        reason: "permissions",
+      });
+      expect((await stat(paths.directory)).mode & 0o777).toBe(0o755);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "rejects symlink targets without changing neighboring provider data",
+    async () => {
+      const root = await temporaryDirectory();
+      const providerDirectory = path.join(root, "provider-history");
+      const providerFile = path.join(providerDirectory, "session.jsonl");
+      await mkdir(providerDirectory, { mode: 0o700 });
+      await writeFile(providerFile, "provider-owned\n", { mode: 0o600 });
+      const paths = indexPaths(path.join(root, "sessions"));
+      await mkdir(paths.directory, { mode: 0o700 });
+      await symlink(providerFile, paths.database);
+
+      await expect(createSqliteIndexLifecycle().inspect(paths)).resolves.toMatchObject({
+        status: "unsafe",
+        target: "database",
+        reason: "symlink",
+      });
+      await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+        state: { status: "unsafe", target: "database", reason: "symlink" },
+      });
+      expect(await readFile(providerFile, "utf8")).toBe("provider-owned\n");
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "rejects hard-linked database targets without changing their source",
+    async () => {
+      const root = await temporaryDirectory();
+      const providerFile = path.join(root, "provider-index.sqlite3");
+      await writeFile(providerFile, "", { mode: 0o600 });
+      const paths = indexPaths(path.join(root, "sessions"));
+      await mkdir(paths.directory, { mode: 0o700 });
+      await link(providerFile, paths.database);
+
+      await expect(createSqliteIndexLifecycle().inspect(paths)).resolves.toMatchObject({
+        status: "unsafe",
+        target: "database",
+        reason: "unexpected-type",
+      });
+      await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+        state: { status: "unsafe", target: "database" },
+      });
+      expect(await readFile(providerFile)).toEqual(Buffer.alloc(0));
+    },
+  );
+
+  test("keeps neighboring provider history byte-for-byte unchanged", async () => {
+    const root = await temporaryDirectory();
+    const providerDirectory = path.join(root, "provider-history");
+    const providerFile = path.join(providerDirectory, "session.jsonl");
+    await mkdir(providerDirectory, { mode: 0o700 });
+    await writeFile(providerFile, '{"provider":"owned"}\n', { mode: 0o600 });
+    const before = await readFile(providerFile);
+    const paths = indexPaths(path.join(root, "sessions"));
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    await writer.close();
+
+    expect(await readFile(providerFile)).toEqual(before);
+    expect((await readdir(root)).sort()).toEqual(["provider-history", "sessions"]);
+  });
+
+  test("rejects relative or escaping path sets before touching disk", async () => {
+    const lifecycle = createSqliteIndexLifecycle();
+    const relative = indexPaths("relative-cache");
+    await expect(lifecycle.inspect(relative)).rejects.toThrow(
+      "SQLite index paths must be absolute",
+    );
+
+    const root = await temporaryDirectory();
+    const directory = path.join(root, "sessions");
+    const database = path.join(root, "outside.sqlite3");
+    await expect(
+      lifecycle.openWriter({
+        directory,
+        database,
+        wal: `${database}-wal`,
+        shm: `${database}-shm`,
+      }),
+    ).rejects.toThrow("inside the owned state directory");
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("requires a contiguous migration catalog with unique names", () => {
+    expect(() =>
+      createSqliteIndexLifecycle({
+        migrations: [sqliteMigrations[0]!, { version: 3, name: "gap", sql: "SELECT 1;" }],
+      }),
+    ).toThrow("contiguous");
+    expect(() =>
+      createSqliteIndexLifecycle({
+        migrations: [sqliteMigrations[0]!, { version: 2, name: "bootstrap", sql: "SELECT 1;" }],
+      }),
+    ).toThrow("unique");
+  });
+});
+
+describe("FTS5 security", () => {
+  test("probes FTS5 and applies per-table secure-delete safely", () => {
+    expect(probeFts5Security()).toMatchObject({ fts5: true });
+    const database = new DatabaseSync(":memory:");
+    database.exec("CREATE VIRTUAL TABLE searchable USING fts5(content)");
+    expect(enableFts5SecureDelete(database, "searchable")).toBe(true);
+    expect(() => enableFts5SecureDelete(database, 'searchable"; DROP TABLE searchable')).toThrow(
+      "simple SQLite identifier",
+    );
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'searchable'").get(),
+    ).toBeDefined();
+    database.close();
+  });
+
+  test("reports unsupported FTS secure-delete without blocking the writer", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle({
+      fts5Probe: () => ({
+        fts5: true,
+        secureDelete: false,
+        sqliteVersion: "3.41.0",
+      }),
+    });
+
+    const writer = await lifecycle.openWriter(paths);
+    expect(writer.fts5SecureDelete).toBe(false);
+    await writer.close();
+  });
+
+  test("treats missing FTS5 as fatal before creating persistent state", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle({
+      fts5Probe() {
+        throw new Fts5UnavailableError("3.0.0");
+      },
+    });
+
+    await expect(lifecycle.openWriter(paths)).rejects.toBeInstanceOf(Fts5UnavailableError);
+    await expect(stat(paths.directory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+async function fixturePaths(): Promise<IndexPaths> {
+  const root = await temporaryDirectory();
+  return indexPaths(path.join(root, "sessions"));
+}
+
+function indexPaths(directory: string): IndexPaths {
+  const database = path.join(directory, "index.sqlite3");
+  return {
+    directory,
+    database,
+    wal: `${database}-wal`,
+    shm: `${database}-shm`,
+  };
+}
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "sessions-sqlite-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+function openReadOnly(file: string): DatabaseSync {
+  const url = pathToFileURL(file);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  return new DatabaseSync(url.href, { readOnly: true });
+}
+
+function mutateDatabase(file: string, mutate: (database: DatabaseSync) => void): void {
+  const database = new DatabaseSync(file);
+  try {
+    mutate(database);
+  } finally {
+    database.close();
+  }
+}

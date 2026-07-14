@@ -24,7 +24,7 @@ pnpm check
 | `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored |
 | Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                |
 
-The current CLI writes no user state. Future index paths and ownership are governed by [privacy](../privacy.md) and must ship with `sessions paths` plus explicit clear behavior.
+The current public CLI writes no user state. `sessions paths` resolves the platform-local `sessions` cache directory, or the exact absolute `SESSIONS_CACHE_DIR` override, without creating it. The internal writer is reserved for future explicit indexing. Index paths, ownership, and deletion limits are governed by [privacy](../privacy.md); explicit clear behavior remains planned.
 
 ## Hooks
 
@@ -34,6 +34,7 @@ The pre-commit hook formats/lints staged files and runs the full typecheck. Bypa
 
 - Wrong Node/pnpm: compare `node --version` and `pnpm --version` with `package.json`.
 - Missing FTS5: run `pnpm build` then `node dist/bin/sessions.js doctor --format json`.
+- Unexpected index path or state: run `node dist/bin/sessions.js paths --format json`; inspection does not repair or migrate it.
 - Stale build: `pnpm clean && pnpm build`.
 - Gate failure: rerun the focused script listed by the failed `pnpm check` step.
 

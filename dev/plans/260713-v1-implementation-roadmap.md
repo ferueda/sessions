@@ -21,23 +21,23 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Phase 0 is complete. The repository currently has:
+Milestones 0 through 2 are complete. The repository currently has:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
   gates behind `pnpm check`;
 - cross-platform CI and dependency updates;
-- provider-neutral session shapes and the initial `SessionSource` port;
-- a real, read-only `doctor` command for Node and in-memory SQLite/FTS5;
+- hardened provider-neutral session/source contracts and conformance fixtures;
+- platform-local Sessions state resolution plus non-mutating `paths` reporting;
+- a real, read-only `doctor` command for Node, SQLite/FTS5, and index state;
+- an internal protected SQLite writer lifecycle with checksummed migrations;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have persistent state, migrations, a canonical repository,
-indexing/reconciliation, Cursor or Codex adapters, list/search/show/export,
-structured schemas for those commands, the packaged Agent Skill, release
-automation, or the pinned Harness integration.
-
-The current domain and source-port types are a foundation, not a frozen public
-API. Milestone 1 hardens them before database or adapter code depends on them.
+It does not yet have the canonical repository/content schema,
+indexing/reconciliation, Cursor or Codex adapters, list/search/show/export, the
+packaged Agent Skill, release automation, or the pinned Harness integration.
+The writer lifecycle is internal until a real source is registered; no public
+command creates persistent state yet.
 
 ## Execution rules
 
@@ -91,7 +91,7 @@ Evidence: existing `src/`, `test/`, `.github/`, package scripts, contracts, and
 the merged initial scaffold. The completed scaffold plan is removed from the
 active plan directory; Git history remains its archive.
 
-### M1 — Harden canonical contracts and source conformance
+### M1 — Harden canonical contracts and source conformance (complete)
 
 Outcome: one stable internal vocabulary that storage, indexing, and every adapter
 can implement without provider cases.
@@ -138,7 +138,7 @@ Exit gate:
 - Identity and hash codecs have focused round-trip and adversarial-input tests.
 - `pnpm check` passes.
 
-### M2 — Add state paths, SQLite lifecycle, and privacy controls
+### M2 — Add state paths, SQLite lifecycle, and privacy controls (complete)
 
 Outcome: Sessions can explain and safely initialize its own rebuildable state,
 without yet implementing repository behavior.
