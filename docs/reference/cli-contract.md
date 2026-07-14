@@ -63,7 +63,7 @@ All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed c
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 1
+    "supportedSchemaVersion": 2
   }
 }
 ```

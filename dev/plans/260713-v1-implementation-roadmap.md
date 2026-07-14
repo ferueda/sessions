@@ -21,7 +21,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 2 are complete. The repository currently has:
+Milestones 0 through 3 are complete. The repository currently has:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
@@ -31,10 +31,12 @@ Milestones 0 through 2 are complete. The repository currently has:
 - platform-local Sessions state resolution plus non-mutating `paths` reporting;
 - a real, read-only `doctor` command for Node, SQLite/FTS5, and index state;
 - an internal protected SQLite writer lifecycle with checksummed migrations;
+- an atomic provider-neutral canonical repository with collision-safe content,
+  last-good freshness state, bounded run diagnostics, and derived FTS data;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the canonical repository/content schema,
-indexing/reconciliation, Cursor or Codex adapters, list/search/show/export, the
+It does not yet have indexing/reconciliation, Cursor or Codex adapters,
+list/search/show/export, the
 packaged Agent Skill, release automation, or the pinned Harness integration.
 The writer lifecycle is internal until a real source is registered; no public
 command creates persistent state yet.
@@ -64,7 +66,7 @@ command creates persistent state yet.
 flowchart TD
   M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts"]
   M1 --> M2["M2 State and SQLite lifecycle"]
-  M2 --> M3["M3 Canonical repository"]
+  M2 --> M3["M3 Canonical repository — complete"]
   M3 --> M4["M4 Indexing and reconciliation"]
   M4 --> M5["M5 Cursor vertical slice"]
   M5 --> M6["M6 Query and evidence engine"]
@@ -187,7 +189,7 @@ Exit gate:
 - Tests prove lifecycle code never opens provider histories for writing.
 - `pnpm check` passes on all CI operating systems.
 
-### M3 — Implement the canonical repository and query-ready schema
+### M3 — Implement the canonical repository and query-ready schema (complete)
 
 Outcome: one provider-neutral repository can atomically persist and reconstruct a
 complete canonical document while retaining the state needed for incremental

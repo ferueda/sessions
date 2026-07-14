@@ -4,7 +4,7 @@ Local-first search and analysis for AI coding-agent session history.
 
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local index. Humans and agents can then recover context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
-> **Status: pre-alpha.** The repository foundation, canonical contracts, read-only state inspection, and protected SQLite lifecycle are implemented. Indexing, search, provider adapters, and the packaged Agent Skill are planned and not yet available. The npm package has not been released.
+> **Status: pre-alpha.** The repository foundation, canonical contracts, protected SQLite lifecycle, and provider-neutral canonical repository are implemented. Indexing orchestration, search, provider adapters, and the packaged Agent Skill are planned and not yet available. The npm package has not been released.
 
 ## Why Sessions
 
@@ -40,7 +40,7 @@ node dist/bin/sessions.js paths --format json
 
 `doctor` checks the Node runtime, in-memory SQLite FTS5 capabilities, and the existing Sessions index state. `paths` reports the Sessions-owned index directory, database, and SQLite sidecar paths. Neither command creates or migrates state, inspects providers, or accesses the network. An uninitialized index is a healthy fresh-install state.
 
-The internal writer lifecycle already provides protected SQLite initialization and migrations, but no public command opens it yet. The current database migration contains metadata only—there are no canonical session tables or provider adapters.
+The internal writer lifecycle provides protected SQLite initialization, migrations, and an atomic canonical session repository with query-ready FTS state. No public command opens it yet, and there are no provider adapters.
 
 ## Planned V1
 
@@ -57,7 +57,7 @@ The public delivery target is `npm install --global @ferueda/sessions` or `npx @
 
 ## Privacy
 
-Provider histories are inputs, never mutation targets. Indexing will be explicit, local, and network-free. The planned canonical index is rebuildable derived data with user-controlled clearing and restrictive local permissions. See the [privacy contract](docs/privacy.md) for promises and limitations.
+Provider histories are inputs, never mutation targets. Indexing will be explicit, local, and network-free. The canonical index is rebuildable derived data with planned user-controlled clearing and restrictive local permissions. See the [privacy contract](docs/privacy.md) for promises and limitations.
 
 ## Design and roadmap
 

@@ -16,9 +16,9 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
 Canonical domain/application contracts, the synthetic adapter conformance suite,
-path/state behavior, SQLite lifecycle integration, and `doctor`/`paths` CLI
-contracts run today. Provider golden fixtures and repository/query contracts
-arrive with their corresponding vertical slices.
+path/state behavior, SQLite lifecycle and canonical repository integration, and
+`doctor`/`paths` CLI contracts run today. Provider golden fixtures and query
+contracts arrive with their corresponding vertical slices.
 
 ## Commands
 
