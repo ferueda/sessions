@@ -575,26 +575,42 @@ Required behavior:
   source-observed tool namespace, exact session identity, limit, and opaque
   continuation cursor. Raw FTS5 syntax is never a public API; special characters
   are accepted as user text.
+- Search text uses literal whitespace-delimited terms combined with AND. Exact
+  filters are case-sensitive, one-valued, and combine with AND; time dimensions
+  are named explicitly rather than silently mixing session, capture, observation,
+  and entry clocks.
 - Translate to parameterized FTS/SQL with deterministic ordering and stable
   pagination. Ranking, tokenizer settings, and bounded defaults are selected from
   a checked-in synthetic corpus representing prose, file paths, symbols, IDs,
   punctuation, and repeated content—not intuition.
 - Search returns index-backed snippets, canonical entry ordinals, entry kinds,
   available tool identity/linkage, and bounded surrounding entries. Empty results
-  are success. List, search, and show share filter meanings.
+  are success. One primary hit represents one canonical entry, page limits do not
+  count context, and a filter has the same meaning everywhere it is accepted.
+  Show remains exact-ID transcript retrieval rather than accepting unrelated
+  search filters.
 - Exact tool-name and namespace filters select canonical call entries only and
   combine with logical AND. Bounded related context includes directly linked
   result entries even when non-adjacent; result entries retain linkage without
   receiving invented tool identity.
 - Resolve known lineage without recursion hazards. Cycles, missing ancestors, or
   unsupported relations remain unknown and never fabricate independent roots.
+- Canonical documents distinguish complete lineage coverage from unknown
+  coverage so an empty relation list can prove a root only when source evidence
+  supports it. High-confidence parent, fork, and continuation relations point
+  rootward; child relations do not change the current session's root.
 - Report occurrence count, unique-content count, unique-known-root count, and
-  unknown-lineage support distinctly. Do not infer copied origin from equal text.
+  distinct unknown-lineage-session count over the complete filtered result set
+  before pagination. Do not infer copied origin from equal text.
 - Keep ranking and root resolution in provider-neutral query/storage code. Adapter
   metadata may supply evidence, never policy.
 - Rebuild or repair derived FTS rows only from canonical library data. FTS-only
   damage never recommends or causes canonical deletion; a public repair command
   remains optional until its user need is proven.
+- Continuation cursors bind the normalized query/order contract, a persistent
+  library instance identity, and the current writer generation. Query mismatch is
+  invalid usage; library recreation or a later admitted writer makes the cursor
+  stale. M6 keeps list/search/show human-facing; M7 owns versioned machine DTOs.
 
 Exit gate:
 
