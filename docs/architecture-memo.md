@@ -72,27 +72,39 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 | Composition     | Adapter registration and concrete wiring                                                       | Domain or query behavior                                  |
 | Agent Skill     | Evidence-first playbooks over stable CLI commands                                              | Hidden data access, automatic source or project mutation  |
 
-### Initial module map and dependency enforcement
+### Current module map and dependency enforcement
 
-The foundation uses this concrete layout:
+The implemented foundation through M2 uses this concrete layout:
 
 ```text
 src/
   domain/session.ts
+  domain/index-state.ts
   application/
     ports/session-source.ts
     ports/runtime-diagnostic.ts
+    ports/index-lifecycle.ts
+    get-paths.ts
     run-doctor.ts
   infrastructure/
     runtime/node-diagnostic.ts
-    sqlite/sqlite-diagnostic.ts
+    state/
+      paths.ts
+      index-state-diagnostic.ts
+    sqlite/
+      database.ts
+      migrations.ts
+      migrations/0001-bootstrap.ts
+      permissions.ts
+      sqlite-diagnostic.ts
+      fts5-security.ts
   cli/
     program.ts
     run.ts
   bin/sessions.ts
 ```
 
-`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them.
+`src/bin/sessions.ts` is the only composition root and becomes `dist/bin/sessions.js`. Domain imports only domain. Application imports application/domain. Infrastructure imports inward but never adapters or CLI. Future adapters import application/domain but never infrastructure or CLI. CLI imports application/domain, never concrete infrastructure or adapters. The binary alone may import all layers to wire them. The current SQLite migration creates metadata only; canonical content tables, repository behavior, and adapters remain future work.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -250,17 +262,22 @@ Detailed promises belong to [the privacy contract](privacy.md).
 
 ## CLI contract
 
-Planned V1 surface:
+Current surface:
 
 ```text
 sessions
-sessions doctor
+sessions doctor [--format human|json]
+sessions paths [--format human|json]
+```
+
+Remaining planned V1 surface:
+
+```text
 sessions index [--source cursor|codex]
 sessions list [filters]
 sessions search <text> [filters]
 sessions show <source-instance:id> [--entry N --context N]
 sessions export <source-instance:id> --format md|json|jsonl
-sessions paths
 sessions index clear
 ```
 
@@ -275,11 +292,11 @@ Behavioral rules:
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
 
-The current scaffold exposes only bare help, version, and `doctor`. The exact current surface is generated help; stable semantics live in [the CLI contract](reference/cli-contract.md).
+The exact current surface is generated help; stable semantics live in [the CLI contract](reference/cli-contract.md). No public command opens the implemented SQLite writer yet.
 
 ## Doctor
 
-`sessions doctor` performs real, read-only capability checks. The first slice verifies the minimum Node runtime and creates an in-memory FTS5 table against the runtime's actual SQLite build. Later slices add index-path permissions, schema/migration state, and non-mutating adapter probes.
+`sessions doctor` performs real, read-only capability checks. It verifies the minimum Node runtime, creates an in-memory FTS5 table against the runtime's actual SQLite build, reports whether the FTS5 per-table secure-delete command is supported, and inspects index-path safety and schema state. Future adapter slices add non-mutating source probes.
 
 Doctor supports human output through `sessions doctor` and JSON through `sessions doctor --format json`. The JSON contract is:
 
@@ -307,7 +324,7 @@ Check order is stable. Every check runs even when an earlier check fails. A thro
 
 The complete human or JSON report is requested data and goes to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. An unexpected failure outside aggregation writes a concise diagnostic to stderr, emits no fabricated report, and exits `1`. Invalid format or other usage exits `2` through normal CLI error handling.
 
-The initial checks are `node-runtime` and `sqlite-fts5`. The SQLite probe uses `:memory:`. Doctor never resolves provider sources, creates the index directory, or persists any data.
+The current checks are `node-runtime`, `sqlite-fts5`, and `index-state`. The SQLite capability probe uses `:memory:`. An uninitialized index passes with guidance. Doctor never resolves provider sources, creates or migrates the index, or persists data.
 
 ## Agent Skill design
 

@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current scaffold plus accepted V1 semantics
+- Status: current M2 behavior plus accepted V1 semantics
 - Last updated: 2026-07-13
 
 Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
@@ -12,9 +12,10 @@ sessions
 sessions --help
 sessions --version
 sessions doctor [--format human|json]
+sessions paths [--format human|json]
 ```
 
-The bare command prints help. `doctor` performs read-only, in-memory Node.js and SQLite FTS5 checks. It does not index or create persistent state.
+The bare command prints help. `doctor` performs read-only Node.js, in-memory SQLite FTS5, and existing index-state checks. `paths` reports Sessions-owned index paths and state. Neither command indexes, creates directories, initializes a database, or applies migrations.
 
 ### Doctor JSON
 
@@ -42,7 +43,34 @@ The bare command prints help. `doctor` performs read-only, in-memory Node.js and
 
 Check IDs, field names, and `schemaVersion` are machine-facing. Summaries are human-facing. Checks run in declared order and continue after failure. A thrown probe becomes a sanitized failed check.
 
+The current check order is `node-runtime`, `sqlite-fts5`, then `index-state`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete` (`supported` or `unsupported`) in `details`; lack of FTS5 fails the check. The index check passes `uninitialized` with guidance and passes `ready`; every other state fails. Doctor inspection never opens a writer.
+
 All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
+
+### Paths JSON
+
+`sessions paths --format json` writes one JSON document. Before initialization, a Linux default may look like:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "paths",
+  "index": {
+    "directory": "/home/user/.cache/sessions",
+    "database": "/home/user/.cache/sessions/index.sqlite3",
+    "wal": "/home/user/.cache/sessions/index.sqlite3-wal",
+    "shm": "/home/user/.cache/sessions/index.sqlite3-shm",
+    "initialized": false,
+    "state": "uninitialized",
+    "schemaVersion": null,
+    "supportedSchemaVersion": 1
+  }
+}
+```
+
+Version 1 reports only the Sessions-owned index directory, database, known WAL/SHM paths, initialization flag, state, observed schema version, and supported schema version. It does not report provider roots because no adapters are registered. Current state values are `uninitialized`, `ready`, `migration-required`, `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
+
+The human format presents the same fields. A successfully inspected incompatible state is still a paths report and exits `0`; doctor is the command that evaluates health. Path resolution or inspection failures emit no partial report, write a concise diagnostic to stderr, and exit `1`.
 
 ## Planned V1 commands
 
@@ -52,7 +80,6 @@ sessions list [filters]
 sessions search <text> [filters]
 sessions show <source-instance:id> [--entry N --context N]
 sessions export <source-instance:id> --format md|json|jsonl
-sessions paths
 sessions index clear
 ```
 

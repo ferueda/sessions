@@ -8,5 +8,6 @@ describe("createSqliteDiagnostic", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(result.details?.sqliteVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(result.details?.fts5SecureDelete).toMatch(/^(?:supported|unsupported)$/u);
   });
 });

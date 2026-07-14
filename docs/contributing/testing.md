@@ -15,9 +15,10 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
-Canonical domain/application contracts and the synthetic adapter conformance
-suite run today. Provider golden fixtures, SQLite integration, and later CLI
-contracts arrive with their corresponding vertical slice.
+Canonical domain/application contracts, the synthetic adapter conformance suite,
+path/state behavior, SQLite lifecycle integration, and `doctor`/`paths` CLI
+contracts run today. Provider golden fixtures and repository/query contracts
+arrive with their corresponding vertical slices.
 
 ## Commands
 
@@ -49,4 +50,5 @@ optimization, not a substitute for `pnpm check` before merging implementation.
 - Use synthetic provider data and temporary home/cache paths.
 - Never call provider services or the network in unit/integration tests.
 - Test an operational failure as well as success when adding a state boundary.
+- Prove inspection commands leave absent state absent; exercise writer behavior only through explicit lifecycle tests.
 - Keep hooks cheap; passing a hook is not repository approval.

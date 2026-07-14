@@ -5,32 +5,42 @@
 
 Sessions handles sensitive local history. Privacy behavior is a product contract, not a best-effort feature.
 
-## Current scaffold
+## Current implementation
 
-The current CLI exposes help, version, and `doctor`. Doctor checks Node.js and creates an SQLite FTS5 table in `:memory:`. It does not locate provider histories, create an index directory, persist content, use telemetry, or access the network.
+The current CLI exposes help, version, `doctor`, and `paths`. `paths` reports only Sessions-owned index locations and existing state. `doctor` checks Node.js, probes SQLite FTS5 and its per-table secure-delete capability in memory, and inspects the existing index state. An uninitialized index is healthy. Neither command creates directories, initializes or migrates a database, locates provider histories, uses telemetry, or accesses the network.
+
+An internal writer lifecycle is available to future explicit indexing commands and is exercised by tests. It currently creates only migration metadata; there are no canonical content tables, source adapters, or public indexing command.
 
 ## V1 promises
 
 - Indexing starts only when the user runs `sessions index`.
 - Cursor, Codex, and future source histories are read-only inputs.
-- Ordinary index, list, search, show, export, paths, and doctor operations require no network access and emit no telemetry.
+- Index, list, search, show, export, paths, and doctor operations require no network access and emit no telemetry.
 - List, search, show, and export use the canonical index after indexing; they do not silently reopen mutable source histories.
 - Sessions stores normalized content required for faithful results, not entire raw provider payloads.
-- `sessions paths` explains resolved source and index locations without printing transcript content.
+- `sessions paths` explains the owned index location without printing transcript content. Registered adapters will later add sanitized source roots.
 - `sessions index clear` removes Sessions-owned index files only.
 - No project, skill, provider configuration, or source transcript is automatically edited from analysis output.
 
-## Planned local state
+## Local state
 
-The canonical SQLite index will use the platform's user-local cache convention and a Sessions-specific path that is distinct from the legacy Harness JSONL cache. The resolved path will be inspectable before indexing.
+Sessions resolves its owned state directory as follows:
 
-On POSIX systems, Sessions creates owned directories with mode `0700` and constrains the database, WAL, and SHM files to `0600`. On Windows, state remains inside the current user's local profile and relies on platform ACLs. Tests verify effective behavior on supported systems.
+- Linux: `$XDG_CACHE_HOME/sessions` when `XDG_CACHE_HOME` is absolute; otherwise `$HOME/.cache/sessions`.
+- macOS: `$HOME/Library/Caches/sessions`.
+- Windows: `%LOCALAPPDATA%\sessions`; a missing or relative `LOCALAPPDATA` is an error.
+
+An absolute `SESSIONS_CACHE_DIR` replaces the full owned directory path; Sessions does not append another `sessions` leaf. The database is `index.sqlite3`, with known `index.sqlite3-wal` and `index.sqlite3-shm` sidecar paths. This state is separate from the legacy Harness JSONL cache and is never reused or automatically migrated. `sessions paths` can inspect the location before it exists without creating it.
+
+When the internal writer is explicitly opened, it creates owned POSIX directories with mode `0700` and constrains the database, WAL, and SHM files to `0600`. On Windows, default state remains inside the current user's local profile and relies on platform ACLs. The writer enables foreign keys, WAL, a five-second busy timeout, and SQLite core `secure_delete`. Its ordered, checksummed migrations run transactionally and refuse incompatible or newer history.
 
 The index is rebuildable derived data. Clearing it does not alter provider histories.
 
 ## Deletion limitations
 
-V1 enables SQLite core `secure_delete` and FTS5 secure-delete when the runtime supports them. These settings reduce recoverable deleted content inside SQLite pages; they do not provide encryption, guaranteed physical overwrite, or forensic secure erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain copies.
+The current writer enables SQLite core `secure_delete`. Doctor reports whether the runtime accepts FTS5's per-table secure-delete command, but M2 has no persistent FTS table on which to apply it; the canonical content schema arrives later. V1 will enable the setting for each FTS table when supported.
+
+These settings reduce recoverable deleted content inside SQLite pages; they do not provide encryption, guaranteed physical overwrite, or forensic secure erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain copies.
 
 Users requiring stronger protection should use operating-system full-disk encryption and manage backups according to their threat model.
 

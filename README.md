@@ -4,7 +4,7 @@ Local-first search and analysis for AI coding-agent session history.
 
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local index. Humans and agents can then recover context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
-> **Status: pre-alpha.** The repository foundation, canonical contracts, and `doctor` command are implemented. Indexing, search, provider adapters, and the packaged Agent Skill are planned and not yet available. The npm package has not been released.
+> **Status: pre-alpha.** The repository foundation, canonical contracts, read-only state inspection, and protected SQLite lifecycle are implemented. Indexing, search, provider adapters, and the packaged Agent Skill are planned and not yet available. The npm package has not been released.
 
 ## Why Sessions
 
@@ -34,9 +34,13 @@ node dist/bin/sessions.js --help
 node dist/bin/sessions.js --version
 node dist/bin/sessions.js doctor
 node dist/bin/sessions.js doctor --format json
+node dist/bin/sessions.js paths
+node dist/bin/sessions.js paths --format json
 ```
 
-`doctor` checks the Node runtime and actual SQLite FTS5 support entirely in memory. It does not inspect providers, create an index, or persist data.
+`doctor` checks the Node runtime, in-memory SQLite FTS5 capabilities, and the existing Sessions index state. `paths` reports the Sessions-owned index directory, database, and SQLite sidecar paths. Neither command creates or migrates state, inspects providers, or accesses the network. An uninitialized index is a healthy fresh-install state.
+
+The internal writer lifecycle already provides protected SQLite initialization and migrations, but no public command opens it yet. The current database migration contains metadata only—there are no canonical session tables or provider adapters.
 
 ## Planned V1
 
@@ -46,7 +50,6 @@ sessions list [filters]
 sessions search <text> [filters]
 sessions show <source-instance:id> [--entry N --context N]
 sessions export <source-instance:id> --format md|json|jsonl
-sessions paths
 sessions index clear
 ```
 

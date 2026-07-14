@@ -9,4 +9,4 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan: [Harden canonical session and source contracts](260713-canonical-contracts.md).
+Active executor plan: [Add safe local state and SQLite lifecycle](260713-state-sqlite-lifecycle.md).
