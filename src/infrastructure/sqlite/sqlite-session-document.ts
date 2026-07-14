@@ -10,6 +10,8 @@ import type {
 } from "../../domain/session.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
 export function replaceCanonicalDocument(
   database: DatabaseSync,
   sessionId: number,
@@ -251,7 +253,7 @@ function readSegments(
               occurrence.source_metadata_json,
               content.hash_scheme,
               content.digest,
-              content.text
+              CAST(content.text AS BLOB) AS text_bytes
        FROM sessions_content_occurrences AS occurrence
        JOIN sessions_content_values AS content
          ON content.content_id = occurrence.content_id
@@ -267,7 +269,7 @@ function readSegments(
     if (segmentOrdinal !== segments.length) throw new SqliteSessionIndexError("corrupt-data");
     segments.push({
       ordinal: segmentOrdinal,
-      text: row.text,
+      text: decodeText(row.text_bytes),
       contentHash: { scheme: row.hash_scheme, digest: row.digest },
       origin: row.origin,
       originConfidence: row.confidence,
@@ -276,6 +278,15 @@ function readSegments(
     result.set(entryOrdinal, segments);
   }
   return result;
+}
+
+function decodeText(value: Uint8Array): string {
+  try {
+    // Node 24.15 truncates SQLite TEXT reads at embedded NUL bytes; BLOB decoding preserves them.
+    return UTF8_DECODER.decode(value);
+  } catch (error) {
+    throw new SqliteSessionIndexError("corrupt-data", { cause: error });
+  }
 }
 
 function serializeMetadata(metadata: Readonly<Record<string, string>>): string {
@@ -369,5 +380,5 @@ interface SegmentRow {
   readonly source_metadata_json: string;
   readonly hash_scheme: ContentSegment["contentHash"]["scheme"];
   readonly digest: string;
-  readonly text: string;
+  readonly text_bytes: Uint8Array;
 }
