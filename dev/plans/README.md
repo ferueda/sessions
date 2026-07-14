@@ -8,3 +8,5 @@ This directory holds the repository's active implementation plans.
 - Remove completed plans. Git history remains the archive.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
+
+Active executor plan: [Implement provider-neutral indexing and writer safety](260713-indexing-reconciliation.md).

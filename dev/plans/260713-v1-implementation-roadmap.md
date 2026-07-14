@@ -286,8 +286,9 @@ Exit gate:
   discovery-order independence, last-good preservation, source-changed handling,
   incomplete-scan no-delete, complete-scan removal, interrupted-run recovery, and
   two arbitrary adapter kinds without engine edits.
-- Clear/doctor tests cover absent state, only-owned-file deletion, locked refusal,
-  stable structured reports, streams, and exit codes.
+- Clear application/infrastructure tests cover absent state, only-owned-file
+  deletion, locked refusal, and stable structured reports. Doctor CLI tests
+  cover streams and exit codes; M5 owns `sessions index clear` registration.
 - `pnpm check` passes.
 
 ### M5 — Ship the Cursor vertical slice
