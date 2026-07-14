@@ -5,7 +5,7 @@
 - Date: 2026-07-14
 - Plan review: passed with zero findings on 2026-07-14
   (`20260714-181209-1e9112`)
-- Implementation verification: 54 test files and 504 tests, compiled and
+- Implementation verification: 54 test files and 505 tests, compiled and
   offline-packed workflow smokes, and a privacy-safe live Codex index/list/show/
   clear smoke passed on 2026-07-14; `pnpm check` passed. All accepted change-review
   findings were fixed; final-cycle follow-ups passed independent targeted closure

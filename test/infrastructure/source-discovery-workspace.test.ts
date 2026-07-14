@@ -44,7 +44,8 @@ describe("source discovery workspace", () => {
     expect(await readdir(paths.scratch)).toEqual([]);
     const returned = await lifecycle.workspace.withPrivateDirectory(async (directory) => {
       expect(path.dirname(directory)).toBe(paths.scratch);
-      expect((await lstat(directory)).mode & 0o777).toBe(0o700);
+      const stats = await lstat(directory);
+      expect(stats.isDirectory()).toBe(true);
       await writeFile(path.join(directory, "snapshot.sqlite"), "private");
       return "captured";
     });
@@ -55,6 +56,21 @@ describe("source discovery workspace", () => {
     await expect(lstat(paths.scratch)).rejects.toMatchObject({ code: "ENOENT" });
     expect(leaseAssertions).toBeGreaterThanOrEqual(7);
   });
+
+  test.skipIf(process.platform === "win32")(
+    "creates private attempts with private POSIX permissions",
+    async () => {
+      const paths = await fixturePaths();
+      const lifecycle = await openSourceDiscoveryWorkspace(paths, { assertLease() {} });
+      try {
+        await lifecycle.workspace.withPrivateDirectory(async (directory) => {
+          expect((await lstat(directory)).mode & 0o777).toBe(0o700);
+        });
+      } finally {
+        await lifecycle.close();
+      }
+    },
+  );
 
   test("removes symlink children without touching their targets", async () => {
     const paths = await fixturePaths();
