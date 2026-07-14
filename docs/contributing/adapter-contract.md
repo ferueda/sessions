@@ -1,6 +1,7 @@
 # Source adapter contract
 
-Status: implemented internal V1 contract; no concrete adapter exists yet.
+Status: implemented M1 internal contract plus an accepted M5 tool-evidence
+extension; no concrete adapter exists yet.
 
 Adapters translate provider histories into canonical documents. They do not define indexing, storage, queries, rendering, or analysis policy.
 
@@ -51,3 +52,27 @@ provider-specific golden fixtures that enumerate every input affecting normalize
 output. Fixtures contain no personal paths or transcripts.
 
 The V1 contract is internal. A public plugin ABI is deferred until multiple independent adapters prove the boundary.
+
+## Accepted M5 extension — not implemented
+
+Before the first concrete adapter is normalized, the provider-neutral entry,
+validation, schema, and repository contracts will add generic `tool-call` and
+`tool-result` evidence. A call may carry its exact source-observed tool name,
+optional exact namespace, and provider call ID; results link to calls through
+canonical entry relations and available call IDs. Name and namespace remain
+separate, exact, and valid only on calls; namespace requires a name. Adapters do
+not split, concatenate, or infer identity, and results do not copy it. Arguments
+and results remain faithful ordered content.
+
+Canonical content will become an ordered union of text and omitted segments.
+Text retains exact bytes and hashes and alone participates in FTS, deduplication,
+and recurrence. Omitted segments preserve position, broad non-text class,
+provenance, and sanitized source type without bytes, URLs, paths, placeholder
+text, or hashes. Adapters never open or fetch referenced media.
+
+Adapters populate only evidence their source exposes. Injected tool or skill
+catalogs remain injected content, and user requests or model declarations remain
+content signals; none implies an invocation. The shared conformance suite will
+cover linked events, missing tool identity, same-name tools in different
+namespaces, ordered mixed text/non-text content, mention-only content, and
+unavailable execution evidence without embedding skill policy in adapters.

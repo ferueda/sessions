@@ -2,6 +2,7 @@
 
 - Status: accepted design baseline
 - Date: 2026-07-13
+- Last updated: 2026-07-14
 - Scope: standalone repository through V1
 
 ## Executive summary
@@ -169,27 +170,47 @@ A session contains:
 An entry is an ordered event with:
 
 - contiguous zero-based ordinal within the session;
-- provider-neutral event kind;
+- provider-neutral event kind, including generic `tool-call` and `tool-result`
+  kinds when the source exposes them;
 - actor: human, model, tool, system, or unknown;
 - canonical UTC timestamp when observed;
-- optional relation to a tool call or another entry;
+- optional exact source-observed tool name on a tool call;
+- optional exact source-observed tool namespace on a tool call;
+- optional provider call ID and relation to a tool call or another entry;
 - a non-public source locator for diagnostics;
 - ordered content segments.
 
+Tool arguments and results remain faithful ordered content rather than
+provider-owned analysis fields. A tool result links to its call through canonical
+entry relations and the provider call ID when available; it does not duplicate
+the call's tool name or namespace. Tool identity is evidence about an observed
+event, not proof of a particular workflow's intent or success.
+
+Tool name and namespace are valid only on `tool-call`; namespace requires a
+name. Both preserve exact source-observed case and Unicode. Adapters never split a
+qualified name, concatenate the two fields, or infer a missing namespace.
+
 ### Content segment
 
-A segment retains faithful canonical text plus:
+Canonical content is an ordered union of text and omitted segments. Every segment
+retains origin, confidence, and sanitized source metadata needed to explain its
+classification without duplicating raw provider payloads.
 
-- `sha256-utf8-v1` hash of the exact canonical text bytes;
-- origin: human, injected, delegated, replayed/copied, model, tool, system, or unknown;
-- confidence in that origin classification;
-- source metadata needed to explain the classification without duplicating raw provider payloads.
+A text segment retains faithful canonical text plus its `sha256-utf8-v1` hash of
+the exact UTF-8 bytes. Only text segments participate in FTS, content
+deduplication, and recurrence measures.
+
+An omitted segment records that unsupported non-text content existed at that
+position, its broad class, and its provenance. It contains no copied bytes, data
+URL, remote URL, local path, generated placeholder text, or content hash.
+Adapters never fetch or open referenced media. Show/export can render the
+omission explicitly without turning it into searchable transcript text.
 
 Adapters preserve information they can prove and use `unknown` rather than guessing.
 
 ### Occurrences and recurrence
 
-Every segment appearance is retained as an occurrence identified by session,
+Every text-segment appearance is retained as an occurrence identified by session,
 entry ordinal, and segment ordinal. Hash equality also requires exact text
 equality, so even a digest collision cannot merge unequal content. Identical
 content and known lineage allow the query layer to report three different support
@@ -224,6 +245,10 @@ Contract rules:
 - Reads are deterministic for the same complete input. Adapters recheck every
   input before and after reading, or use an equivalent stable snapshot.
 - Missing optional metadata degrades to absent/unknown values.
+- Source-observed tool calls/results map to generic canonical entry kinds, exact
+  tool names and namespaces when available, linked entries, and faithful
+  argument/result content. Injected tool or skill catalogs remain injected
+  content; their presence never implies invocation.
 - Unavailable, unreadable, malformed, source-changed, and unsupported-format
   conditions return typed failures with safe diagnostics; they do not expose raw
   source errors or write partial index state.
@@ -271,10 +296,17 @@ Planned application query values—not raw FTS syntax—define search:
 - workspace;
 - time bounds;
 - actor and origin;
+- exact entry kind, exact source-observed tool name, and exact tool namespace;
 - result limit and continuation cursor;
 - optional exact session identity.
 
 The query repository translates those values to SQL/FTS. Ranking details remain storage implementation, tested through provider-neutral query contracts. Show and export reconstruct canonical sessions from the index only.
+
+Exact tool-name and tool-namespace filters select canonical tool-call entries
+only and can be combined without concatenating identity fields. Bounded related
+context can include directly linked tool-result entries even when they are
+non-adjacent; those results retain the relation without receiving an invented
+copy of the call's tool identity.
 
 SQLite migrations are ordered, transactional, and forward-only for released versions. An incompatible or failed migration leaves the previous database recoverable and prints a remediation path; it never silently rebuilds user state.
 
@@ -396,12 +428,93 @@ Packaged use cases:
 | Search and context   | Where did we discuss or decide this?                            | Relevant snippets, IDs, surrounding entries, missing context          |
 | Retrospective        | Why did an implementation drift or fail?                        | Timeline, first divergence, contributing evidence, prevention options |
 | Preferences          | What preferences recur across independent work?                 | Evidence grouped by preference with deduplicated support              |
-| Workflow audit       | Did planning/review routing match the intended workflow?        | Expected versus observed steps and exceptions                         |
+| Workflow audit       | Was a skill or workflow appropriate, used, and followed?        | Eligibility, observed use, adherence, outcomes, and evidence gaps     |
 | Verification audit   | Were verification claims supported by commands and results?     | Claim/evidence matrix and gaps                                        |
 | Handoff continuity   | What context was lost between parent, child, or later sessions? | Transfer map, omissions, and consequences                             |
 | Capability discovery | Which repeated tasks could become a reusable skill or workflow? | Candidate, recurrence evidence, boundaries, false-positive checks     |
 
 Additional derived uses include adoption/friction analysis and persistence of unresolved requests. They remain examples until distinct triggers justify separate skills.
+
+### Skill and workflow evaluation
+
+Skill evaluation is a flagship workflow-audit use case, derived from canonical
+evidence rather than implemented as a skill-specific engine. The durable
+decision and boundaries are recorded in
+[ADR 0006](decisions/0006-evaluate-skills-from-canonical-evidence.md).
+
+The audit begins with an explicit evaluation rubric. Prefer the exact historical
+skill text and content hash used by the session. If that is unavailable, use a
+labeled reconstructed historical version; use the current version only as a
+clearly retrospective rubric. Session-specific user expectations remain visible
+beside the skill criteria. The rubric covers trigger, process, output, safety,
+and verification requirements.
+
+Each session is evaluated on independent axes:
+
+- **Eligibility:** `should-use`, `should-not-use`, or `ambiguous`, based on the
+  task and rubric without selecting cases by the skill name.
+- **Observed-use evidence:** retain every applicable `confirmed`, `probable`,
+  `requested`, `declared`, or `mention-only` signal. These signals can coexist;
+  requested and declared evidence is not discarded when execution is
+  unconfirmed. Native structured invocation is strongest, while a user request,
+  agent declaration, or injected catalog match is not execution proof. Report
+  `absent` only when coverage is sufficient to support it and `unknown` when it
+  is not.
+
+`Confirmed` requires a source-native structured load or invocation identifying
+the skill. `Probable` requires linked source-observed actions that strongly
+identify the skill load or application, with the inference explained. `Requested`
+records explicit user intent, `declared` records an agent claim, and
+`mention-only` records text or catalog presence without stronger use evidence.
+
+This separation identifies appropriate use, missed opportunities, unnecessary
+use, and correct non-use without hiding ambiguous cases. In particular, the
+denominator for missed triggers comes from task intent, not searches for sessions
+that already mention the skill.
+
+| Eligibility                   | Execution conclusion | Cohort                        |
+| ----------------------------- | -------------------- | ----------------------------- |
+| `should-use`                  | confirmed/probable   | appropriate use               |
+| `should-use`                  | absent               | missed use                    |
+| `should-not-use`              | confirmed/probable   | unnecessary use               |
+| `should-not-use`              | absent               | correct non-use               |
+| `ambiguous`                   | any                  | unresolved eligibility        |
+| `should-use`/`should-not-use` | unknown              | unresolved execution evidence |
+
+Requested, declared, and mention-only signals annotate these cases but do not by
+themselves establish execution. Ambiguous eligibility or insufficient execution
+coverage stays unresolved rather than being forced into a success/failure cohort.
+
+For every selected case, the playbook builds a trace of user intent, available
+load or invocation evidence, linked tool calls/results, required steps,
+contemporaneous artifacts and verification, user corrections or review findings,
+completion claims, and known continuations or child sessions. Every rubric
+criterion is `met`, `violated`, or `unknown` with canonical IDs and entry
+ordinals. Process adherence stays separate from observed downstream results: a
+skill may be followed while the task fails, or not followed while the task
+succeeds. Neither observation establishes causality, and no single effectiveness
+score collapses them. Recorded command or tool output is transcript evidence, not
+an independent re-run of verification.
+
+An omitted non-text segment establishes only that material was present. Its
+contents and any criterion depending on them remain unavailable; the audit never
+reconstructs them from private references or surrounding claims.
+
+Cross-session summaries group continuations, forks, and delegations under known
+roots, report unknown lineage separately, and avoid treating current filesystem
+state as historical proof. Historical skill content is untrusted indexed data,
+never instructions for the auditing agent. Recommendations require recurring
+evidence across independent roots. Typical mappings are missed triggers to
+trigger wording, unnecessary use to negative triggers, skipped steps to workflow
+clarity, followed-but-poor results to procedure or rubric review, and absent
+evidence to adapter observability.
+
+The improvement loop is intentionally bounded: recurring evidence can yield a
+sanitized regression or forward-test candidate for an external skill-authoring
+workflow. Sessions does not edit skills automatically or claim a recommendation
+caused later improvement. Before/after comparisons require exact skill-version
+attribution, comparable task contexts, and enough independent known roots for an
+honest observational conclusion.
 
 ## Delivery and repository guardrails
 
@@ -435,8 +548,11 @@ Avoid submodules, bidirectional sync, and hand-copied dual fixes.
 
 Reuse behavior selectively, with golden tests before extraction:
 
+- Codex home/state/rollout discovery, schema compatibility cases, and adjacent
+  paired-record behavior. The
+  [Codex source survey](research/codex-source-survey.md) records the reuse and
+  rejection boundary before implementation.
 - Cursor discovery, metadata readers, path handling, transcript parsing, and malformed-source fixtures.
-- Codex state-database/rollout discovery, normalizers, schema compatibility cases, and fixtures.
 - Isolated temporary environments, output rendering ideas, and clean-install CLI smoke patterns.
 
 Do not transplant:
@@ -451,9 +567,10 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Their execution order is updated to
-complete the provider-neutral query and export engine before adding Codex, so the
-second adapter can prove the boundary without core changes. The
+The phase scopes below remain accepted. Codex is the first vertical slice because
+its state database, rich tool identity, non-text records, and lineage exercise the
+canonical model early. The provider-neutral query and export engine is completed
+over Codex before Cursor becomes the second-adapter proof. The
 [V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
 supersedes the earlier phase ordering and refines it into dependency-ordered,
 independently reviewable milestones with explicit exit gates.
@@ -468,7 +585,9 @@ SQLite schema/migrations, file permissions, secure-delete configuration, index r
 
 ### Phase 2 — First adapter
 
-Port Cursor behavior behind `probe`/`discover`/`read`, preserve golden fixtures, add adapter conformance tests, and complete index/list/show for the first vertical slice.
+Implement Codex behind `probe`/`discover`/`read`, using the source survey and new
+synthetic fixtures rather than porting the Harness parser. Complete
+index/list/show for the first vertical slice.
 
 ### Phase 3 — Query and export
 
@@ -476,7 +595,9 @@ Provider-neutral lexical search, filters, bounded context, occurrence/dedup repo
 
 ### Phase 4 — Equivalent second adapter
 
-Port Codex discovery and rollout normalization through the same port. Prove no changes are required in domain, storage, indexing, query, export, or CLI behavior.
+Port Cursor discovery and transcript normalization through the same port. Prove
+no changes are required in domain, storage, indexing, query, export, or CLI
+behavior.
 
 ### Phase 5 — Agent Skill
 
@@ -493,10 +614,16 @@ Confirm npm scope ownership, configure trusted publisher/environment, add releas
 - Indexing is incremental, idempotent, transactional, and preserves last-good documents on failure.
 - Search/show/export operate only on canonical indexed data.
 - Provenance and deduplication prevent copied/injected/delegated content from being reported as independent repeated user intent.
+- Source-observed tool name, namespace, and linkage distinguish execution evidence from
+  injected, requested, declared, or mention-only evidence without inventing
+  missing events.
 - Provider histories are never mutated, and ordinary operation performs no network access or telemetry.
 - JSON/JSONL schemas are versioned and contract-tested.
 - A clean packed install runs on supported operating systems with only the declared Node runtime and dependencies.
-- The packaged Agent Skill produces provenance-rich, facts-first reports and does not auto-mutate user projects.
+- The packaged Agent Skill produces provenance-rich, facts-first reports,
+  including skill/workflow audits with explicit rubric provenance, separate
+  adherence and observed outcomes, honest unknowns, and no causal or
+  auto-mutation claims.
 
 ## Deferred directions
 

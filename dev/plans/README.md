@@ -9,4 +9,7 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plans: none.
+Active executor plan:
+
+- [Ship the Codex-first indexed workflow](260714-codex-vertical-slice.md) — M5
+  Codex adapter, canonical evidence extension, and index/list/show/clear slice.

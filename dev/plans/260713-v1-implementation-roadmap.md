@@ -2,6 +2,7 @@
 
 - Status: active program roadmap
 - Date: 2026-07-13
+- Last updated: 2026-07-14
 - Foundation baseline: PR #1, merged as `601f924`
 
 ## Goal
@@ -75,19 +76,21 @@ flowchart TD
   M1 --> M2["M2 State and SQLite lifecycle"]
   M2 --> M3["M3 Canonical repository — complete"]
   M3 --> M4["M4 Indexing and reconciliation — complete"]
-  M4 --> M5["M5 Cursor vertical slice"]
+  M4 --> M5["M5 Codex vertical slice"]
   M5 --> M6["M6 Query and evidence engine"]
   M6 --> M7["M7 Export and CLI schemas"]
-  M7 --> M8["M8 Codex parity"]
+  M7 --> M8["M8 Cursor parity"]
   M8 --> M9["M9 Packaged Agent Skill"]
   M9 --> M10["M10 Release qualification"]
   M10 --> M11["M11 Parity, Harness cutover, V1"]
 ```
 
-This intentionally completes provider-neutral query/export behavior before the
-second adapter. Codex then becomes the architecture proof: it must enter through
-the existing source port without provider-specific changes to domain, storage,
-indexing, query, or CLI semantics.
+Codex is intentionally first. Its state/rollout split, namespaced tools,
+non-text records, and structural lineage force the generic model to prove its
+assumptions before the query/export contract stabilizes. Cursor then becomes the
+second-adapter architecture proof: it must enter through the existing source port
+without provider-specific changes to domain, storage, indexing, query, export,
+or CLI semantics.
 
 ## Milestones
 
@@ -299,48 +302,114 @@ Exit gate:
   cover streams and exit codes; M5 owns `sessions index clear` registration.
 - `pnpm check` passes.
 
-### M5 — Ship the Cursor vertical slice
+### M5 — Ship the Codex vertical slice
 
-Outcome: the first end-to-end user workflow indexes Cursor and serves list/show
+Outcome: the first end-to-end user workflow indexes Codex and serves list/show
 from the canonical index.
 
 Primary change areas:
 
-- `src/adapters/cursor/source.ts`, `paths.ts`, `meta.ts`, `transcript.ts`,
-  `normalize.ts`, and `fingerprint.ts`;
-- Cursor synthetic fixtures, golden parser tests, and the shared source contract;
+- the provider-neutral entry contract, validation, SQLite migration, repository
+  round trip, and generic tool/non-text-evidence fixtures;
+- `src/adapters/codex/source.ts`, `paths.ts`, `state-db.ts`, `rollout.ts`,
+  `normalize.ts`, `fingerprint.ts`, and `lineage.ts`;
+- Codex synthetic state/rollout fixtures, golden tests, and the shared source
+  contract;
 - application services for list/show;
 - modular CLI commands/renderers and composition registration;
-- a documented Cursor format-support matrix.
+- a documented Codex format-support matrix grounded in the
+  [source survey](../../docs/research/codex-source-survey.md).
 
 Required behavior:
 
-- Selectively port proven path, metadata, transcript, and malformed-input behavior
-  from the approved Harness baseline. Do not port its provider factory, JSONL
-  cache, source-reopening queries, analysis, classifications, or automation
-  filters.
-- Open provider databases read-only and transcript files without write access.
-  Cursor metadata inputs participate in the same complete candidate fingerprint
-  as transcript inputs.
-- Preserve injected blocks such as user information, instructions, and user query
-  as separate canonical segments with evidence-backed provenance instead of
-  stripping them. Do not make automation or subagent exclusions a default.
-- Cover current message and tool-use records. Unknown optional records degrade
-  according to the support matrix; structural corruption returns a typed failure.
-- Register Cursor only in `src/bin/sessions.ts`. Expose working
-  `index --source cursor`, provider-neutral `list`, and index-only `show` with
-  bounded output and canonical IDs. Extend `sessions paths` with Cursor roots
-  supplied by the adapter's probe result.
+- Before Codex normalization depends on it, extend the generic entry model and
+  storage projection with `tool-call`/`tool-result` kinds, an optional exact
+  source-observed `toolName` and, only when a name exists, an optional exact
+  source-observed `toolNamespace` on calls, provider call IDs, canonical entry
+  linkage, and faithful ordered argument/result text. Tool name and namespace
+  remain separate, case-sensitive fields. Results link to calls without
+  receiving copied identity. This is generic tool evidence, not a skill-specific
+  analytics model.
+- Make canonical content an ordered union of text and omitted segments. Text
+  segments retain exact text and hashes and alone enter FTS, deduplication, and
+  recurrence measures. Omitted segments retain position, broad content class,
+  provenance, and sanitized source type without bytes, data URLs, remote URLs,
+  local paths, placeholder text, or hashes. Defer OCR, media interpretation, and
+  attachment storage.
+- Implement against the upstream format and new fixtures. Reuse only proven
+  Harness reference behavior for home/state lookup, read-only row access, and
+  conservative adjacent paired-record deduplication. Do not port whole-file
+  parsing, flattened tool text, preamble stripping, provider-owned caches,
+  analysis/classification policy, or source-reopening queries.
+- Resolve `CODEX_HOME`, top-level global `config.toml` `sqlite_home`, and
+  `CODEX_SQLITE_HOME` with official precedence, using a real TOML parser rather
+  than regex. Select root `state_5.sqlite`; allow the legacy nested fallback only
+  when neither config nor environment selected a root and the current root is
+  absent. Never merge roots or fall back from an explicit missing/corrupt store.
+  Document V1 as the global/default Codex instance; full profile/project/runtime
+  config-layer parity and explicit multiple instances are later work.
+- Derive a stable source instance from resolved roots. Accept only regular
+  rollout filenames whose thread ID matches and whose canonical path remains
+  under Codex `sessions` or `archived_sessions`; reject traversal, symlink
+  escape, and unrestricted absolute paths. Normalize plain/compressed files to
+  one logical identity and prefer plain if both exist.
+- Treat the state database as required discovery and the referenced rollout as
+  content authority. Do not silently fall back to a filesystem scan. Open SQLite
+  read-only/query-only, feature-detect optional columns, and prove that no WAL/SHM
+  sidecars or provider files are created.
+- Fingerprint the whitelisted logical thread row, its parent-edge row or explicit
+  absence, and the selected rollout independently. Read state in one stable
+  snapshot; verify every input at the read boundary and the rollout before and
+  after streaming. A representation or value change is `source-changed` and
+  cannot replace the last-good document.
+- Stream both `.jsonl` and `.jsonl.zst` with bounded per-record memory using the
+  supported Node runtime. Handle a plain/compressed representation transition
+  safely; never load a complete rollout into memory.
+- Preserve user/assistant/developer/system text and recognized injected blocks
+  with evidence-backed provenance. Collapse only recognized adjacent duplicate
+  event/response representations. Preserve same-source and non-adjacent repeats.
+- Map function/custom/dynamic/MCP/tool-search/web-search calls and results only
+  where the source provides structural evidence. Preserve exact call IDs,
+  namespaces, non-adjacent linkage, ordered structured textual outputs, and
+  unmatched events without fabricating status. Catalogs, requests, and model
+  declarations do not prove invocation.
+- Use `thread_spawn_edges` and explicit session metadata for lineage. A child
+  receives the exact parent relation; do not synthesize reciprocal edges or
+  infer forks/replay from equal text. Preserve explicit inter-agent content and
+  delegated/replayed origin only where its boundary is provable.
+- Normalize task/turn, compaction, rollback, and abort records as lifecycle
+  markers. Completion is not success. Preserve explicitly visible reasoning
+  summaries; omit encrypted/hidden reasoning, world state, ghost snapshots, and
+  unsupported opaque payloads according to the support matrix.
+- Register Codex only in `src/bin/sessions.ts`. Expose working
+  `index --source codex`, provider-neutral `list`, and index-only `show` with
+  bounded output and canonical IDs. Extend `sessions paths` with sanitized Codex
+  roots supplied by the adapter's probe result.
 
 Exit gate:
 
-- Cursor passes shared conformance and provider golden tests, including missing
-  metadata, changing inputs, malformed records, stable ordering, and read-only
-  operation.
+- Domain, validation, migration, and repository tests round-trip generic linked
+  tool calls/results, separate optional name/namespace, and ordered omitted
+  content. Tests prove omitted segments never enter FTS, hashes, recurrence, or
+  output as private references.
+- Codex passes shared conformance and provider golden tests for root/environment/
+  config/legacy paths, explicit missing/corrupt roots, required and optional
+  schema fields, path containment, logical row/edge
+  fingerprints, plain/Zstandard rollouts, representation changes, malformed and
+  unknown records, stable ordering, and read-only operation.
+- The format matrix and fixtures cover adjacent paired messages; same-name tools
+  in multiple namespaces; function/custom and structured results; non-adjacent
+  and unmatched calls/results; injected content; text-image-text ordering;
+  parent, missing-parent, replay ambiguity, inter-agent content; compaction,
+  rollback, abort, and task completion; visible versus hidden reasoning; and
+  unavailable execution evidence.
 - An end-to-end temporary-home test indexes, lists, and shows. Changing or deleting
   provider files after indexing cannot change list/show until another explicit
   index; a failed refresh preserves the prior result.
-- The packed CLI can run the synthetic Cursor workflow.
+- A source-tree before/after proof finds no provider mutation or created SQLite
+  sidecar. No personal rollout, database, identifier, path, or content is a
+  committed fixture.
+- The packed CLI can run the synthetic Codex workflow.
 - `pnpm check` passes on all CI operating systems.
 
 ### M6 — Add provider-neutral search and evidence semantics
@@ -358,14 +427,21 @@ Primary change areas:
 Required behavior:
 
 - Public query values cover text, source/source instance, workspace, time bounds,
-  actor, origin, exact identity, limit, and opaque continuation cursor. Raw FTS5
-  syntax is never a public API; special characters are accepted as user text.
+  actor, origin, exact entry kind, exact source-observed tool name, exact
+  source-observed tool namespace, exact session identity, limit, and opaque
+  continuation cursor. Raw FTS5 syntax is never a public API; special characters
+  are accepted as user text.
 - Translate to parameterized FTS/SQL with deterministic ordering and stable
   pagination. Ranking, tokenizer settings, and bounded defaults are selected from
   a checked-in synthetic corpus representing prose, file paths, symbols, IDs,
   punctuation, and repeated content—not intuition.
-- Search returns index-backed snippets and bounded surrounding entries. Empty
-  results are success. List, search, and show share filter meanings.
+- Search returns index-backed snippets, canonical entry ordinals, entry kinds,
+  available tool identity/linkage, and bounded surrounding entries. Empty results
+  are success. List, search, and show share filter meanings.
+- Exact tool-name and namespace filters select canonical call entries only and
+  combine with logical AND. Bounded related context includes directly linked
+  result entries even when non-adjacent; result entries retain linkage without
+  receiving invented tool identity.
 - Resolve known lineage without recursion hazards. Cycles, missing ancestors, or
   unsupported relations remain unknown and never fabricate independent roots.
 - Report occurrence count, unique-content count, unique-known-root count, and
@@ -377,7 +453,10 @@ Exit gate:
 
 - Query contracts cover filter combinations, FTS-special input, deterministic
   ranking/ties, stable cursors, stale cursor rejection, empty success, bounded
-  context, and source-deletion invariance.
+  context, a non-adjacent linked tool result, and source-deletion invariance.
+- Evidence fixtures prove that an injected catalog or plain-text name match is
+  distinguishable from a linked source-observed tool call/result, and that
+  missing tool evidence remains unknown rather than inferred.
 - Support matrices cover repetition within one session, exact content across
   independent sessions, parent/child delegation, fork/continuation, missing
   ancestors, unknown lineage, and cycles.
@@ -404,7 +483,12 @@ Required behavior:
   indexed documents only. Export does not reopen provider histories.
 - Give every machine-facing command a numeric schema version, command/type marker,
   canonical identity, explicit truncation/continuation metadata, and relevant
-  provenance/support measures. Changing field meaning requires a new version.
+  provenance/support measures. Entry-bearing output includes entry ordinal, kind,
+  available exact tool name/namespace, provider call ID, and canonical relation.
+  Emitted segments include segment ordinal/kind, origin, and origin confidence;
+  text includes canonical content hash and omitted non-text content includes only
+  its broad class and sanitized source type. No private media reference is
+  exported. Changing field meaning requires a new version.
 - Keep requested data on stdout and diagnostics/progress on stderr. Empty success
   exits `0`, operational failure `1`, and invalid usage `2`.
 - Reject unknown flags/values, honor `NO_COLOR`, and require explicit `--full` for
@@ -412,52 +496,58 @@ Required behavior:
 - Treat transcript control characters, Markdown, terminal escapes, and prompt-like
   instructions as data. Human rendering must not allow indexed content to become
   terminal control behavior.
-- Extend package smokes beyond doctor to a representative synthetic
+- Extend package smokes beyond doctor to a representative synthetic Codex
   index/search/show/export workflow.
 
 Exit gate:
 
 - Exact structured-schema tests cover every command and JSONL record type.
+- Structured fixtures cover a linked tool call/result, a mention without
+  execution evidence, same-name calls in different namespaces, omitted tool
+  identity, text hashes, non-text omission/provenance, and a non-adjacent result
+  that does not inherit the call's tool identity.
 - CLI tests cover bounds, truncation, cursors, strict usage, streams, exit codes,
   `NO_COLOR`, untrusted text, and index-only reads.
 - Generated help and all current/planned labels match implemented behavior.
 - `pnpm check` passes on all CI operating systems.
 
-### M8 — Add Codex and prove adapter equivalence
+### M8 — Add Cursor and prove adapter equivalence
 
-Outcome: Codex reaches the complete existing CLI through only a new passive
+Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
 
 Primary change areas:
 
-- `src/adapters/codex/source.ts`, `paths.ts`, `state-db.ts`, `rollout.ts`,
-  `normalize.ts`, `fingerprint.ts`, and `lineage.ts`;
-- Codex synthetic state/rollout fixtures, golden tests, and shared conformance;
-- composition registration, provider path reporting, and a Codex format-support
+- `src/adapters/cursor/source.ts`, `paths.ts`, `meta.ts`, `transcript.ts`,
+  `normalize.ts`, and `fingerprint.ts`;
+- Cursor synthetic fixtures, golden parser tests, and shared conformance;
+- composition registration, provider path reporting, and a Cursor format-support
   matrix.
 
 Required behavior:
 
-- Selectively port proven path resolution, read-only state-row access, rollout
-  normalization, spawn-edge evidence, and adjacent event/response dedup behavior
-  from the approved Harness baseline. Do not port provider-owned indexing,
-  analysis, workflow policy, or cache formats.
-- Fingerprint rollout, relevant state rows, and known lineage inputs together.
-  Preserve injected preambles as classified content rather than deleting them.
-- Explicitly map supported user/assistant messages, tool calls/results,
-  inter-agent events, compaction/rollback/abort markers, turn context, and
-  timestamps. Opaque or hidden reasoning/state is not indexed as invented text;
-  unsupported evidence follows the documented unknown/omission policy.
-- Use structural spawn/thread evidence for lineage and delegated origin only at
-  the confidence the format supports.
-- Register Codex in composition. No Codex branch belongs in domain, repository,
+- Selectively port proven Cursor path, metadata, transcript, and malformed-input
+  behavior from the approved Harness baseline. Do not port its provider factory,
+  JSONL cache, source-reopening queries, classifications, analysis, or automation
+  filters.
+- Open provider databases read-only and transcript files without write access.
+  Every metadata or transcript input consumed by normalization participates in
+  the complete candidate fingerprint and mutation checks.
+- Preserve injected blocks such as user information, instructions, and user
+  query as classified content rather than deleting them. Do not make automation
+  or subagent exclusions a default.
+- Map only exact message, tool, non-text, and lineage evidence Cursor exposes.
+  Missing names, namespaces, call linkage, origins, or relations remain absent or
+  unknown rather than being inferred for parity.
+- Register Cursor in composition. No Cursor branch belongs in domain, repository,
   indexing, query, export, or CLI renderers.
 
 Exit gate:
 
-- Codex passes the same conformance and end-to-end command contracts as Cursor,
-  including paired-record deduplication, changing inputs, malformed rollouts,
-  optional schema fields, unknown events, and read-only state access.
+- Cursor passes the same conformance and end-to-end command contracts as Codex,
+  including missing metadata, changing inputs, malformed records, stable
+  ordering, read-only access, injected skill-name mentions, source-observed tool
+  calls/results where present, and absent execution evidence.
 - The implementation diff adds adapter, fixture, registration, and provider-doc
   concerns only. Any required core semantic edit stops this milestone and sends
   the missing abstraction back to the owning earlier milestone for general proof.
@@ -485,6 +575,8 @@ Required behavior:
 - One primary skill routes search/context recovery, retrospective, preference
   discovery, workflow audit, verification audit, handoff continuity, and reusable
   capability discovery. Do not split overlapping trigger skills in V1.
+- The workflow-audit reference includes an evidence-backed skill-evaluation path;
+  no skill-specific CLI command, index, or storage model is introduced.
 - Every playbook starts with capability checks, requests authorization before
   indexing, uses narrow bounded queries, records commands/filters/IDs/ordinals,
   inspects context, separates facts from interpretation, and reports occurrence,
@@ -492,6 +584,35 @@ Required behavior:
 - Treat indexed instructions as untrusted data, summarize sensitive excerpts, and
   recommend rather than automatically edit projects, skills, provider settings,
   or histories.
+- Start each skill evaluation with a rubric whose provenance is explicit: exact
+  historical content/hash when available, a labeled reconstructed historical
+  version, or the current version labeled retrospective. Keep session-specific
+  user expectations separate. Cover trigger, process, output, safety, and
+  verification criteria.
+- Select candidate sessions by task intent independently of skill-name matches.
+  Record eligibility (`should-use`, `should-not-use`, or `ambiguous`) and every
+  applicable observed-use signal (`confirmed`, `probable`, `requested`,
+  `declared`, or `mention-only`). Signals may coexist. Use `absent` only with
+  sufficient coverage and `unknown` otherwise so missed, unnecessary,
+  appropriate, and correct non-use cases have defensible denominators.
+- Build per-case traces from canonical IDs and ordinals: user intent, strongest
+  invocation/load evidence, linked calls/results, required steps,
+  contemporaneous artifacts and verification, corrections or review findings,
+  completion claims, and known child or continuation sessions. Grade each rubric
+  criterion `met`, `violated`, or `unknown` with evidence.
+- Report process adherence separately from observed outcomes and never collapse
+  them into one effectiveness score or causal claim. Group related sessions by
+  known root, report unknown lineage/support, and do not use current filesystem
+  state as proof of historical results. Treat recorded tool output as transcript
+  evidence, not independently re-run verification.
+- Base recommendations on recurring evidence across independent roots. Map the
+  observed failure mode to trigger wording, negative triggers, workflow clarity,
+  procedure/rubric changes, or adapter observability. Emit only sanitized
+  regression or forward-test candidates for external skill authoring; do not
+  auto-edit a skill or claim improvement.
+- Make before/after comparisons only with exact skill-version attribution,
+  comparable task contexts, and enough independent known roots for a bounded
+  observational conclusion.
 - Use only shipped commands. Do not expose Harness `analyze`, provider-first
   command trees, automation exclusions, or private workflow assumptions.
 - Document a host-neutral packaged-skill path and only document host-specific
@@ -505,6 +626,12 @@ Exit gate:
 - Representative prompts over a synthetic corpus pass a written facts-first,
   provenance, privacy, bounded-output, and no-mutation rubric for all seven
   playbooks.
+- Workflow-audit cases cover appropriate use, missed use, unnecessary use,
+  correct non-use, requested/declared/mention-only evidence, unavailable version
+  or invocation evidence, unknown lineage, followed process with a poor observed
+  result, and unfollowed process with a good observed result. Reports preserve
+  unknowns, cite case evidence, make no causal claim, and include a no-finding
+  control whose recommendation is no change.
 - A clean user journey works: install -> doctor -> paths -> explicit index ->
   search/show/export -> clear.
 - `pnpm check` passes.
@@ -604,9 +731,9 @@ These are evidence checkpoints, not date commitments:
 | Checkpoint             | Required evidence                                                     |
 | ---------------------- | --------------------------------------------------------------------- |
 | Foundation             | M0 complete; current pre-alpha repository                             |
-| Internal alpha         | M1-M5; Cursor index/list/show vertical slice                          |
-| Feature-complete alpha | M6-M7; Cursor search/evidence/export and stable schemas               |
-| Beta                   | M8; Codex equivalence and third-adapter architecture proof            |
+| Internal alpha         | M1-M5; Codex index/list/show vertical slice                           |
+| Feature-complete alpha | M6-M7; Codex search/evidence/export and stable schemas                |
+| Beta                   | M8; Cursor equivalence and third-adapter architecture proof           |
 | Release candidate      | M9-M10; packaged skill, onboarding, install and publish qualification |
 | V1                     | M11; parity, released package, and pinned one-way Harness integration |
 
@@ -623,9 +750,10 @@ Every V1 release candidate must prove:
 - **Index integrity:** incremental, idempotent, transactional, single-writer,
   complete-scan reconciliation, adapter-version invalidation, and last-good
   preservation.
-- **Evidence integrity:** faithful canonical content, explicit provenance
-  confidence, index-only reads, separate occurrence/unique-content/unique-root
-  measures, and honest unknown lineage.
+- **Evidence integrity:** faithful canonical text, explicit non-text omissions
+  and provenance confidence, source-observed tool identity/linkage, index-only reads, explicit
+  separation of mentions from execution evidence, separate
+  occurrence/unique-content/unique-root measures, and honest unknown lineage.
 - **Privacy:** explicit indexing, read-only provider access, no runtime network or
   telemetry, restrictive owned-state permissions, bounded diagnostic retention,
   honest deletion limitations, and only-owned-file clearing.
@@ -635,7 +763,9 @@ Every V1 release candidate must prove:
 - **Delivery:** clean compiled install, allowlisted tarball, packaged skill,
   multi-OS full/smoke gates, release provenance, and no source-checkout runtime.
 - **Adoption:** install-to-first-search guide, provider/troubleshooting reference,
-  seven evidence-first playbooks, and no automatic user-project mutation.
+  seven evidence-first playbooks, version-aware skill/workflow evaluation with
+  separate adherence and observed outcomes, and no automatic user-project
+  mutation.
 - **Continuity:** no shared legacy cache, explicit reindex migration, retained
   Harness skill entry, exact pinned integration, and one-way ownership.
 

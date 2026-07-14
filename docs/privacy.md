@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: accepted V1 contract; current implementation called out explicitly
-- Last updated: 2026-07-13
+- Last updated: 2026-07-14
 
 Sessions handles sensitive local history. Privacy behavior is a product contract, not a best-effort feature.
 
@@ -20,6 +20,9 @@ Schema version 3 stores one expiring generation lease for internal `index` or `c
 - Index, list, search, show, export, paths, and doctor operations require no network access and emit no telemetry.
 - List, search, show, and export use the canonical index after indexing; they do not silently reopen mutable source histories.
 - Sessions stores normalized content required for faithful results, not entire raw provider payloads.
+- Unsupported non-text content retains only ordered omission class/provenance.
+  Sessions does not separately open or fetch referenced resources and does not
+  persist media bytes, data URLs, remote URLs, or local attachment paths.
 - `sessions paths` explains the owned index location without printing transcript content. Registered adapters will later add sanitized source roots.
 - `sessions index clear` removes Sessions-owned index files only.
 - No project, skill, provider configuration, or source transcript is automatically edited from analysis output.

@@ -16,4 +16,9 @@ Contracts:
 - [Repository commands](commands.md)
 - [Architecture decisions](../decisions/README.md)
 
+Research baselines:
+
+- [Codex source survey](../research/codex-source-survey.md) — sanitized source,
+  schema, compatibility, and Harness-reference findings before M5.
+
 Active implementation work is indexed in [`dev/plans/README.md`](../../dev/plans/README.md).

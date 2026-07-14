@@ -1,7 +1,7 @@
 # CLI contract
 
 - Status: current public M4 behavior plus accepted V1 semantics
-- Last updated: 2026-07-13
+- Last updated: 2026-07-14
 
 Generated `sessions --help` owns exact current flags. This document owns behavior and compatibility. Planned commands are not current commands.
 
@@ -96,8 +96,14 @@ Canonical printable IDs use
 `cursor@default:opaque-id`. Kind is an open lowercase adapter slug. Instance and
 native IDs are case-sensitive opaque values; delimiters are escaped and values
 are never Unicode-normalized. Filters are provider-neutral and may cover
-source/source-instance, workspace, time bounds, actor, origin, exact identity,
-limit, and continuation cursor. Raw SQLite FTS syntax is not a public API.
+source/source-instance, workspace, time bounds, actor, origin, exact entry kind,
+exact source-observed tool name, exact source-observed tool namespace, exact
+session identity, limit, and continuation cursor. Tool-name and namespace
+filters match separate, case-sensitive recorded fields and combine with logical
+AND. A call with no namespace never matches a namespace filter. They do not infer
+that a named skill or workflow ran. They select canonical tool-call entries only;
+bounded context may include directly linked tool-result entries without copying
+tool identity onto them. Raw SQLite FTS syntax is not a public API.
 
 ## Streams and exit codes
 
@@ -112,6 +118,15 @@ Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 ## Structured output
 
 Every JSON/JSONL command includes a numeric `schemaVersion`. Additive fields may appear within one schema version; removing or changing a field's meaning requires a new version. JSONL starts each record with enough command/type/version information to parse independently.
+
+Planned entry-bearing structured records preserve canonical entry ordinal and
+kind plus available exact tool name, exact tool namespace, provider call ID, and
+related entry ordinal. Every emitted segment includes its ordinal, kind, origin,
+and origin confidence. Text includes its exact value plus canonical content-hash
+scheme and digest. Omitted non-text content includes only its broad class and
+sanitized source type—never bytes, URLs, local paths, placeholder text, or a
+hash. Missing source evidence remains absent or unknown; the DTO does not assign
+skill-specific meaning.
 
 Structured output never mixes progress or warnings into stdout.
 
