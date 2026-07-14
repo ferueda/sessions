@@ -7,9 +7,11 @@ Sessions handles sensitive local history. Privacy behavior is a product contract
 
 ## Current implementation
 
-The current CLI exposes help, version, `doctor`, and `paths`. `paths` reports only Sessions-owned index locations and existing state. `doctor` checks Node.js, probes SQLite FTS5 and its per-table secure-delete capability in memory, and inspects the existing index state. An uninitialized index is healthy. Neither command creates directories, initializes or migrates a database, locates provider histories, uses telemetry, or accesses the network.
+The current CLI exposes help, version, `doctor`, and `paths`. `paths` reports only Sessions-owned index locations and existing state. `doctor` checks Node.js, probes SQLite FTS5 and its per-table secure-delete capability in memory, and inspects the existing index state. For a ready index it uses an immutable snapshot to check integrity, foreign keys, FTS structure/content/security, run records, and sanitized writer-lease state. An uninitialized index is healthy. Neither command creates directories, initializes or migrates a database, locates provider histories, uses telemetry, or accesses the network.
 
-An internal writer lifecycle and canonical repository are available to future explicit indexing commands and are exercised by tests. The repository stores validated provider-neutral session documents, freshness state, bounded run diagnostics, and derived FTS data. There are no source adapters or public indexing command, so the current CLI still cannot populate transcript content.
+The internal provider-neutral indexing service, coordinated writer lifecycle, canonical repository, and clear maintenance are implemented and exercised by tests. The indexing service admits complete source discovery before writes, preserves last-good documents after failed refreshes, reconciles deletions only after a complete exact-source scan, and returns bounded typed diagnostics without transcript content or raw errors. The repository stores validated provider-neutral session documents, freshness state, bounded run diagnostics, and derived FTS data.
+
+Schema version 3 stores one expiring generation lease for internal `index` or `clear` ownership. Each repository mutation fences stale owners inside its write transaction; takeover marks abandoned active runs interrupted. Clear maintenance removes only the known database, WAL, and SHM paths after safety checks, never provider files or the cache directory recursively. There are no source adapters or public index/clear commands, so the current CLI still cannot populate or clear transcript content.
 
 ## V1 promises
 
@@ -32,9 +34,9 @@ Sessions resolves its owned state directory as follows:
 
 An absolute `SESSIONS_CACHE_DIR` replaces the full owned directory path; Sessions does not append another `sessions` leaf. The database is `index.sqlite3`, with known `index.sqlite3-wal` and `index.sqlite3-shm` sidecar paths. This state is separate from the legacy Harness JSONL cache and is never reused or automatically migrated. `sessions paths` can inspect the location before it exists without creating it.
 
-When the internal writer is explicitly opened, it creates owned POSIX directories with mode `0700` and constrains the database, WAL, and SHM files to `0600`. On Windows, default state remains inside the current user's local profile and relies on platform ACLs. The writer enables foreign keys, WAL, a five-second busy timeout, and SQLite core `secure_delete`. Its ordered, checksummed migrations run transactionally and refuse incompatible or newer history.
+When the internal writer is explicitly opened, it creates owned POSIX directories with mode `0700` and constrains the database, WAL, and SHM files to `0600`. On Windows, default state remains inside the current user's local profile and relies on platform ACLs. The writer enables foreign keys, WAL, a five-second busy timeout, and SQLite core `secure_delete`. Its ordered, checksummed migrations run transactionally and refuse incompatible or newer history. Immutable readers and doctor refuse WAL recovery state; the coordinated writer may recover valid SQLite WAL state before acquiring its lease.
 
-The index is rebuildable derived data. Clearing it does not alter provider histories.
+The index is rebuildable derived data. Internal clear behavior is non-migrating and only-owned-file scoped. Missing state is success; unsafe paths, recovery sidecars for non-current state, a live writer, and partial deletion fail with sanitized typed errors. Clearing never alters provider histories.
 
 ## Deletion limitations
 

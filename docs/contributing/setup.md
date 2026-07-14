@@ -24,7 +24,7 @@ pnpm check
 | `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored |
 | Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                |
 
-The current public CLI writes no user state. `sessions paths` resolves the platform-local `sessions` cache directory, or the exact absolute `SESSIONS_CACHE_DIR` override, without creating it. The internal writer and canonical repository are exercised by tests and reserved for future explicit indexing and query commands. Index paths, ownership, and deletion limits are governed by [privacy](../privacy.md); explicit clear behavior remains planned.
+The current public CLI writes no user state. `sessions paths` resolves the platform-local `sessions` cache directory, or the exact absolute `SESSIONS_CACHE_DIR` override, without creating it. Tests exercise the internal indexing/reconciliation service, schema-v3 coordinated writer, canonical repository, clear maintenance, and immutable health inspection. Concrete adapters and public index/clear/query commands remain planned. Index paths, ownership, and deletion limits are governed by [privacy](../privacy.md).
 
 ## Hooks
 

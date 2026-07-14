@@ -21,7 +21,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 3 are complete. The repository currently has:
+Milestones 0 through 4 are complete. The repository currently has:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
@@ -33,13 +33,20 @@ Milestones 0 through 3 are complete. The repository currently has:
 - an internal protected SQLite writer lifecycle with checksummed migrations;
 - an atomic provider-neutral canonical repository with collision-safe content,
   last-good freshness state, bounded run diagnostics, and derived FTS data;
+- an internal provider-neutral indexing service with complete-discovery admission,
+  incremental reads, last-good preservation, exact-source reconciliation, and
+  repository-authoritative reports;
+- schema-v3 renewable writer leases, transactional mutation fencing, abandoned-
+  run interruption, and valid WAL recovery;
+- internal only-owned-file clear maintenance and immutable ready-index health
+  inspection used by doctor;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have indexing/reconciliation, Cursor or Codex adapters,
-list/search/show/export, the
-packaged Agent Skill, release automation, or the pinned Harness integration.
-The writer lifecycle is internal until a real source is registered; no public
-command creates persistent state yet.
+It does not yet have Cursor or Codex adapters, public index/clear commands,
+list/search/show/export, the packaged Agent Skill, release automation, or the
+pinned Harness integration. The indexing and maintenance paths remain internal
+until a real source is registered; no public command creates or clears persistent
+state yet.
 
 ## Execution rules
 
@@ -67,7 +74,7 @@ flowchart TD
   M0["M0 Foundation — complete"] --> M1["M1 Canonical contracts"]
   M1 --> M2["M2 State and SQLite lifecycle"]
   M2 --> M3["M3 Canonical repository — complete"]
-  M3 --> M4["M4 Indexing and reconciliation"]
+  M3 --> M4["M4 Indexing and reconciliation — complete"]
   M4 --> M5["M5 Cursor vertical slice"]
   M5 --> M6["M6 Query and evidence engine"]
   M6 --> M7["M7 Export and CLI schemas"]
@@ -236,7 +243,7 @@ Exit gate:
 - A repository contract suite passes against SQLite without provider branches.
 - `pnpm check` passes.
 
-### M4 — Build indexing, reconciliation, maintenance, and writer safety
+### M4 — Build indexing, reconciliation, maintenance, and writer safety (complete)
 
 Outcome: a provider-neutral application service owns the complete indexing
 lifecycle before any concrete provider is wired.
@@ -271,9 +278,10 @@ Failure and concurrency policy:
 - Two indexing writers cannot mutate the same index concurrently. The second
   exits with an operational diagnostic; a later run identifies and closes an
   interrupted predecessor safely.
-- `sessions index clear` removes only the known Sessions database and sidecar
-  files. Missing state is success. An active/locked index is refused; the cache
-  root and provider files are never recursively deleted.
+- The internal clear service removes only the known Sessions database and
+  sidecar files. Missing state is success. An active/locked index is refused;
+  the cache root and provider files are never recursively deleted. M5 registers
+  the planned `sessions index clear` route.
 - State-aware doctor reports incompatible schema, unsafe modes, integrity/FTS
   failure, secure-delete support, and interrupted runs without mutating state or
   content timestamps.
