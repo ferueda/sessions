@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runM5SmokeWorkflow } from "./smoke-m5-workflow.ts";
+import { runM6SmokeWorkflow } from "./smoke-m6-workflow.ts";
 
 const binary = fileURLToPath(new URL("../dist/bin/sessions.js", import.meta.url));
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), "sessions-dist-smoke-"));
@@ -19,7 +19,7 @@ try {
   if (version.status !== 0 || !/^\d+\.\d+\.\d+\s*$/u.test(version.stdout)) {
     throw new Error(`unexpected version output: ${JSON.stringify(version.stdout)}`);
   }
-  await runM5SmokeWorkflow({
+  await runM6SmokeWorkflow({
     temporaryRoot,
     run: (args, environment) => run([binary, ...args], environment),
   });

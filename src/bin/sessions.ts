@@ -10,6 +10,7 @@ import { getPaths } from "../application/get-paths.ts";
 import { listSessions } from "../application/list-sessions.ts";
 import { runDoctor } from "../application/run-doctor.ts";
 import { runIndex } from "../application/run-index.ts";
+import { searchSessions } from "../application/search-sessions.ts";
 import { showSession } from "../application/show-session.ts";
 import { createSourceDiagnostic } from "../application/source-diagnostic.ts";
 import { runCli } from "../cli/run.ts";
@@ -70,11 +71,23 @@ const exitCode = await runCli(process.argv.slice(2), {
       lifecycle: indexLifecycle,
       clock: { now: () => new Date() },
     }),
-  list: (limit) =>
+  list: ({ filter, limit, cursor }) =>
     listSessions({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
+      ...(filter === undefined ? {} : { filter }),
       ...(limit === undefined ? {} : { limit }),
+      ...(cursor === undefined ? {} : { cursor }),
+    }),
+  search: ({ text, filter, limit, context, cursor }) =>
+    searchSessions({
+      paths: resolvePaths(),
+      lifecycle: indexLifecycle,
+      text,
+      ...(filter === undefined ? {} : { filter }),
+      ...(limit === undefined ? {} : { limit }),
+      ...(context === undefined ? {} : { context }),
+      ...(cursor === undefined ? {} : { cursor }),
     }),
   show: ({ identity, entry, context }) =>
     showSession({

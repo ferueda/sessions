@@ -4,6 +4,7 @@ import type {
   ContentSegment,
   OmittedContentSegment,
   OriginConfidence,
+  LineageCoverage,
   SessionDocument,
   SessionEntry,
   SessionIdentity,
@@ -85,6 +86,7 @@ export interface TestDocumentOptions {
   readonly identity?: SessionIdentity;
   readonly entries?: readonly SessionEntry[];
   readonly includeMetadata?: boolean;
+  readonly lineageCoverage?: LineageCoverage;
 }
 
 export function createTestDocument(options: TestDocumentOptions = {}): SessionDocument {
@@ -99,6 +101,7 @@ export function createTestDocument(options: TestDocumentOptions = {}): SessionDo
           updatedAt: "2026-07-13T12:01:00.000Z",
         }
       : {}),
+    lineageCoverage: options.lineageCoverage ?? "unknown",
     relations: [],
     entries: options.entries ?? [createTestEntry()],
   };

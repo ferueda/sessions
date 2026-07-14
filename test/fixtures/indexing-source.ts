@@ -124,5 +124,10 @@ function readyProbe(source: SourceInstance): SourceProbe {
 }
 
 function minimalDocument(candidate: DiscoveredSession): SessionDocument {
-  return { identity: candidate.identity, relations: [], entries: [] };
+  return {
+    identity: candidate.identity,
+    lineageCoverage: "unknown",
+    relations: [],
+    entries: [],
+  };
 }

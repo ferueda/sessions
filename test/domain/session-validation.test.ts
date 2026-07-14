@@ -110,9 +110,27 @@ describe("validateSessionDocument", () => {
   test("reports a missing required property once at its canonical path", () => {
     const document = validDocument();
 
-    const result = invalidResult({ relations: document.relations, entries: document.entries });
+    const result = invalidResult({
+      lineageCoverage: document.lineageCoverage,
+      relations: document.relations,
+      entries: document.entries,
+    });
 
     expect(result.issues).toEqual([{ code: "missing-property", path: "/identity" }]);
+  });
+
+  test("requires explicit canonical lineage coverage", () => {
+    const document = validDocument();
+    const { lineageCoverage: _, ...missing } = document;
+
+    expect(invalidResult(missing).issues).toContainEqual({
+      code: "missing-property",
+      path: "/lineageCoverage",
+    });
+    expect(invalidResult({ ...document, lineageCoverage: "partial" }).issues).toContainEqual({
+      code: "invalid-literal",
+      path: "/lineageCoverage",
+    });
   });
 
   test("rejects noncanonical identities and an unexpected valid identity", () => {
@@ -578,6 +596,7 @@ function validDocument(): SessionDocument {
     workspace: "/workspace",
     createdAt: "2026-07-13T10:00:00.000Z",
     updatedAt: "2026-07-13T10:01:00.000Z",
+    lineageCoverage: "complete",
     relations: [relation()],
     entries: [canonicalEntry(0)],
   };

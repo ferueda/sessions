@@ -407,6 +407,7 @@ function freezeDocument(document: SessionDocument): SessionDocument {
     ...(document.workspace === undefined ? {} : { workspace: document.workspace }),
     ...(document.createdAt === undefined ? {} : { createdAt: document.createdAt }),
     ...(document.updatedAt === undefined ? {} : { updatedAt: document.updatedAt }),
+    lineageCoverage: document.lineageCoverage,
     relations,
     entries,
   });

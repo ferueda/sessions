@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { ShowSessionResult } from "../src/application/show-session.ts";
-import { renderList, renderPaths, renderShow } from "../src/cli/render.ts";
+import { renderList, renderPaths, renderSearch, renderShow } from "../src/cli/render.ts";
 
 const identity = {
   source: { kind: "synthetic", instanceId: "one" },
@@ -103,7 +103,6 @@ describe("human CLI rendering", () => {
           sourceState: "present",
         },
       ],
-      truncated: false,
     });
     const show = renderShow({
       summary: { identity, freshness: "current", sourceState: "present" },
@@ -135,5 +134,69 @@ describe("human CLI rendering", () => {
     expect(show).toContain("… [truncated]");
     expect(Buffer.byteLength(list, "utf8")).toBeLessThan(9_000);
     expect(Buffer.byteLength(show, "utf8")).toBeLessThan(9_000);
+  });
+
+  test("renders bounded search evidence, linked context, support, and continuation", () => {
+    const output = renderSearch({
+      hits: [
+        {
+          session: {
+            identity,
+            title: "match\u001b[31m",
+            freshness: "current",
+            sourceState: "present",
+            capturedAt: "2026-07-14T12:00:00.000Z",
+          },
+          entry: {
+            ordinal: 4,
+            kind: "tool-call",
+            actor: "tool",
+            toolName: "exec\u001b",
+            toolNamespace: "shell",
+            relatedEntryOrdinal: 9,
+          },
+          snippet: {
+            segmentOrdinal: 1,
+            origin: "tool",
+            originConfidence: "high",
+            text: `${"é".repeat(400)}\u001b[2J`,
+            truncated: true,
+            additionalMatchingSegments: 2,
+          },
+          context: [
+            {
+              ordinal: 9,
+              kind: "tool-result",
+              actor: "tool",
+              relatedEntryOrdinal: 4,
+              body: "result\u0007",
+              bodyTruncated: false,
+              adjacent: false,
+              linked: true,
+            },
+          ],
+          linkedContextTruncated: true,
+        },
+      ],
+      support: {
+        occurrences: 3,
+        uniqueContent: 2,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 0,
+      },
+      nextCursor: "cursor-token" as never,
+    });
+
+    expect(output).toContain("synthetic@one:session");
+    expect(output).toContain("match\\u{1b}[31m");
+    expect(output).toContain("[current; present; 2026-07-14T12:00:00.000Z]");
+    expect(output).toContain("tool=shell/exec\\u{1b}");
+    expect(output).toContain("Context (linked) #9 tool tool-result related=#4");
+    expect(output).toContain("result\\u{07}");
+    expect(output).toContain("Linked context: truncated at 20 entries");
+    expect(output).toContain("Support: 3 occurrence(s); 2 unique content value(s)");
+    expect(output).toContain("Next cursor: cursor-token");
+    expect(output).not.toContain("\u001b");
+    expect(Buffer.byteLength(output.split("\n")[2]!, "utf8")).toBeLessThanOrEqual(512);
   });
 });

@@ -1,6 +1,7 @@
 import type { IndexState, ReadyIndexState } from "../../domain/index-state.ts";
 import type { IndexHealthInspector } from "./index-health.ts";
 import type { SessionIndexReader, SessionIndexWriter } from "./session-index.ts";
+import type { SessionQueryRepository } from "./session-query.ts";
 import type { SourceDiscoveryWorkspace } from "./session-source.ts";
 
 export interface IndexPaths {
@@ -18,6 +19,7 @@ export interface IndexStateInspector {
 export interface IndexReader {
   readonly state: ReadyIndexState;
   readonly sessions: SessionIndexReader;
+  readonly query: SessionQueryRepository;
   close(): Promise<void>;
 }
 

@@ -3,6 +3,7 @@ import type {
   SessionRevision,
   ValidatedSessionReplacement,
 } from "../validate-session.ts";
+import type { SessionQuerySummary } from "../../domain/session-query.ts";
 import type { SessionDocument, SessionIdentity, SourceInstance } from "../../domain/session.ts";
 
 declare const sessionIndexRunIdBrand: unique symbol;
@@ -128,16 +129,7 @@ export type SessionFreshness =
       readonly latest: FailedLatestObservation;
     };
 
-export interface IndexedSessionSummary {
-  readonly identity: SessionIdentity;
-  readonly title?: string;
-  readonly workspace?: string;
-  readonly createdAt?: string;
-  readonly updatedAt?: string;
-  readonly freshness: "current" | "stale";
-  readonly sourceState: "present" | "missing" | "unknown";
-  readonly capturedAt?: string;
-}
+export type IndexedSessionSummary = SessionQuerySummary;
 
 export interface IndexedSession {
   readonly summary: IndexedSessionSummary;
@@ -154,7 +146,6 @@ export interface SessionIndexReader {
   getSummary(identity: SessionIdentity): Promise<IndexedSessionSummary | undefined>;
   getDocument(identity: SessionIdentity): Promise<SessionDocument | undefined>;
   getSession(identity: SessionIdentity): Promise<IndexedSession | undefined>;
-  listSummaries(options: { readonly limit: number }): Promise<readonly IndexedSessionSummary[]>;
 }
 
 export interface SessionIndexWriter extends SessionIndexReader {

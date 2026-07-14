@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -93,8 +94,29 @@ describe("Codex durable vertical slice", () => {
       freshness: "current",
       sourceState: "present",
     });
+    const beforeAdapterUpgrade = await show(targetIdentity);
+    expect(beforeAdapterUpgrade.entries).toHaveLength(1);
+
+    // A retained V1 observation is normalized again under V2, then stabilizes.
+    setStoredAdapterVersion(paths.database, "codex-v1");
+    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v1"]);
+    const adapterUpgrade = await index();
+    expect(adapterUpgrade.counts).toMatchObject({
+      discovered: 2,
+      unchanged: 0,
+      updated: 2,
+      failed: 0,
+    });
+    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v2"]);
+    const adapterStable = await index();
+    expect(adapterStable.counts).toMatchObject({
+      discovered: 2,
+      unchanged: 2,
+      updated: 0,
+      failed: 0,
+    });
     const initialTarget = await show(targetIdentity);
-    expect(initialTarget.entries).toHaveLength(1);
+    expect(initialTarget.entries).toEqual(beforeAdapterUpgrade.entries);
     const initialCapture = initialTarget.summary.capturedAt;
 
     // A complete scan missing only the target retains its last-good document.
@@ -232,7 +254,7 @@ describe("Codex durable vertical slice", () => {
     expect(existsSync(paths.shm)).toBe(false);
     expect(existsSync(paths.scratch)).toBe(false);
     await expect(readFile(neighbor, "utf8")).resolves.toBe("unrelated library neighbor");
-    await expect(list()).resolves.toEqual({ sessions: [], truncated: false });
+    await expect(list()).resolves.toEqual({ sessions: [] });
   });
 });
 
@@ -294,6 +316,39 @@ function monotonicNow(iso: string, incrementMs: number): () => Date {
 function tokenFactory(prefix: string): () => string {
   let sequence = 0;
   return () => `${prefix}-${++sequence}`;
+}
+
+function setStoredAdapterVersion(databaseFile: string, version: "codex-v1"): void {
+  const database = new DatabaseSync(databaseFile);
+  try {
+    const result = database
+      .prepare(
+        `UPDATE sessions_session_tracking
+         SET last_good_adapter_version = ?, latest_adapter_version = ?
+         WHERE last_good_adapter_version IS NOT NULL`,
+      )
+      .run(version, version);
+    expect(result.changes).toBe(2);
+  } finally {
+    database.close();
+  }
+}
+
+function storedAdapterVersions(databaseFile: string): readonly string[] {
+  const database = new DatabaseSync(databaseFile, { readOnly: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT DISTINCT last_good_adapter_version AS version
+         FROM sessions_session_tracking
+         WHERE last_good_adapter_version IS NOT NULL
+         ORDER BY version`,
+      )
+      .all() as unknown as readonly { readonly version: string }[];
+    return rows.map(({ version }) => version);
+  } finally {
+    database.close();
+  }
 }
 
 function summary<

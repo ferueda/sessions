@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current M5 behavior plus accepted later-V1 semantics
+- Status: current M6 behavior plus accepted later-V1 semantics
 - Last updated: 2026-07-14
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
@@ -18,7 +18,21 @@ sessions --version
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
-sessions list [--limit N]
+sessions list [--source SOURCE] [--instance INSTANCE]
+              [--source-state present|missing|unknown] [--workspace WORKSPACE]
+              [--captured-after TIME] [--captured-before TIME]
+              [--observed-after TIME] [--observed-before TIME]
+              [--session CANONICAL-ID] [--limit N] [--cursor TOKEN]
+sessions search <text> [--source SOURCE] [--instance INSTANCE]
+                       [--source-state present|missing|unknown]
+                       [--workspace WORKSPACE]
+                       [--captured-after TIME] [--captured-before TIME]
+                       [--observed-after TIME] [--observed-before TIME]
+                       [--session CANONICAL-ID]
+                       [--entry-after TIME] [--entry-before TIME]
+                       [--actor ACTOR] [--origin ORIGIN] [--kind KIND]
+                       [--tool-name NAME] [--tool-namespace NAMESPACE]
+                       [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
 sessions data clear --yes [--format human|json]
@@ -36,18 +50,26 @@ A complete report exits `0`; an incomplete report is fully rendered and exits
 absence marks it missing without deletion; incomplete discovery leaves source
 state unknown.
 
-`list` defaults to 50 and accepts 1 through 200. Missing activity timestamps sort
-last, then activity descends, then the raw source/instance/native tuple ascends.
-It requests one sentinel row to report truncation and never re-sorts. A fresh
-library renders exactly `No sessions found.` plus a newline, exits `0`, and does
-not create state or resolve Codex.
+`list` defaults to 50 and accepts 1 through 200. Activity is
+`updatedAt`, falling back to `createdAt`; missing activity sorts last, then
+activity descends, then the raw source/instance/native tuple ascends with binary
+collation. When another page exists, output ends with the copyable
+`Next cursor: <token>` line. A fresh library renders exactly
+`No sessions found.` plus a newline, exits `0`, and does not create state or
+resolve Codex.
+
+`search` requires non-blank text, defaults to 20 primary hits, and accepts 1
+through 200. `--context` defaults to 0 and accepts 0 through 10 adjacent entries
+on each side. A no-match result renders exactly `No matches found.` plus a
+newline and exits `0`. Search, list, and show read one immutable retained-library
+snapshot per operation and never resolve or reopen Codex.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
 requires `--entry`. Missing session/entry values are operational failures.
-List/show are human-only until M7, read only the canonical library, report
-freshness/source state/capture time, omit diagnostic locators and workspace, and
-escape/bound untrusted terminal output.
+List/search/show are human-only until M7. They report applicable
+freshness/source-state/capture evidence, omit diagnostic locators and workspace
+from output, and escape/bound untrusted terminal content.
 
 `forget` idempotently deletes one retained Sessions copy and returns `forgotten`
 or `absent`. `data clear` requires `--yes` and deletes all known Sessions-owned
@@ -134,7 +156,6 @@ no partial report and exits `1`.
 ## Remaining V1 commands
 
 ```text
-sessions search <text> [filters]
 sessions export <source-instance:id> --format md|json|jsonl [--full]
 sessions index --source cursor
 ```
@@ -156,21 +177,26 @@ not a global text/reference erasure operation. If the provider still exposes the
 session, a later explicit index can capture it again. `sessions data clear`
 requires `--yes` and removes only the known Sessions library database/WAL/SHM
 files plus the exact ephemeral scratch subtree. Rebuilding derived FTS/query
-state is a different, non-destructive
-operation and is not a public M5 command.
+state is a different, non-destructive operation and is not a public command. An
+explicit leased `index` writer verifies the canonical library first and repairs
+FTS-only structure/content damage from canonical content. Doctor remains
+read-only and reports `rebuild-required`; canonical corruption fails closed
+instead of invoking projection repair.
 
-On a fresh uninitialized library, `sessions list` exits `0`, writes exactly
-`No sessions found.` plus a newline to stdout, leaves stderr empty, and returns the
-logical result `{ sessions: [], truncated: false }`. It does not create storage,
-run migrations, open a reader, or resolve/probe an adapter. Initialized-but-empty
-uses the same output through a normal read snapshot. Other initialized non-ready
-states remain operational failures. `show` of an absent identity, including in an
-uninitialized library, remains a sanitized not-found operational failure.
+On a fresh uninitialized library, `sessions list` and a cursor-free
+`sessions search` exit `0`, write their exact empty messages to stdout, and leave
+stderr empty. They do not create storage, run migrations, open a reader, or
+resolve/probe an adapter. Initialized-but-empty uses the same output through a
+normal read snapshot. A supplied cursor against absent/recreated state is stale.
+Other initialized non-ready states remain operational failures. `show` of an
+absent identity, including in an uninitialized library, remains a sanitized
+not-found operational failure.
 
 ## Current operational JSON
 
 The current pre-alpha operational reports are exact test-backed contracts.
-Transcript-bearing list/show output remains human-only until the M7 DTO work.
+Transcript-bearing list/search/show output remains human-only until the M7 DTO
+work.
 
 `sessions index --format json` emits the current schema-1 report. A complete
 representative report is:
@@ -355,21 +381,116 @@ Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
 
-## Current identity and planned filters
+## Current query contract
 
-Canonical printable IDs currently use
+Canonical printable IDs use
 `<kind>@<percent-encoded-instance-id>:<percent-encoded-native-id>`, for example
-`cursor@default:opaque-id`. Kind is an open lowercase adapter slug. Instance and
+`codex@default:opaque-id`. Kind is an open lowercase adapter slug. Instance and
 native IDs are case-sensitive opaque values; delimiters are escaped and values
-are never Unicode-normalized. Filters are provider-neutral and may cover
-source/source-instance, workspace, time bounds, actor, origin, exact entry kind,
-exact source-observed tool name, exact source-observed tool namespace, exact
-session identity, limit, and continuation cursor. Tool-name and namespace
-filters match separate, case-sensitive recorded fields and combine with logical
-AND. A call with no namespace never matches a namespace filter. They do not infer
-that a named skill or workflow ran. They select canonical tool-call entries only;
-bounded context may include directly linked tool-result entries without copying
-tool identity onto them. Raw SQLite FTS syntax is not a public API.
+are never Unicode-normalized.
+
+### Shared list/search filters
+
+Each filter accepts one value; different filters combine with AND. Exact values
+use their case-sensitive canonical representation:
+
+- `--source` selects an exact source kind. `--instance` selects an exact source
+  instance and requires `--source`.
+- `--source-state` accepts `present`, `missing`, or `unknown`.
+- `--workspace` selects the exact retained workspace value.
+- `--captured-after` / `--captured-before` bound successful capture time.
+- `--observed-after` / `--observed-before` bound effective source-observation
+  time.
+- `--session` selects one exact canonical identity.
+
+Times must be canonical UTC with milliseconds, such as
+`2026-07-14T12:00:00.000Z`. Every `after`/`before` bound is exclusive; equal or
+inverted pairs are invalid usage. A missing timestamp does not satisfy either
+bound.
+
+Effective source state is `unknown` while the source instance's latest coverage
+is unknown; otherwise it is that retained session's `present`/`missing` tracking
+state. Effective source-observation time follows the same evidence boundary: use
+the source coverage observation while coverage is unknown, otherwise use the
+session presence observation. `lastSeenAt`, capture time, and provider activity
+time are never substituted.
+
+### Search text, filters, and hits
+
+Search splits well-formed input on Unicode whitespace, quotes every non-empty
+term as literal FTS data, and joins terms with logical AND. Quotes, FTS keywords,
+paths, opaque IDs, operators, and punctuation are never interpreted as public
+FTS syntax. Blank input is invalid usage. Non-blank input that yields no tokens
+under the fixed FTS5 `unicode61` tokenizer succeeds with no matches.
+Lexical case/diacritic behavior follows that tokenizer; it is distinct from the
+case-sensitive exact filters below.
+
+Search-only filters are:
+
+- exclusive `--entry-after` / `--entry-before` canonical entry timestamps;
+- exact `--actor` values `human`, `model`, `tool`, `system`, or `unknown`;
+- exact `--origin` values `human`, `injected`, `delegated`, `replayed-copied`,
+  `model`, `tool`, `system`, or `unknown`;
+- exact `--kind`, `--tool-name`, and `--tool-namespace` values.
+
+Filters constrain the primary matching occurrence/entry; returned context need
+not satisfy them. Origin applies to the matching text occurrence. Tool-name and
+namespace are separate observed fields, combine with AND, and select canonical
+`tool-call` entries only. A call without a namespace does not match a namespace
+filter. Text mentions, injected catalogs, and agent claims never manufacture a
+call or prove a named skill/workflow ran.
+
+Qualifying text occurrences group by canonical session identity and entry
+ordinal, yielding one primary hit per entry. The best-ranked matching segment,
+then its lowest segment ordinal, supplies the snippet; the hit reports other
+matching segments without duplicating the entry. Page limits count primary hits,
+not matching segments or context.
+
+Entry rank uses the best content-level FTS5 BM25 value, then effective session
+activity (`updatedAt`, falling back to `createdAt`) descending with missing values
+last, then binary source kind/instance/native identity ascending, then entry
+ordinal. Repeated occurrences do not improve relevance. These tie rules make the
+same retained snapshot and query deterministic.
+
+Each snippet and context body is at most 512 UTF-8 bytes and marks truncation.
+Human rendering uses the `… [truncated]` suffix.
+`--context N` adds at most N neighboring entries on each side. Independently,
+search adds direct inbound/outbound relation partners only when the observed pair
+is one `tool-call` and one `tool-result`. Linked expansion is non-recursive,
+deduplicated, ordinal-sorted, capped at 20 additions, and reports truncation.
+Turn/lifecycle and every other `relatedEntryOrdinal` pairing are excluded.
+Results retain their relation but never inherit call name or namespace. When the
+linked cap is exceeded, output includes
+`Linked context: truncated at 20 entries`.
+
+### Query-wide support and lineage
+
+Search support is calculated after all filters and before page slicing:
+
+- matching text-segment occurrences;
+- distinct collision-safe canonical content values;
+- distinct resolved known session roots; and
+- distinct matching sessions whose root cannot be resolved.
+
+Canonical documents record lineage coverage as `complete` or `unknown`.
+High-confidence parent, fork, and continuation targets point rootward; child
+targets are outward and do not change the current root. Complete coverage with no
+rootward edge proves the session is its own root. Unknown coverage/kind,
+non-high-confidence ancestry, a missing retained target, a cycle, or ancestry
+paths that diverge to different roots stays unknown. Paths that converge on one
+root remain known. Equal text/hash and inverse-relation inference never create
+lineage, and one support unit is never substituted for another.
+
+### Continuation cursors
+
+List and search expose an opaque next cursor only when more primary rows exist.
+The token binds its command, the complete normalized query/order contract, a
+random library instance identity, the current writer generation, and the next
+offset. Changing query text, filters, bounds, limit, or context makes the cursor
+query-mismatched. Malformed, wrong-command, and query-mismatched cursors are
+invalid usage (exit `2`). A cursor from a recreated library or any later admitted
+writer generation—including a no-op index writer—is stale (exit `1`). Cursors
+are continuation tokens, not durable bookmarks or public encoded schemas.
 
 ## Streams and exit codes
 
@@ -387,6 +508,11 @@ details are never rendered.
 ## Structured output
 
 Every JSON/JSONL command includes a numeric `schemaVersion`. Additive fields may appear within one schema version; removing or changing a field's meaning requires a new version. JSONL starts each record with enough command/type/version information to parse independently.
+
+M6 structured output covers the operational doctor, paths, index, forget, and
+data-clear reports documented above. M7 owns versioned list/search/show DTOs,
+document digests, and transcript-bearing JSON/JSONL; M6 does not expose a partial
+machine schema for those commands.
 
 Planned entry-bearing structured records preserve canonical entry ordinal and
 kind plus available exact tool name, exact tool namespace, provider call ID, and
@@ -407,15 +533,15 @@ session remains readable and exportable when its source state is `missing` or
 
 Structured output never mixes progress or warnings into stdout.
 
-## Portable export
+## Planned portable export (M7)
 
-`sessions export` reads exactly one retained canonical snapshot and never probes
-or reopens a provider source. Markdown is a self-contained human/agent context
-artifact with actor labels, provenance, explicit omission/truncation markers,
-and an untrusted-history warning. JSON is one versioned bundle. JSONL carries the
-equivalent ordered public projection in independently parseable records; every
-record includes enough command, type, schema, session, and document-digest
-identity to be attributed without a preceding record.
+`sessions export` will read exactly one retained canonical snapshot and will
+never probe or reopen a provider source. Markdown is a self-contained human/agent
+context artifact with actor labels, provenance, explicit omission/truncation
+markers, and an untrusted-history warning. JSON is one versioned bundle. JSONL
+carries the equivalent ordered public projection in independently parseable
+records; every record includes enough command, type, schema, session, and
+document-digest identity to be attributed without a preceding record.
 
 Every format reports canonical identity, capture time, source state and
 observation time, adapter version, document digest, and truncation state. Known
@@ -433,4 +559,10 @@ context limits, or infer transfer lineage from equal text or matching digests.
 
 ## Output bounds
 
-Potentially large list, search, show, and export views are bounded by default. Limits and truncation are explicit in output. For export, `--full` emits all export-eligible entries and text from the selected retained normalized snapshot. It does not reveal hidden reasoning, raw payloads, omitted media contents or references, private metadata, related-session bodies, or evidence the adapter never observed. `--full` is never implied by a machine format.
+Potentially large list, search, and show views are bounded by default. Current
+list/search continuation and search body/context truncation are explicit in
+human output. M7 export will likewise be bounded: `--full` emits all
+export-eligible entries and text from the selected retained normalized snapshot.
+It does not reveal hidden reasoning, raw payloads, omitted media contents or
+references, private metadata, related-session bodies, or evidence the adapter
+never observed. `--full` is never implied by a machine format.

@@ -10,6 +10,7 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Provider golden fixture | Faithful parsing and malformed-format behavior                                               |
 | Adapter conformance     | Shared `probe`/`discover`/`read` contract and read-only operation                            |
 | SQLite integration      | Migrations, transactions, FTS behavior, permissions, last-good state                         |
+| Query corpus/contract   | Literal FTS, filters, rank/ties, cursors, context, lineage, and support units                |
 | CLI contract            | Arguments, streams, exit codes, human/structured schemas, bounded output                     |
 | Dist smoke              | Compiled JavaScript entrypoint works                                                         |
 | Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
@@ -21,8 +22,9 @@ schema rejection, current writer fencing, real-SQLite non-destructive
 reconciliation, forget/all-data maintenance, immutable library health, and the
 complete current CLI contract run today. The Codex proof uses
 generated current/base/optional state schemas plus plain/Zstandard rollouts and
-active-WAL capture stress; it never reads developer history. Search/export and
-Cursor contracts arrive with their milestones.
+active-WAL capture stress; it never reads developer history. M6 query proofs use
+a checked-in generic corpus and temporary SQLite libraries. Export and Cursor
+contracts arrive with their milestones.
 
 ## Commands
 

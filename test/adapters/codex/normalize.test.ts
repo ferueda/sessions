@@ -20,6 +20,7 @@ const IDENTITY = {
 const OPTIONS: CodexRolloutNormalizationOptions = {
   identity: IDENTITY,
   logicalLocator: "codex-rollout://thread-current",
+  spawnEdgeCoverage: "unknown",
 };
 
 const DEFERRED_RESPONSES = [
@@ -145,6 +146,7 @@ describe("Codex rollout normalization", () => {
       workspace: "/workspace",
       createdAt: "2026-07-13T01:00:00.000Z",
       updatedAt: "2026-07-14T01:00:00.000Z",
+      lineageCoverage: "unknown",
       relations: [
         {
           kind: "parent",
@@ -178,16 +180,34 @@ describe("Codex rollout normalization", () => {
         sessionMeta({ parent_thread_id: "state-parent" }),
         sessionMeta({ forked_from_id: "state-parent" }),
       ],
-      { stateParentNativeId: "state-parent" },
+      { spawnEdgeCoverage: "complete", stateParentNativeId: "state-parent" },
     );
 
-    expect(document.relations).toEqual([
-      {
-        kind: "parent",
-        target: { source: IDENTITY.source, nativeId: "state-parent" },
-        confidence: "high",
-      },
-    ]);
+    expect(document).toMatchObject({
+      lineageCoverage: "complete",
+      relations: [
+        {
+          kind: "parent",
+          target: { source: IDENTITY.source, nativeId: "state-parent" },
+          confidence: "high",
+        },
+      ],
+    });
+  });
+
+  test("distinguishes complete row absence from unknown table coverage", () => {
+    const unknown = normalize([sessionMeta({ parent_thread_id: "metadata-parent" })]);
+    const complete = normalize([sessionMeta({ parent_thread_id: "metadata-parent" })], {
+      spawnEdgeCoverage: "complete",
+    });
+    const completeRoot = normalize([sessionMeta()], { spawnEdgeCoverage: "complete" });
+
+    expect(unknown).toMatchObject({ lineageCoverage: "unknown" });
+    expect(complete).toMatchObject({
+      lineageCoverage: "complete",
+      relations: [{ kind: "parent", target: { nativeId: "metadata-parent" } }],
+    });
+    expect(completeRoot).toMatchObject({ lineageCoverage: "complete", relations: [] });
   });
 
   test("rejects missing or conflicting current metadata without leaking values", () => {
@@ -200,6 +220,11 @@ describe("Codex rollout normalization", () => {
       sessionMeta({ forked_from_id: "right" }),
     ]);
     expectMalformedSequence([sessionMeta({ parent_thread_id: "metadata-parent" })], {
+      spawnEdgeCoverage: "complete",
+      stateParentNativeId: "state-parent",
+    });
+    expectMalformedSequence([sessionMeta({ parent_thread_id: "state-parent" })], {
+      spawnEdgeCoverage: "unknown",
       stateParentNativeId: "state-parent",
     });
     expectMalformedSequence([sessionMeta({ session_id: "different" })]);

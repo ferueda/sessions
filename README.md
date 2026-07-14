@@ -4,10 +4,12 @@ Local-first search and analysis for AI coding-agent session history.
 
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local library. Humans and agents can preserve sessions beyond provider retention, recover or carry forward context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
-> **Status: pre-alpha.** The first Codex-backed vertical slice is implemented:
-> explicit durable indexing, retained-session list/show, scoped forget, all-data
-> clear, source diagnostics, and the current canonical storage baseline. Search, portable export,
-> Cursor, the packaged Agent Skill, and npm release remain planned.
+> **Status: pre-alpha.** The Codex-backed retained-library and query slice is
+> implemented: explicit durable indexing, filtered/paginated list, lexical
+> search with evidence context and support counts, show, scoped forget, all-data
+> clear, source diagnostics, and the current canonical storage baseline.
+> Portable export, Cursor, the packaged Agent Skill, and npm release remain
+> planned.
 
 ## Why Sessions
 
@@ -37,6 +39,7 @@ Index the default local Codex installation, then inspect its retained copy:
 node dist/bin/sessions.js doctor
 node dist/bin/sessions.js index --source codex
 node dist/bin/sessions.js list
+node dist/bin/sessions.js search 'query engine' --context 2
 node dist/bin/sessions.js show '<canonical-id>'
 ```
 
@@ -46,7 +49,8 @@ Current command surface:
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
-sessions list [--limit N]
+sessions list [filters] [--limit N] [--cursor TOKEN]
+sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
 sessions data clear --yes [--format human|json]
@@ -55,10 +59,21 @@ sessions data clear --yes [--format human|json]
 `index` is the only ordinary command that reads Codex transcripts or initializes
 the library. It copies normalized evidence into Sessions-owned application data;
 a later complete scan that no longer sees a provider thread marks it missing but
-retains its content. `list` and `show` read only that durable library, so they
-continue working when Codex data changes or disappears. They are human-only in
-this milestone: list defaults to 50 rows (maximum 200); show defaults to the first
+retains its content. `list`, `search`, and `show` read only that durable library,
+so they continue working when Codex data changes or disappears. They are
+human-only in this milestone: list defaults to 50 sessions; search defaults to 20
+entry hits and zero adjacent context; both accept at most 200 primary rows and
+emit an opaque next cursor when another page exists. Show defaults to the first
 50 entries or 3 entries of context around `--entry` (maximum context 100).
+
+Search treats whitespace-delimited input as literal FTS terms combined with AND,
+not as public FTS syntax. Each hit identifies one canonical entry, renders a
+bounded snippet, can include up to 10 adjacent entries per side, and automatically
+includes directly linked observed tool-call/result evidence. Query-wide support
+reports matching segment occurrences, distinct canonical content, distinct known
+lineage roots, and matching sessions whose root remains unknown. Shared filters,
+exclusive time bounds, ranking, cursor invalidation, and exact output rules are in
+the [CLI contract](docs/reference/cli-contract.md).
 
 `forget` deletes one Sessions-owned retained copy without touching Codex. A later
 index can capture it again while the provider still has it. `data clear --yes`
@@ -82,10 +97,12 @@ supported state and rollout shapes.
 ## Remaining V1
 
 ```text
-sessions search <text> [filters]
 sessions export <source-instance:id> --format md|json|jsonl [--full]
 sessions index --source cursor
 ```
+
+M7 adds versioned JSON/JSONL for transcript-bearing list/search/show results and
+portable export. M6 list/search/show output remains human-facing.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

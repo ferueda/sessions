@@ -167,5 +167,5 @@ function readyProbe() {
 }
 
 function document(value: DiscoveredSession): SessionDocument {
-  return { identity: value.identity, relations: [], entries: [] };
+  return { identity: value.identity, lineageCoverage: "unknown", relations: [], entries: [] };
 }

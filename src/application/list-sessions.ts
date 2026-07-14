@@ -1,37 +1,39 @@
 import { SessionLibraryError } from "./library-error.ts";
 import type { IndexLifecycle, IndexPaths, IndexReader } from "./ports/index-lifecycle.ts";
-import type { IndexedSessionSummary } from "./ports/session-index.ts";
+import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
+import {
+  createSessionListQuery,
+  MAX_SESSION_QUERY_LIMIT,
+  type SessionFilterInput,
+  type SessionListPage,
+} from "../domain/session-query.ts";
 
 export const DEFAULT_LIST_LIMIT = 50;
-export const MAX_LIST_LIMIT = 200;
+export const MAX_LIST_LIMIT = MAX_SESSION_QUERY_LIMIT;
 
-export interface ListSessionsResult {
-  readonly sessions: readonly IndexedSessionSummary[];
-  readonly truncated: boolean;
-}
+export type ListSessionsResult = SessionListPage;
 
 export async function listSessions(input: {
   readonly paths: IndexPaths;
   readonly lifecycle: IndexLifecycle;
+  readonly filter?: SessionFilterInput;
   readonly limit?: number;
+  readonly cursor?: string;
 }): Promise<ListSessionsResult> {
-  const limit = input.limit ?? DEFAULT_LIST_LIMIT;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
-    throw new TypeError(`List limit must be an integer from 1 through ${MAX_LIST_LIMIT}`);
-  }
+  const cursor = admitSessionQueryCursor(input.cursor);
+  const query = createSessionListQuery({
+    limit: input.limit ?? DEFAULT_LIST_LIMIT,
+    ...(input.filter === undefined ? {} : { filter: input.filter }),
+    ...(cursor === undefined ? {} : { cursor }),
+  });
   const state = await input.lifecycle.inspect(input.paths);
   if (state.status === "uninitialized") {
-    return Object.freeze({ sessions: Object.freeze([]), truncated: false });
+    if (query.cursor !== undefined) throw new SessionQueryOperationalError("stale-cursor");
+    return Object.freeze({ sessions: Object.freeze([]) });
   }
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
-  return withReader(input.lifecycle, input.paths, async (reader) => {
-    const rows = await reader.sessions.listSummaries({ limit: limit + 1 });
-    return Object.freeze({
-      sessions: Object.freeze(rows.slice(0, limit)),
-      truncated: rows.length > limit,
-    });
-  });
+  return withReader(input.lifecycle, input.paths, (reader) => reader.query.list(query));
 }
 
 export async function withReader<T>(

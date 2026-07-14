@@ -1,5 +1,7 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 
+import type { LineageCoverage } from "../../domain/session.ts";
+
 export class CodexStateSchemaError extends Error {
   readonly kind: "malformed" | "unsupported-format";
 
@@ -19,6 +21,7 @@ export interface CodexThreadState {
   readonly updatedAt?: string;
   readonly rowTuple: readonly unknown[];
   readonly parentId?: string;
+  readonly spawnEdgeCoverage: LineageCoverage;
   readonly edgeTuple: readonly unknown[];
 }
 
@@ -107,6 +110,7 @@ function readThread(
       Object.freeze(["updated", updated.source, updated.raw, updated.iso ?? null]),
     ]),
     ...(edge.parentId === undefined ? {} : { parentId: edge.parentId }),
+    spawnEdgeCoverage: edge.coverage,
     edgeTuple: edge.tuple,
   });
 }
@@ -115,16 +119,26 @@ function readEdge(
   statement: StatementSync | undefined,
   childId: string,
   statusCapability: boolean,
-): { readonly parentId?: string; readonly tuple: readonly unknown[] } {
+): {
+  readonly parentId?: string;
+  readonly coverage: LineageCoverage;
+  readonly tuple: readonly unknown[];
+} {
   if (statement === undefined) {
-    return { tuple: Object.freeze(["codex-parent-edge-v1", "table-absent"]) };
+    return {
+      coverage: "unknown",
+      tuple: Object.freeze(["codex-parent-edge-v1", "table-absent"]),
+    };
   }
   const rows = statement.all(childId) as readonly Record<string, unknown>[];
   if (rows.length > 1) throw new CodexStateSchemaError("malformed");
   const capability = statusCapability ? "status-present" : "status-absent";
   const row = rows[0];
   if (row === undefined) {
-    return { tuple: Object.freeze(["codex-parent-edge-v1", "row-absent", capability]) };
+    return {
+      coverage: "complete",
+      tuple: Object.freeze(["codex-parent-edge-v1", "row-absent", capability]),
+    };
   }
   const parentId = requiredText(row.parent_thread_id);
   const admittedChild = requiredText(row.child_thread_id);
@@ -132,6 +146,7 @@ function readEdge(
   const status = statusCapability ? nullableText(row.status) : null;
   return {
     parentId,
+    coverage: "complete",
     tuple: Object.freeze([
       "codex-parent-edge-v1",
       "row",

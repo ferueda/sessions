@@ -9,8 +9,4 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
-
-- [Ship the provider-neutral query and evidence engine](260714-provider-neutral-query-engine.md)
-  — M6 lexical search, filtered pagination, bounded linked context, honest
-  lineage/support semantics, and canonical-only FTS repair.
+Active executor plans: none. M7 planning is next.

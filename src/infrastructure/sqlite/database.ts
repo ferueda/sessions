@@ -9,12 +9,12 @@ import type {
   IndexWriter,
 } from "../../application/ports/index-lifecycle.ts";
 import type { SessionIndexReader } from "../../application/ports/session-index.ts";
+import type { SessionQueryRepository } from "../../application/ports/session-query.ts";
 import type { IndexState, ReadyIndexState } from "../../domain/index-state.ts";
 import {
   configureFts5SecureDelete,
   type Fts5SecurityCapability,
   probeFts5Security,
-  SESSIONS_CONTENT_FTS_TABLE,
 } from "./fts5-security.ts";
 import { SqliteIndexLifecycleError } from "./lifecycle-error.ts";
 import {
@@ -32,11 +32,17 @@ import {
   secureIndexFiles,
 } from "./permissions.ts";
 import { createSqliteReadSnapshot, type SqliteReadSnapshot } from "./read-snapshot.ts";
-import { inspectSqliteReadyIndexHealth } from "./sqlite-index-health.ts";
+import { repairFtsProjection, SESSIONS_CONTENT_FTS_TABLE } from "./fts-projection.ts";
+import {
+  canonicalIntegrityIsValid,
+  foreignKeysAreValid,
+  inspectSqliteReadyIndexHealth,
+} from "./sqlite-index-health.ts";
 import {
   createCoordinatedSqliteSessionIndex,
   createSqliteSessionIndexReader,
 } from "./sqlite-session-index.ts";
+import { createSqliteSessionQuery } from "./sqlite-session-query.ts";
 import {
   configureSqliteWriterDatabase,
   openSqliteWriterDatabase,
@@ -203,6 +209,14 @@ export function createSqliteIndexLifecycle(
           throw new Error("SQLite migrations did not reach the supported schema");
         }
         await secureIndexFiles(paths, { platform });
+        repairFtsProjection(database, {
+          assertCanonicalIntegrity: () => {
+            if (!canonicalIntegrityIsValid(database) || !foreignKeysAreValid(database)) {
+              throw new Error("Canonical SQLite integrity check failed");
+            }
+          },
+          assertWriterLease: () => assertWriterLease(database, ownedLease, { now }),
+        });
         // Persistent FTS configuration is a write and must happen only after
         // this handle owns the high-level writer lease.
         const fts5SecureDelete = configureFts5SecureDelete(
@@ -286,16 +300,20 @@ function createReader(snapshot: SqliteReadSnapshot, state: ReadyIndexState): Sql
         createSqliteSessionIndexReader(database).getSession(identity),
       );
     },
-    listSummaries(options) {
-      return snapshot.run((database) =>
-        createSqliteSessionIndexReader(database).listSummaries(options),
-      );
+  };
+  const query: SessionQueryRepository = {
+    list(input) {
+      return snapshot.run((database) => createSqliteSessionQuery(database).list(input));
+    },
+    search(input) {
+      return snapshot.run((database) => createSqliteSessionQuery(database).search(input));
     },
   };
 
   return {
     state,
     sessions,
+    query,
     close() {
       return snapshot.close();
     },

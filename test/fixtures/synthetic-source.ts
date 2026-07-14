@@ -261,6 +261,7 @@ function documentFor(session: SyntheticSessionSnapshot): SessionDocument {
     ...(session.timestamp === undefined
       ? {}
       : { createdAt: session.timestamp, updatedAt: session.timestamp }),
+    lineageCoverage: "unknown",
     relations: [],
     entries: [
       {
