@@ -114,7 +114,8 @@ function sourceInstancesAreValid(database: DatabaseSync): boolean {
         nativeId: "health-check",
       }) &&
       (row.coverage_status === "complete" || row.coverage_status === "unknown") &&
-      optionalCanonicalTimestampIsValid(row.coverage_observed_at)
+      optionalCanonicalTimestampIsValid(row.coverage_observed_at) &&
+      (row.coverage_status !== "complete" || row.coverage_observed_at !== null)
     );
   });
 }

@@ -90,7 +90,12 @@ export function readSessionFreshness(
   const copiedIdentity = copyIdentity(identity);
 
   if (row.latest_outcome === "removed") {
-    if (hasDocument || lastGood !== undefined || latestRevision !== undefined) {
+    if (
+      hasDocument ||
+      lastGood !== undefined ||
+      latestRevision !== undefined ||
+      row.latest_failure_code !== null
+    ) {
       throw new SqliteSessionIndexError("corrupt-data");
     }
     return { status: "removed", identity: copiedIdentity, latest: { outcome: "removed" } };

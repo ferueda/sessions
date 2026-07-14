@@ -188,10 +188,10 @@ describe("Codex state snapshot feasibility", () => {
 
     const workspace = await testWorkspace();
     const writer = startConcurrentWriter(fixture.databasePath);
-    expect(await writer.ready).toBe(1);
-
     const accepted: Generation[] = [];
-    try {
+    await withConcurrentWriter(writer, async () => {
+      expect(await writer.ready).toBe(1);
+
       for (const checkpoint of ["none", "passive", "truncate"] as const) {
         let committedGeneration: number | undefined;
         const generation = await materializeCodexStateSnapshot({
@@ -214,17 +214,31 @@ describe("Codex state snapshot feasibility", () => {
         });
         accepted.push(generation);
       }
-    } finally {
-      try {
-        await writer.stop();
-      } finally {
-        await writer.worker.terminate();
-      }
-    }
+    });
 
     expect(accepted.map(({ left }) => left)).toEqual([2, 3, 4]);
     expect(workspace.attemptDirectories).toHaveLength(6);
     expect(await readdir(workspace.root)).toEqual([]);
+  });
+
+  test("terminates the writer when its initial ready handshake is rejected", async () => {
+    const fixture = await activeWalFixture();
+    fixture.database.close();
+    const databaseIndex = openDatabases.indexOf(fixture.database);
+    if (databaseIndex >= 0) openDatabases.splice(databaseIndex, 1);
+
+    const writer = startConcurrentWriter(fixture.databasePath, 2);
+    await expect(withConcurrentWriter(writer, async () => writer.ready)).rejects.toThrow(
+      "Concurrent SQLite writer started at generation 1; expected 2",
+    );
+
+    expect(writer.worker.threadId).toBe(-1);
+    const reopened = new DatabaseSync(fixture.databasePath, { timeout: 1_000 });
+    try {
+      expect(readGeneration(reopened)).toEqual({ left: 1, right: 1 });
+    } finally {
+      reopened.close();
+    }
   });
 });
 
@@ -375,7 +389,7 @@ interface ConcurrentWriter {
   readonly worker: Worker;
   readonly ready: Promise<number>;
   readonly advance: (checkpoint: CheckpointMode) => Promise<number>;
-  readonly stop: () => Promise<void>;
+  readonly close: () => Promise<void>;
 }
 
 interface WorkerStatus {
@@ -402,7 +416,10 @@ interface WorkerStoppedMessage {
 
 const WORKER_HANDSHAKE_TIMEOUT_MS = 10_000;
 
-function startConcurrentWriter(databasePath: string): ConcurrentWriter {
+function startConcurrentWriter(
+  databasePath: string,
+  expectedInitialGeneration = 1,
+): ConcurrentWriter {
   const worker = new Worker(
     `
       const { DatabaseSync } = require("node:sqlite");
@@ -483,8 +500,17 @@ function startConcurrentWriter(databasePath: string): ConcurrentWriter {
     status.exitCode = code;
   });
 
+  let workerReady = false;
   const ready = waitForWorkerMessage(worker, status, "ready", isWorkerReadyMessage).then(
-    ({ generation }) => generation,
+    ({ generation }) => {
+      workerReady = true;
+      if (generation !== expectedInitialGeneration) {
+        throw new Error(
+          `Concurrent SQLite writer started at generation ${generation}; expected ${expectedInitialGeneration}`,
+        );
+      }
+      return generation;
+    },
   );
   let nextRequestId = 0;
 
@@ -504,19 +530,37 @@ function startConcurrentWriter(databasePath: string): ConcurrentWriter {
       worker.postMessage({ type: "advance", requestId, checkpoint });
       return (await response).generation;
     },
-    async stop() {
-      await ready;
-      const requestId = (nextRequestId += 1);
-      const response = waitForWorkerMessage(
-        worker,
-        status,
-        "stop acknowledgement",
-        (message): message is WorkerStoppedMessage => isWorkerStoppedMessage(message, requestId),
-      );
-      worker.postMessage({ type: "stop", requestId });
-      await response;
+    async close() {
+      try {
+        if (workerReady && status.error === undefined && status.exitCode === undefined) {
+          const requestId = (nextRequestId += 1);
+          const response = waitForWorkerMessage(
+            worker,
+            status,
+            "stop acknowledgement",
+            (message): message is WorkerStoppedMessage =>
+              isWorkerStoppedMessage(message, requestId),
+          );
+          worker.postMessage({ type: "stop", requestId });
+          // Termination below remains the handle-release guarantee if graceful stop fails.
+          await response.catch(() => undefined);
+        }
+      } finally {
+        await worker.terminate();
+      }
     },
   };
+}
+
+async function withConcurrentWriter<T>(
+  writer: ConcurrentWriter,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } finally {
+    await writer.close();
+  }
 }
 
 function waitForWorkerMessage<T>(
