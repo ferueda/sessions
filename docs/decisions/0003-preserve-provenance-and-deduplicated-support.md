@@ -11,6 +11,9 @@ Agent histories can represent injected instructions, delegated work, forks, and 
 
 Canonical content records origin and confidence, stable content hashes, occurrences, and available lineage. Reports distinguish occurrence count, unique-content count, and unique-root count. Unknown origin or lineage remains unknown. Facts and provenance precede interpretation.
 
+Equal transcript text, equal content or document digests, and the act of exporting
+a session never establish cross-session transfer or lineage by themselves.
+
 ## Consequences
 
 The model and schema are richer than a flat message table, and adapters must preserve source evidence. Analyses can explain their support and avoid overstating patterns. Perfect provenance is not promised where provider formats omit evidence.

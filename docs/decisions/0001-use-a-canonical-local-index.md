@@ -1,6 +1,7 @@
 # 0001 — Use a canonical local index
 
-- Status: Accepted
+- Status: Accepted; storage lifecycle amended by
+  [ADR 0007](0007-retain-a-durable-canonical-library.md)
 - Date: 2026-07-13
 
 ## Context

@@ -1,6 +1,7 @@
 # Source adapter contract
 
-Status: implemented internal V1 contract; no concrete adapter exists yet.
+Status: implemented M1 internal contract plus an accepted M5 tool-evidence
+extension; no concrete adapter exists yet.
 
 Adapters translate provider histories into canonical documents. They do not define indexing, storage, queries, rendering, or analysis policy.
 
@@ -12,7 +13,10 @@ Adapters translate provider histories into canonical documents. They do not defi
 - `probe()`: return `ready`, `unavailable`, or `unreadable` plus sanitized source
   roots without reading transcript content or mutating state.
 - `discover()`: yield candidates with identity, at least one ordered input
-  descriptor, a complete aggregate fingerprint, and adapter format version.
+  descriptor, a complete aggregate fingerprint, and adapter format version. M5
+  changes this internal signature to `discover(workspace)` after writer open; the
+  provider-neutral workspace offers only `withPrivateDirectory(operation)`, and
+  probe/read receive none.
 - `read(candidate)`: deterministically normalize one complete candidate into a canonical `SessionDocument`.
 
 The port and values live under `src/application/ports/`; canonical transcript values live under `src/domain/`.
@@ -28,7 +32,18 @@ The port and values live under `src/application/ports/`; canonical transcript va
 - Discovery order does not change canonical results.
 - Reads compare every input before and after consumption or use an equivalent
   stable snapshot. Any mismatch or disappearance is `source-changed`.
+- A stable-snapshot adapter materializes the complete declared logical input for
+  one discovery generation before yielding. Candidate reads require matching
+  frozen descriptors; state changes after capture are observed on the next
+  discovery, while remaining live inputs still receive pre/post verification.
+- The planned M5 workspace implementation asserts the writer lease before
+  allocation and after private random-directory cleanup in `finally`, returns a
+  callback result only while ownership remains valid, and aggregates applicable
+  operation/cleanup/lease failures. The adapter never sees its root, lease
+  identity, or cleanup policy.
 - Missing optional metadata maps to absent/unknown values.
+- Discovery reports source evidence only. Adapters never decide whether an unseen
+  canonical session is retained, marked missing, or explicitly deleted.
 - Origin or lineage is classified only when source evidence supports it.
 - Unavailable, unreadable, malformed, source-changed, and unsupported-format
   failures use the shared discriminated error contract and sanitized messages; no
@@ -37,17 +52,51 @@ The port and values live under `src/application/ports/`; canonical transcript va
   use exact UTC ISO form with milliseconds.
 - Adapters use the core `sha256-utf8-v1` helper for exact canonical text and the
   application boundary recomputes every hash.
-- Adapters import application/domain only—never SQLite, query, CLI, another adapter, or the composition root.
+- Adapters import application/domain only—never Sessions SQLite persistence,
+  retention, query, CLI, another adapter, or the composition root. Composition
+  may pass an opaque, lease-scoped execution workspace; this does not let the
+  adapter resolve paths or own durable state.
 - Adapter output contains canonical content and diagnostic source metadata, not complete raw payload copies.
 
 ## Conformance proof
 
 The reusable contract suite proves probe safety, deterministic discovery/read,
-declared-input coverage, aggregate invalidation and pre-read/during-read checks
-for every fixture-owned input, typed failures, missing metadata, ordering,
-provenance fallback, and read-only behavior. Its synthetic source proves the
-contract now; every concrete adapter must invoke the same suite alongside
-provider-specific golden fixtures that enumerate every input affecting normalized
-output. Fixtures contain no personal paths or transcripts.
+declared-input coverage, aggregate invalidation, typed failures, missing metadata,
+ordering, provenance fallback, and read-only behavior. Fixtures declare each
+input as live or snapshot-owned: live inputs must pass pre-read/during-read checks;
+snapshot-owned inputs must remain deterministic from the frozen generation and
+surface changes on the next discovery. Its synthetic source proves the contract
+now; every concrete adapter must invoke the same suite alongside provider-
+specific golden fixtures that enumerate every input affecting normalized output.
+Fixtures contain no personal paths or transcripts.
 
 The V1 contract is internal. A public plugin ABI is deferred until multiple independent adapters prove the boundary.
+
+## Accepted M5 extension — not implemented
+
+Before the first concrete adapter is normalized, the provider-neutral entry,
+validation, schema, and repository contracts will add generic `tool-call` and
+`tool-result` evidence. A call may carry its exact source-observed tool name,
+optional exact namespace, and provider call ID; results link to calls through
+canonical entry relations and available call IDs. Name and namespace remain
+separate, exact, and valid only on calls; namespace requires a name. Adapters do
+not split, concatenate, or infer identity, and results do not copy it. Arguments
+and results remain faithful ordered content.
+
+Canonical content will become an ordered union of text and omitted segments.
+Text retains exact bytes and hashes and alone participates in FTS, deduplication,
+and recurrence. Omitted segments preserve position, broad non-text class,
+provenance, and a 1–64-byte lower-ASCII kebab source type matching
+`^[a-z0-9]+(?:-[a-z0-9]+)*$` without bytes, URLs, paths, placeholder text, or
+hashes. Use adapter-owned fixed labels. A forward-compatible discriminator may
+be admitted only from a format-declared structural `type`, with a fixed fallback;
+never derive a token from payload text, arbitrary keys, paths, URLs, or MIME
+values. Domain/storage admission preserves valid tokens exactly and rejects
+invalid ones. Adapters never open or fetch referenced media.
+
+Adapters populate only evidence their source exposes. Injected tool or skill
+catalogs remain injected content, and user requests or model declarations remain
+content signals; none implies an invocation. The shared conformance suite will
+cover linked events, missing tool identity, same-name tools in different
+namespaces, ordered mixed text/non-text content, mention-only content, and
+unavailable execution evidence without embedding skill policy in adapters.

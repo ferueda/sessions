@@ -53,7 +53,21 @@ optimization, not a substitute for `pnpm check` before merging implementation.
 - Never call provider services or the network in unit/integration tests.
 - Test an operational failure as well as success when adding a state boundary.
 - Fully exhaust discovery before mutation; prove incomplete scans cannot reconcile deletions.
+- For M5 and later, prove complete scans mark unseen retained sessions missing
+  without deleting canonical rows, while unavailable or incomplete scans prove no
+  absence. Projection rebuilds preserve canonical rows; only explicit
+  forget/data-clear cases exercise transcript deletion.
 - Use injected clocks and fake schedulers for lease/heartbeat tests; do not sleep.
+- When a migration changes lease semantics, prove old-schema live/expired owners
+  are acquired, refused, carried, and fenced before table changes or clear; never
+  test migration and coordination as unrelated paths.
 - Prove inspection commands preserve database bytes, timestamps, run rows, directory entries, and absent state.
+- Prove fresh-library list returns an empty success without opening a reader,
+  creating state, or resolving a provider.
 - Exercise writer behavior only through the coordinated lifecycle; do not construct an unguarded production writer.
+- For an adapter using a frozen discovery generation, distinguish snapshot-owned
+  inputs from live read inputs in conformance fixtures. Prove lease-scoped
+  workspace cleanup/error aggregation and fail the Codex milestone unless
+  concurrent writer/checkpoint/WAL-reset stress always captures one complete
+  committed generation without provider mutation.
 - Keep hooks cheap; passing a hook is not repository approval.

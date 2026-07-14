@@ -74,3 +74,15 @@ The internal writer uses ordered checksummed migrations, WAL, foreign keys, a fi
 One renewable lease owner may write at a time. Every repository mutation verifies its token, generation, purpose, and expiry in the same transaction. Expired takeover fences stale writers and marks abandoned active runs interrupted before new work. A writer may open valid WAL recovery state; immutable readers and doctor still refuse recovery sidecars. Repository replacement remains atomic and preserves last-good content after refresh failure.
 
 Internal clear maintenance never opens provider paths or recursively deletes the cache directory. It removes only the known database/WAL/SHM files after path-safety checks and, for a current schema, a fenced checkpoint. Snapshot-scoped readers and ready-index health inspection do not create files, sidecars, migrations, or other mutations. On POSIX, the directory is constrained to `0700` and database/sidecar files to `0600`; Windows uses profile-local platform ACLs. See [privacy](../privacy.md) for guarantees and limitations.
+
+These are current M4 mechanics, not the accepted public retention lifecycle.
+[ADR 0007](../decisions/0007-retain-a-durable-canonical-library.md) requires M5
+to move canonical data to platform application data, retain the latest successful
+snapshot after complete-scan absence, separate source presence from freshness,
+expose only explicit forget/data-clear deletion, arbitrate schema-3 ownership in
+the same transaction as migration, and remove valid schema 3 from the
+non-current direct-unlink clear path. It also adds an exact application-data
+`.scratch` path behind a writer-leased provider-neutral private-directory
+capability; adapters never receive `IndexPaths`, and only explicit data clear
+recursively removes that validated subtree. This current-code map should be
+rewritten after that implementation lands.
