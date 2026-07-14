@@ -138,7 +138,18 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     ] satisfies readonly SqliteMigration[];
     const failedLifecycle = createSqliteIndexLifecycle({ migrations: failing });
 
-    await expect(failedLifecycle.openWriter(paths)).rejects.toBeInstanceOf(Error);
+    const migrationFailure: unknown = await failedLifecycle.openWriter(paths).then(
+      async (unexpectedWriter) => {
+        await unexpectedWriter.close();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    expect(migrationFailure).not.toBeInstanceOf(AggregateError);
+    expect(migrationFailure).toMatchObject({
+      code: "ERR_SQLITE_ERROR",
+      message: "no such table: table_that_does_not_exist",
+    });
     await expect(failedLifecycle.inspect(paths)).resolves.toMatchObject({
       status: "migration-required",
       schemaVersion: 2,
@@ -322,6 +333,40 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       /FOREIGN KEY constraint failed/u,
     );
     await writer.close();
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "hardens database permissions even when connection close throws",
+    async () => {
+      const paths = await fixturePaths();
+      const writer = await createSqliteIndexLifecycle().openWriter(paths);
+      writer.database.close();
+      await chmod(paths.database, 0o644);
+
+      await expect(writer.close()).rejects.toMatchObject({
+        code: "ERR_INVALID_STATE",
+        message: "database is not open",
+      });
+      expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
+      await expect(writer.close()).resolves.toBeUndefined();
+    },
+  );
+
+  test("aggregates independent close and file-hardening failures", async () => {
+    const paths = await fixturePaths();
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    writer.database.close();
+    await rm(paths.database);
+
+    const cleanupFailure: unknown = await writer.close().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(cleanupFailure).toBeInstanceOf(AggregateError);
+    expect((cleanupFailure as AggregateError).errors).toMatchObject([
+      { code: "ERR_INVALID_STATE", message: "database is not open" },
+      { code: "ENOENT" },
+    ]);
   });
 
   test.skipIf(process.platform === "win32")(

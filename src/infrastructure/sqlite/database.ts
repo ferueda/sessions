@@ -110,14 +110,9 @@ export function createSqliteIndexLifecycle(
         throw new SqliteIndexLifecycleError(state);
       }
 
-      let database: DatabaseSync;
+      const database = await openWriterWithFailureCleanup(paths, busyTimeoutMs, platform);
       try {
-        database = openConfiguredWriter(paths.database, busyTimeoutMs);
-      } catch (error) {
-        await secureIndexFiles(paths, { platform });
-        throw error;
-      }
-      try {
+        configureWriter(database, busyTimeoutMs);
         const history = applyMigrations(database, migrations);
         if (history.currentVersion !== supportedSchemaVersion) {
           throw new Error("SQLite migrations did not reach the supported schema");
@@ -126,12 +121,7 @@ export function createSqliteIndexLifecycle(
 
         return createWriter(database, paths, platform, supportedSchemaVersion, fts5Security);
       } catch (error) {
-        try {
-          database.close();
-        } finally {
-          await secureIndexFiles(paths, { platform });
-        }
-        throw error;
+        return throwAfterDatabaseCleanup(error, database, paths, platform);
       }
     },
   };
@@ -232,8 +222,8 @@ function openImmutableDatabase(file: string): DatabaseSync {
   });
 }
 
-function openConfiguredWriter(file: string, busyTimeoutMs: number): DatabaseSync {
-  const database = new DatabaseSync(file, {
+function openWriterDatabase(file: string, busyTimeoutMs: number): DatabaseSync {
+  return new DatabaseSync(file, {
     allowBareNamedParameters: false,
     allowExtension: false,
     allowUnknownNamedParameters: false,
@@ -242,34 +232,42 @@ function openConfiguredWriter(file: string, busyTimeoutMs: number): DatabaseSync
     enableForeignKeyConstraints: true,
     timeout: busyTimeoutMs,
   });
+}
 
+async function openWriterWithFailureCleanup(
+  paths: IndexPaths,
+  busyTimeoutMs: number,
+  platform: NodeJS.Platform,
+): Promise<DatabaseSync> {
   try {
-    database.enableDefensive(true);
-    database.enableLoadExtension(false);
-    database.exec("PRAGMA foreign_keys = ON");
-    database.exec("PRAGMA trusted_schema = OFF");
-    database.exec("PRAGMA secure_delete = ON");
-
-    const journalMode = pragmaValue(database, "PRAGMA journal_mode = WAL");
-    if (journalMode !== "wal") {
-      throw new Error("SQLite WAL mode is unavailable");
-    }
-    if (pragmaValue(database, "PRAGMA foreign_keys") !== 1) {
-      throw new Error("SQLite foreign keys are unavailable");
-    }
-    if (pragmaValue(database, "PRAGMA secure_delete") !== 1) {
-      throw new Error("SQLite secure_delete is unavailable");
-    }
-    if (pragmaValue(database, "PRAGMA trusted_schema") !== 0) {
-      throw new Error("SQLite trusted_schema could not be disabled");
-    }
-    if (pragmaValue(database, "PRAGMA busy_timeout") !== busyTimeoutMs) {
-      throw new Error("SQLite busy timeout could not be configured");
-    }
-    return database;
+    return openWriterDatabase(paths.database, busyTimeoutMs);
   } catch (error) {
-    database.close();
-    throw error;
+    return throwAfterHardening(error, paths, platform);
+  }
+}
+
+function configureWriter(database: DatabaseSync, busyTimeoutMs: number): void {
+  database.enableDefensive(true);
+  database.enableLoadExtension(false);
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec("PRAGMA trusted_schema = OFF");
+  database.exec("PRAGMA secure_delete = ON");
+
+  const journalMode = pragmaValue(database, "PRAGMA journal_mode = WAL");
+  if (journalMode !== "wal") {
+    throw new Error("SQLite WAL mode is unavailable");
+  }
+  if (pragmaValue(database, "PRAGMA foreign_keys") !== 1) {
+    throw new Error("SQLite foreign keys are unavailable");
+  }
+  if (pragmaValue(database, "PRAGMA secure_delete") !== 1) {
+    throw new Error("SQLite secure_delete is unavailable");
+  }
+  if (pragmaValue(database, "PRAGMA trusted_schema") !== 0) {
+    throw new Error("SQLite trusted_schema could not be disabled");
+  }
+  if (pragmaValue(database, "PRAGMA busy_timeout") !== busyTimeoutMs) {
+    throw new Error("SQLite busy timeout could not be configured");
   }
 }
 
@@ -298,14 +296,80 @@ function createWriter(
     fts5SecureDelete: fts5Security.secureDelete,
     async close() {
       if (closed) return;
+      const cleanupErrors: unknown[] = [];
       if (!databaseClosed) {
-        database.close();
-        databaseClosed = true;
+        try {
+          database.close();
+          databaseClosed = true;
+        } catch (error) {
+          cleanupErrors.push(error);
+          try {
+            databaseClosed = !database.isOpen;
+          } catch (stateError) {
+            cleanupErrors.push(stateError);
+          }
+        }
       }
-      await secureIndexFiles(paths, { platform });
-      closed = true;
+      let hardened = false;
+      try {
+        await secureIndexFiles(paths, { platform });
+        hardened = true;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      closed = databaseClosed && hardened;
+      throwCleanupErrors(cleanupErrors, "SQLite writer cleanup failed");
     },
   };
+}
+
+async function throwAfterDatabaseCleanup(
+  operationError: unknown,
+  database: DatabaseSync,
+  paths: IndexPaths,
+  platform: NodeJS.Platform,
+): Promise<never> {
+  const cleanupErrors: unknown[] = [];
+  try {
+    database.close();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    await secureIndexFiles(paths, { platform });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+
+  if (cleanupErrors.length === 0) throw operationError;
+  throw new AggregateError(
+    [operationError, ...cleanupErrors],
+    "SQLite operation and cleanup failed",
+    { cause: operationError },
+  );
+}
+
+async function throwAfterHardening(
+  operationError: unknown,
+  paths: IndexPaths,
+  platform: NodeJS.Platform,
+): Promise<never> {
+  try {
+    await secureIndexFiles(paths, { platform });
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [operationError, cleanupError],
+      "SQLite operation and cleanup failed",
+      { cause: operationError },
+    );
+  }
+  throw operationError;
+}
+
+function throwCleanupErrors(errors: readonly unknown[], message: string): void {
+  if (errors.length === 0) return;
+  if (errors.length === 1) throw errors[0];
+  throw new AggregateError(errors, message);
 }
 
 function migrationErrorState(error: unknown, supportedSchemaVersion: number): IndexState {
