@@ -11,7 +11,6 @@ Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-r
 
 Active executor plan:
 
-- [Ship the Codex-first durable workflow](260714-codex-vertical-slice.md) — M5
-  Codex adapter, canonical evidence extension, durable capture/source presence,
-  one current pre-alpha storage baseline, and index/list/show/forget/data-clear
-  slice; implementation, verification, and review fixes complete; awaiting merge.
+- [Ship the provider-neutral query and evidence engine](260714-provider-neutral-query-engine.md)
+  — M6 lexical search, filtered pagination, bounded linked context, honest
+  lineage/support semantics, and canonical-only FTS repair.
