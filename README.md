@@ -16,7 +16,7 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 
 ## Current quick start
 
-Prerequisites: Node.js 24.15 or newer and pnpm 11.10 through Corepack.
+Prerequisites: Node.js 24.16 or newer and pnpm 11.10 through Corepack.
 
 ```bash
 git clone https://github.com/ferueda/sessions.git

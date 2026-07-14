@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js 24.15 or newer.
+- Node.js 24.16 or newer.
 - Corepack with pnpm 11.10.
 - Git.
 

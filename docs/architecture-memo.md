@@ -10,7 +10,7 @@ Build Sessions as a new local-first product, using the Harness implementation as
 
 The core owns a provider-neutral session model, indexing lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; the canonical index is the only source for list, search, show, and export.
 
-The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.15 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
+The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
 
 ## Context
 
@@ -326,7 +326,7 @@ Doctor supports human output through `sessions doctor` and JSON through `session
       "summary": "Node.js meets the minimum version",
       "details": {
         "version": "26.4.0",
-        "minimumVersion": "24.15.0"
+        "minimumVersion": "24.16.0"
       }
     }
   ]
@@ -385,7 +385,7 @@ Additional derived uses include adoption/friction analysis and persistence of un
 ## Delivery and repository guardrails
 
 - TypeScript ESM in source; compiled ESM JavaScript in the published tarball.
-- Node.js `>=24.15`; native TypeScript is a contributor convenience, never a user requirement.
+- Node.js `>=24.16`; native TypeScript is a contributor convenience, never a user requirement.
 - Intended package `@ferueda/sessions`; binary `sessions`. Scope ownership is a release gate.
 - Users install with npm-compatible tooling or invoke through `npx`; they do not need pnpm.
 - The package allowlists compiled output, the packaged skill, README, and license.

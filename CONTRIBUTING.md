@@ -4,7 +4,7 @@ Sessions is pre-alpha. Small vertical slices, explicit contracts, and evidence-b
 
 ## Setup
 
-Requirements: Node.js 24.15 or newer, Corepack, Git, and a platform supported by Node.js.
+Requirements: Node.js 24.16 or newer, Corepack, Git, and a platform supported by Node.js.
 
 ```bash
 corepack enable

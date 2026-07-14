@@ -1,6 +1,6 @@
 import type { RuntimeDiagnostic } from "../../application/ports/runtime-diagnostic.ts";
 
-export const MINIMUM_NODE_VERSION = "24.15.0";
+export const MINIMUM_NODE_VERSION = "24.16.0";
 
 export function createNodeDiagnostic(
   version = process.versions.node,
