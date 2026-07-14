@@ -24,12 +24,13 @@ pnpm check
 | `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored |
 | Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                |
 
-`sessions index` is the only ordinary command that initializes or migrates user
-state. It writes the durable canonical library to platform application data, or
-the exact absolute `SESSIONS_DATA_DIR` override. Its `.scratch` child is an
-ephemeral writer-leased discovery workspace, not a second library or provider
-backup. Sessions never reuses or migrates the pre-public cache. Paths, ownership,
-capture behavior, and deletion limits are governed by
+`sessions index` is the only ordinary command that initializes user state.
+`sessions index` and `sessions forget` can migrate an existing durable library
+before performing their writer operation. The library lives in platform
+application data, or the exact absolute `SESSIONS_DATA_DIR` override. Its
+`.scratch` child is an ephemeral writer-leased discovery workspace, not a second
+library or provider backup. Sessions never reuses or migrates the pre-public
+cache. Paths, ownership, capture behavior, and deletion limits are governed by
 [privacy](../privacy.md).
 
 The current Codex adapter resolves the default local installation. Tests use only

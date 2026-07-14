@@ -22,9 +22,10 @@ sessions data clear --yes [--format human|json]
 ```
 
 The bare command prints help. `index` is the only ordinary command that reads
-rollout content or initializes/migrates the durable library. `doctor` and `paths`
-inspect runtime, library, and registered-source readiness without indexing or
-creating state.
+rollout content or initializes the durable library. `index` and `forget` can
+migrate an existing library before performing their writer operation. `doctor`
+and `paths` inspect runtime, library, and registered-source readiness without
+indexing or creating state.
 
 `index` selects all registered sources when `--source` is omitted. The only
 current source is `codex`; an unknown source is invalid usage before writer open.
