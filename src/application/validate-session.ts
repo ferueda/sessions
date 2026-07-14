@@ -1,4 +1,7 @@
 import type {
+  DiscoveredSession,
+  SelectedSessionSource,
+  SessionSource,
   SourceInputAggregateFingerprint,
   SourceInputDescriptor,
 } from "./ports/session-source.ts";
@@ -9,9 +12,10 @@ import {
   type SessionValidationIssue,
 } from "../domain/session-validation.ts";
 import { isSessionIdentity } from "../domain/session-identity.ts";
-import type { SessionDocument, SessionIdentity } from "../domain/session.ts";
+import type { SessionDocument, SessionIdentity, SourceInstance } from "../domain/session.ts";
 
 const observationBrand: unique symbol = Symbol("SessionObservation");
+const admittedCandidateBrand: unique symbol = Symbol("AdmittedDiscoveredSession");
 const replacementBrand: unique symbol = Symbol("ValidatedSessionReplacement");
 
 export interface SessionRevision {
@@ -23,6 +27,12 @@ export interface SessionObservation {
   readonly [observationBrand]: true;
   readonly identity: SessionIdentity;
   readonly revision: SessionRevision;
+}
+
+export interface AdmittedDiscoveredSession {
+  readonly [admittedCandidateBrand]: true;
+  readonly candidate: DiscoveredSession;
+  readonly observation: SessionObservation;
 }
 
 export interface ValidatedSessionReplacement {
@@ -52,6 +62,14 @@ export type SessionObservationAdmissionResult =
       readonly truncated: boolean;
     };
 
+export type DiscoveredSessionAdmissionResult =
+  | { readonly ok: true; readonly admitted: AdmittedDiscoveredSession }
+  | {
+      readonly ok: false;
+      readonly issues: readonly SessionObservationIssue[];
+      readonly truncated: boolean;
+    };
+
 export type SessionReplacementAdmissionResult =
   | { readonly ok: true; readonly replacement: ValidatedSessionReplacement }
   | {
@@ -61,6 +79,11 @@ export type SessionReplacementAdmissionResult =
     };
 
 export function admitSessionObservation(candidate: unknown): SessionObservationAdmissionResult {
+  const result = admitDiscoveredSession(candidate);
+  return result.ok ? { ok: true, observation: result.admitted.observation } : result;
+}
+
+export function admitDiscoveredSession(candidate: unknown): DiscoveredSessionAdmissionResult {
   const collector: ObservationIssueCollector = { issues: [], truncated: false };
   const root = plainRecord(candidate);
   if (root === undefined || !hasExactKeys(root, CANDIDATE_KEYS)) {
@@ -95,6 +118,7 @@ export function admitSessionObservation(candidate: unknown): SessionObservationA
   if (
     collector.issues.length > 0 ||
     identity === undefined ||
+    inputs === undefined ||
     aggregateFingerprint === undefined ||
     !isNonEmptyWellFormedString(adapterVersion)
   ) {
@@ -105,14 +129,58 @@ export function admitSessionObservation(candidate: unknown): SessionObservationA
     aggregateFingerprint: Object.freeze(aggregateFingerprint),
     adapterVersion,
   });
+  const observation = Object.freeze({
+    [observationBrand]: true as const,
+    identity,
+    revision,
+  });
+  const snapshot = Object.freeze({
+    identity,
+    inputs: Object.freeze(inputs),
+    aggregateFingerprint: revision.aggregateFingerprint,
+    adapterVersion,
+  });
   return {
     ok: true,
-    observation: Object.freeze({
-      [observationBrand]: true as const,
-      identity,
-      revision,
+    admitted: Object.freeze({
+      [admittedCandidateBrand]: true as const,
+      candidate: snapshot,
+      observation,
     }),
   };
+}
+
+export function isAdmittedDiscoveredSession(value: unknown): value is AdmittedDiscoveredSession {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, admittedCandidateBrand);
+    return descriptor !== undefined && "value" in descriptor && descriptor.value === true;
+  } catch {
+    return false;
+  }
+}
+
+export function selectSessionSource(
+  instance: SourceInstance,
+  adapter: SessionSource,
+): SelectedSessionSource {
+  const snapshot = snapshotIdentity({ source: instance, nativeId: "selection" });
+  if (snapshot === undefined) throw new TypeError("Invalid selected source instance");
+  if (
+    typeof adapter !== "object" ||
+    adapter === null ||
+    adapter.kind !== snapshot.source.kind ||
+    typeof adapter.probe !== "function" ||
+    typeof adapter.discover !== "function" ||
+    typeof adapter.read !== "function"
+  ) {
+    throw new TypeError("Selected source adapter does not match its source instance");
+  }
+
+  return Object.freeze({
+    instance: snapshot.source,
+    adapter,
+  });
 }
 
 const MAX_SESSION_OBSERVATION_ISSUES = 32;

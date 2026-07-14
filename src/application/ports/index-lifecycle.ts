@@ -1,4 +1,5 @@
 import type { IndexState, ReadyIndexState } from "../../domain/index-state.ts";
+import type { IndexHealthInspector } from "./index-health.ts";
 import type { SessionIndexReader, SessionIndexWriter } from "./session-index.ts";
 
 export interface IndexPaths {
@@ -24,7 +25,7 @@ export interface IndexWriter {
   close(): Promise<void>;
 }
 
-export interface IndexLifecycle extends IndexStateInspector {
+export interface IndexLifecycle extends IndexStateInspector, IndexHealthInspector {
   openReader(paths: IndexPaths): Promise<IndexReader>;
   openWriter(paths: IndexPaths): Promise<IndexWriter>;
 }

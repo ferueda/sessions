@@ -4,7 +4,6 @@ import { describe, expect, test } from "vitest";
 
 import {
   applyMigrations,
-  CURRENT_INDEX_SCHEMA_VERSION,
   readMigrationHistory,
   sqliteMigrations,
 } from "../../src/infrastructure/sqlite/migrations.ts";
@@ -20,15 +19,15 @@ describe("canonical repository migration", () => {
     try {
       if (bootstrapOnly) applyMigrations(database, [sqliteMigrations[0]!]);
 
-      const history = applyMigrations(database);
+      const canonicalMigrations = sqliteMigrations.slice(0, 2);
+      const history = applyMigrations(database, canonicalMigrations);
 
-      expect(CURRENT_INDEX_SCHEMA_VERSION).toBe(2);
       expect(history).toMatchObject({ currentVersion: 2, pending: [] });
       expect(history.applied.map(({ version, name }) => ({ version, name }))).toEqual([
         { version: 1, name: "bootstrap" },
         { version: 2, name: "canonical_repository" },
       ]);
-      expect(readMigrationHistory(database).currentVersion).toBe(2);
+      expect(readMigrationHistory(database, canonicalMigrations).currentVersion).toBe(2);
       expect(strictApplicationTables(database)).toEqual([
         "sessions_canonical_sessions",
         "sessions_content_occurrences",

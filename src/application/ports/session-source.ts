@@ -43,3 +43,9 @@ export interface SessionSource {
   discover(): AsyncIterable<DiscoveredSession>;
   read(candidate: DiscoveredSession): Promise<SessionDocument>;
 }
+
+/** One explicit provider-neutral source selected for an indexing invocation. */
+export interface SelectedSessionSource {
+  readonly instance: SourceInstance;
+  readonly adapter: SessionSource;
+}

@@ -4,7 +4,6 @@ import { describe, expect, test } from "vitest";
 
 import {
   admittedReplacement,
-  completed,
   completeDocument,
   counts,
   entry,
@@ -13,18 +12,20 @@ import {
   observation,
   replacement,
   runSessionIndexContract,
+  finishCompleted,
   type SessionIndexContractFixture,
 } from "../contracts/session-index.contract.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
-import { createSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
+import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
+import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 describe("SQLite session index", () => {
   runSessionIndexContract(createFixture);
 
   test("rolls back a forced replacement failure, records staleness, and retries cleanly", async () => {
     const database = migratedDatabase();
-    const index = createSqliteSessionIndex(database);
+    const index = createIndex(database);
     try {
       const sessionIdentity = identity("rollback-profile", "rollback-session");
       const baseline = replacement(
@@ -46,7 +47,7 @@ describe("SQLite session index", () => {
           )
           .get(),
       ).toEqual({ source_metadata_json: '{"10":"ten","2":"two"}' });
-      await index.finishRun(baselineRun, completed(counts({ discovered: 1, updated: 1 })));
+      await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
 
       const nextObservation = observation(sessionIdentity, "revision-b");
       const nextDocument: SessionDocument = {
@@ -91,9 +92,10 @@ describe("SQLite session index", () => {
       expect(ftsCount(database, "old")).toBe(0);
       expect(ftsCount(database, "replacement")).toBe(1);
       expectFtsIntegrity(database);
-      await index.finishRun(
+      await finishCompleted(
+        index,
         replacementRun,
-        completed(counts({ discovered: 2, updated: 1, failed: 1, stale: 1 })),
+        counts({ discovered: 2, updated: 1, failed: 1, stale: 1 }),
       );
     } finally {
       database.close();
@@ -102,7 +104,7 @@ describe("SQLite session index", () => {
 
   test("retains shared content until its last occurrence is removed", async () => {
     const database = migratedDatabase();
-    const index = createSqliteSessionIndex(database);
+    const index = createIndex(database);
     try {
       const firstIdentity = identity("shared-profile", "first");
       const secondIdentity = identity("shared-profile", "second");
@@ -139,7 +141,7 @@ describe("SQLite session index", () => {
       expect(rowCount(database, "sessions_content_occurrences")).toBe(0);
       expect(ftsCount(database, "recurrence")).toBe(0);
       expectFtsIntegrity(database);
-      await index.finishRun(run, completed(counts({ discovered: 3, updated: 3, removed: 1 })));
+      await finishCompleted(index, run, counts({ discovered: 3, updated: 3, removed: 1 }));
     } finally {
       database.close();
     }
@@ -147,7 +149,7 @@ describe("SQLite session index", () => {
 
   test("caps detailed failures, keeps exact counts, and retains twenty finished runs", async () => {
     const database = migratedDatabase();
-    const index = createSqliteSessionIndex(database);
+    const index = createIndex(database);
     try {
       const source = identity("retention-profile", "seed").source;
       const failureRun = await index.startRun({
@@ -172,10 +174,28 @@ describe("SQLite session index", () => {
           )
           .get(Number(failureRun.id)),
       ).toEqual({ failed_count: 105, stale_count: 0, omitted_item_count: 5 });
-      await expect(
-        index.finishRun(failureRun, completed(counts({ discovered: 104, failed: 104 }))),
-      ).rejects.toMatchObject({ code: "invalid-state" });
-      await index.finishRun(failureRun, completed(counts({ discovered: 105, failed: 105 })));
+      const failureResult = await index.finishRun(failureRun, {
+        status: "completed",
+        finishedAt: "2026-07-13T15:00:00.000Z",
+      });
+      expect(failureResult).toMatchObject({
+        status: "completed",
+        counts: { discovered: 105, failed: 105, stale: 0 },
+        omittedItemCount: 5,
+      });
+      expect(failureResult.items).toHaveLength(100);
+      expect(failureResult.items[0]).toMatchObject({
+        identity: { nativeId: "failed-0" },
+        outcome: "failed",
+        failure: "malformed",
+      });
+      expect(failureResult.items[99]).toMatchObject({
+        identity: { nativeId: "failed-99" },
+        outcome: "failed",
+        failure: "malformed",
+      });
+      expect(Object.isFrozen(failureResult)).toBe(true);
+      expect(Object.isFrozen(failureResult.items)).toBe(true);
 
       const activeRun = await index.startRun({
         source,
@@ -192,28 +212,28 @@ describe("SQLite session index", () => {
         minimalDocument(durableIdentity),
       );
       await index.replaceSession(durableRun, durableReplacement);
-      await index.finishRun(durableRun, completed(counts({ discovered: 1, updated: 1 })));
+      await finishCompleted(index, durableRun, counts({ discovered: 1, updated: 1 }));
       const otherSource = identity("other-retention-profile", "other").source;
       const otherRun = await index.startRun({
         source: otherSource,
         startedAt: "2026-07-13T12:30:00.000Z",
       });
-      await index.finishRun(otherRun, {
+      const otherResult = await index.finishRun(otherRun, {
         status: "completed",
         finishedAt: "2026-07-13T12:31:00.000Z",
-        counts: counts(),
       });
+      expect(otherResult.counts).toEqual(counts());
       for (let ordinal = 0; ordinal < 25; ordinal += 1) {
         const day = String(ordinal + 1).padStart(2, "0");
         const run = await index.startRun({
           source,
           startedAt: `2026-07-${day}T12:00:00.000Z`,
         });
-        await index.finishRun(run, {
+        const result = await index.finishRun(run, {
           status: "completed",
           finishedAt: `2026-08-${day}T12:00:00.000Z`,
-          counts: counts(),
         });
+        expect(result.counts).toEqual(counts());
       }
 
       expect(
@@ -246,7 +266,7 @@ describe("SQLite session index", () => {
         lastGood: durableReplacement.observation.revision,
         latest: { outcome: "indexed", revision: durableReplacement.observation.revision },
       });
-      await index.finishRun(activeRun, completed(counts()));
+      await finishCompleted(index, activeRun, counts());
     } finally {
       database.close();
     }
@@ -254,7 +274,7 @@ describe("SQLite session index", () => {
 
   test("rejects a run from another source before recording any observation", async () => {
     const database = migratedDatabase();
-    const index = createSqliteSessionIndex(database);
+    const index = createIndex(database);
     try {
       const first = identity("source-one", "one");
       const second = identity("source-two", "two");
@@ -267,7 +287,7 @@ describe("SQLite session index", () => {
         index.recordFailure(run, observation(second, "revision-a"), "malformed"),
       ).rejects.toMatchObject({ code: "invalid-run" });
       expect(rowCount(database, "sessions_session_tracking")).toBe(0);
-      await index.finishRun(run, completed(counts()));
+      await finishCompleted(index, run, counts());
     } finally {
       database.close();
     }
@@ -277,11 +297,20 @@ describe("SQLite session index", () => {
 function createFixture(): SessionIndexContractFixture {
   const database = migratedDatabase();
   return {
-    index: createSqliteSessionIndex(database),
+    index: createIndex(database),
     async close() {
       database.close();
     },
   };
+}
+
+function createIndex(database: DatabaseSync) {
+  const now = () => new Date("2026-07-13T11:00:00.000Z");
+  const lease = acquireWriterLease(database, "index", {
+    now,
+    token: () => "synthetic-test-owner",
+  });
+  return createCoordinatedSqliteSessionIndex(database, { lease, now });
 }
 
 function migratedDatabase(): DatabaseSync {

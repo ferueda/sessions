@@ -1,8 +1,9 @@
 import { expect, test } from "vitest";
 
 import type {
-  IndexRunCompletion,
   IndexRunCounts,
+  IndexRunResult,
+  SessionIndexRun,
   SessionIndexWriter,
 } from "../../src/application/ports/session-index.ts";
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
@@ -56,8 +57,8 @@ export function runSessionIndexContract(
         freshness: "current",
       });
 
-      await fixture.index.finishRun(firstRun, completed(counts({ discovered: 1, updated: 1 })));
-      await fixture.index.finishRun(secondRun, completed(counts({ discovered: 1, updated: 1 })));
+      await finishCompleted(fixture.index, firstRun, counts({ discovered: 1, updated: 1 }));
+      await finishCompleted(fixture.index, secondRun, counts({ discovered: 1, updated: 1 }));
     } finally {
       await fixture.close();
     }
@@ -72,7 +73,7 @@ export function runSessionIndexContract(
       const baseline = admittedReplacement(firstObservation, completeDocument(sessionIdentity));
       const initialRun = await fixture.index.startRun(runInput(sessionIdentity.source));
       await fixture.index.replaceSession(initialRun, baseline);
-      await fixture.index.finishRun(initialRun, completed(counts({ discovered: 1, updated: 1 })));
+      await finishCompleted(fixture.index, initialRun, counts({ discovered: 1, updated: 1 }));
 
       const failedRun = await fixture.index.startRun({
         source: sessionIdentity.source,
@@ -91,9 +92,10 @@ export function runSessionIndexContract(
         },
       });
       await expect(fixture.index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
-      await fixture.index.finishRun(
+      await finishCompleted(
+        fixture.index,
         failedRun,
-        completed(counts({ discovered: 1, failed: 1, stale: 1 })),
+        counts({ discovered: 1, failed: 1, stale: 1 }),
       );
 
       const unchangedRun = await fixture.index.startRun({
@@ -110,10 +112,7 @@ export function runSessionIndexContract(
         lastGood: firstObservation.revision,
         latest: { outcome: "unchanged", revision: firstObservation.revision },
       });
-      await fixture.index.finishRun(
-        unchangedRun,
-        completed(counts({ discovered: 1, unchanged: 1 })),
-      );
+      await finishCompleted(fixture.index, unchangedRun, counts({ discovered: 1, unchanged: 1 }));
     } finally {
       await fixture.close();
     }
@@ -136,7 +135,7 @@ export function runSessionIndexContract(
         },
       });
       await expect(fixture.index.getDocument(failedIdentity)).resolves.toBeUndefined();
-      await fixture.index.finishRun(failedRun, completed(counts({ discovered: 1, failed: 1 })));
+      await finishCompleted(fixture.index, failedRun, counts({ discovered: 1, failed: 1 }));
 
       const indexedIdentity = identity("profile-one", "removed-session");
       const indexed = replacement(indexedIdentity, "revision-a", minimalDocument(indexedIdentity));
@@ -161,10 +160,12 @@ export function runSessionIndexContract(
         latest: { outcome: "indexed", revision: indexed.observation.revision },
       });
       await expect(fixture.index.getDocument(indexedIdentity)).resolves.toEqual(indexed.document);
-      await fixture.index.finishRun(
+      const result = await finishCompleted(
+        fixture.index,
         indexRun,
-        completed(counts({ discovered: 2, updated: 2, removed: 1 })),
+        counts({ discovered: 2, updated: 2, removed: 1 }),
       );
+      expect(result.items).toEqual([{ identity: indexedIdentity, outcome: "removed" }]);
     } finally {
       await fixture.close();
     }
@@ -296,12 +297,18 @@ export function counts(overrides: Partial<IndexRunCounts> = {}): IndexRunCounts 
   };
 }
 
-export function completed(countValues: IndexRunCounts): IndexRunCompletion {
-  return {
+export async function finishCompleted(
+  index: SessionIndexWriter,
+  run: SessionIndexRun,
+  expectedCounts: IndexRunCounts,
+): Promise<IndexRunResult> {
+  const result = await index.finishRun(run, {
     status: "completed",
     finishedAt: "2026-07-13T15:00:00.000Z",
-    counts: countValues,
-  };
+  });
+  expect(result.status).toBe("completed");
+  expect(result.counts).toEqual(expectedCounts);
+  return result;
 }
 
 function runInput(source: SourceInstance): {

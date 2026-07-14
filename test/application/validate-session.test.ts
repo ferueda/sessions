@@ -1,13 +1,65 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  admitDiscoveredSession,
   admitSessionObservation,
   admitSessionReplacement,
+  selectSessionSource,
 } from "../../src/application/validate-session.ts";
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
 import { createTestDocument, createTestIdentity } from "../fixtures/session.ts";
 
 describe("session admission", () => {
+  test("deeply snapshots and freezes the complete discovered candidate", () => {
+    const candidate = mutableCandidate();
+
+    const result = admitDiscoveredSession(candidate);
+
+    if (!result.ok) throw new Error("expected admitted candidate");
+    candidate.inputs[0] = {
+      role: "mutated",
+      locator: { uri: "memory://mutated" },
+      fingerprint: "mutated",
+    };
+    expect(result.admitted.candidate.inputs).toEqual([
+      {
+        role: "transcript",
+        locator: { uri: "memory://synthetic/session" },
+        fingerprint: "version:1",
+      },
+    ]);
+    expect(Object.isFrozen(result.admitted.candidate)).toBe(true);
+    expect(Object.isFrozen(result.admitted.candidate.inputs)).toBe(true);
+    expect(Object.isFrozen(result.admitted.candidate.inputs[0]?.locator)).toBe(true);
+  });
+
+  test("binds a validated source instance to a matching adapter kind", () => {
+    const adapter = {
+      kind: "synthetic",
+      probe: async () => ({
+        source: { kind: "synthetic", instanceId: "one" },
+        status: "ready" as const,
+        locations: [{ role: "root", locator: { uri: "memory://root" } }],
+        summary: "ready",
+      }),
+      async *discover() {},
+      async read() {
+        return createTestDocument();
+      },
+    };
+
+    const selected = selectSessionSource({ kind: "synthetic", instanceId: "one" }, adapter);
+
+    expect(selected).toEqual({
+      instance: { kind: "synthetic", instanceId: "one" },
+      adapter,
+    });
+    expect(Object.isFrozen(selected.instance)).toBe(true);
+    expect(() => selectSessionSource({ kind: "other", instanceId: "one" }, adapter)).toThrow(
+      "Selected source adapter does not match",
+    );
+  });
+
   test("deeply snapshots and brands an admitted observation", () => {
     const candidate = mutableCandidate();
 

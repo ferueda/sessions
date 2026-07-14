@@ -24,6 +24,7 @@ export type RecordableSessionFailureCode = Exclude<SessionIndexFailureCode, "rep
 export type IndexRunFailureCode =
   | "source-unavailable"
   | "source-unreadable"
+  | "probe-failed"
   | "discovery-failed"
   | "interrupted"
   | "repository-write";
@@ -43,16 +44,46 @@ export interface IndexRunCounts {
   readonly stale: number;
 }
 
-export type IndexRunCompletion =
+export type FinishIndexRunInput =
   | {
       readonly status: "completed";
       readonly finishedAt: string;
-      readonly counts: IndexRunCounts;
     }
   | {
       readonly status: "incomplete";
       readonly finishedAt: string;
+      readonly failure: IndexRunFailureCode;
+    };
+
+export type IndexRunItem =
+  | {
+      readonly identity: SessionIdentity;
+      readonly outcome: "failed";
+      readonly failure: SessionIndexFailureCode;
+    }
+  | {
+      readonly identity: SessionIdentity;
+      readonly outcome: "removed";
+    };
+
+export type IndexRunResult =
+  | {
+      readonly source: SourceInstance;
+      readonly status: "completed";
+      readonly startedAt: string;
+      readonly finishedAt: string;
       readonly counts: IndexRunCounts;
+      readonly items: readonly IndexRunItem[];
+      readonly omittedItemCount: number;
+    }
+  | {
+      readonly source: SourceInstance;
+      readonly status: "incomplete";
+      readonly startedAt: string;
+      readonly finishedAt: string;
+      readonly counts: IndexRunCounts;
+      readonly items: readonly IndexRunItem[];
+      readonly omittedItemCount: number;
       readonly failure: IndexRunFailureCode;
     };
 
@@ -125,6 +156,7 @@ export interface SessionIndexReader {
 }
 
 export interface SessionIndexWriter extends SessionIndexReader {
+  listIndexedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]>;
   startRun(input: StartIndexRunInput): Promise<SessionIndexRun>;
   recordUnchanged(run: SessionIndexRun, observation: SessionObservation): Promise<void>;
   recordFailure(
@@ -134,7 +166,7 @@ export interface SessionIndexWriter extends SessionIndexReader {
   ): Promise<void>;
   replaceSession(run: SessionIndexRun, replacement: ValidatedSessionReplacement): Promise<void>;
   removeSession(run: SessionIndexRun, identity: SessionIdentity): Promise<void>;
-  finishRun(run: SessionIndexRun, completion: IndexRunCompletion): Promise<void>;
+  finishRun(run: SessionIndexRun, completion: FinishIndexRunInput): Promise<IndexRunResult>;
 }
 
 export function createSessionIndexRunId(value: unknown): SessionIndexRunId {

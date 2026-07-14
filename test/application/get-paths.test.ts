@@ -125,6 +125,9 @@ describe("getPaths", () => {
       openReader: vi
         .fn<IndexLifecycle["openReader"]>()
         .mockRejectedValue(new Error("reader must remain unavailable")),
+      inspectHealth: vi
+        .fn<IndexLifecycle["inspectHealth"]>()
+        .mockRejectedValue(new Error("health must remain unavailable")),
     };
 
     await expect(getPaths(paths, lifecycle)).resolves.toMatchObject({
@@ -132,5 +135,6 @@ describe("getPaths", () => {
     });
     expect(lifecycle.openReader).not.toHaveBeenCalled();
     expect(lifecycle.openWriter).not.toHaveBeenCalled();
+    expect(lifecycle.inspectHealth).not.toHaveBeenCalled();
   });
 });
