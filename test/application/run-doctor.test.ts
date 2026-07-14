@@ -36,7 +36,7 @@ describe("runDoctor", () => {
     ]);
 
     expect(report).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 1,
       command: "doctor",
       ok: false,
       checks: [

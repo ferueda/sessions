@@ -89,17 +89,6 @@ export function readSessionFreshness(
   );
   const copiedIdentity = copyIdentity(identity);
 
-  if (row.latest_outcome === "removed") {
-    if (
-      hasDocument ||
-      lastGood !== undefined ||
-      latestRevision !== undefined ||
-      row.latest_failure_code !== null
-    ) {
-      throw new SqliteSessionIndexError("corrupt-data");
-    }
-    return { status: "removed", identity: copiedIdentity, latest: { outcome: "removed" } };
-  }
   if (latestRevision === undefined) throw new SqliteSessionIndexError("corrupt-data");
   if (row.latest_outcome === "failed") {
     if (!isFailureCode(row.latest_failure_code)) {

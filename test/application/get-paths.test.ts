@@ -88,7 +88,7 @@ describe("getPaths", () => {
       expect(inspector.inspect).toHaveBeenCalledOnce();
       expect(inspector.inspect).toHaveBeenCalledWith(paths);
       expect(report).toEqual({
-        schemaVersion: 2,
+        schemaVersion: 1,
         command: "paths",
         library: {
           ...paths,

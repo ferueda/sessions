@@ -23,7 +23,7 @@ export type IndexReportItem =
 
 export type IndexSourceReport =
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 1;
       readonly source: SourceInstance;
       readonly status: "completed";
       readonly startedAt: string;
@@ -34,7 +34,7 @@ export type IndexSourceReport =
       readonly omittedItemCount: number;
     }
   | {
-      readonly schemaVersion: 2;
+      readonly schemaVersion: 1;
       readonly source: SourceInstance;
       readonly status: "incomplete";
       readonly startedAt: string;
@@ -47,7 +47,7 @@ export type IndexSourceReport =
     };
 
 export interface IndexReport {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 1;
   readonly command: "index";
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -62,7 +62,7 @@ export function createIndexSourceReport(
   result: IndexRunResult,
 ): IndexSourceReport {
   const common = {
-    schemaVersion: 2 as const,
+    schemaVersion: 1 as const,
     source: freezeSource(selectedSource),
     startedAt: result.startedAt,
     finishedAt: result.finishedAt,
@@ -103,7 +103,7 @@ export function createIndexReport(
   );
 
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 1,
     command: "index",
     startedAt,
     finishedAt,

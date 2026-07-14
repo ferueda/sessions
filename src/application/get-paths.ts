@@ -29,7 +29,7 @@ export type PathsSourceProbe =
     };
 
 export interface PathsReport {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 1;
   readonly command: "paths";
   readonly library: PathsReportLibrary;
   readonly sources: readonly {
@@ -58,7 +58,7 @@ export async function getPaths(
   }
 
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 1,
     command: "paths",
     library: Object.freeze({
       directory: paths.directory,

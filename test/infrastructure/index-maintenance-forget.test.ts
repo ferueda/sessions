@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,11 +9,7 @@ import { forgetSession } from "../../src/application/forget-session.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import type { SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
-import {
-  applyMigrations,
-  readMigrationHistory,
-  sqliteMigrations,
-} from "../../src/infrastructure/sqlite/migrations.ts";
+import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import {
   acquireWriterLease,
   readWriterLeaseHealth,
@@ -35,8 +31,51 @@ afterEach(async () => {
 });
 
 describe("SQLite session forget maintenance", () => {
+  test("returns absent without initializing an empty database", async () => {
+    const paths = await fixturePaths();
+    await writeFile(paths.database, "", { mode: 0o600 });
+    const before = await readFile(paths.database);
+
+    await expect(
+      forgetSession(paths, createSqliteIndexMaintenance({ now }), target),
+    ).resolves.toMatchObject({ outcome: "absent" });
+
+    await expect(readFile(paths.database)).resolves.toEqual(before);
+    await expect(readdir(paths.directory)).resolves.toEqual(["sessions.sqlite3"]);
+  });
+
+  test("refuses an obsolete baseline without changing owned state", async () => {
+    const paths = await fixturePaths();
+    const database = new DatabaseSync(paths.database);
+    database.exec(`CREATE TABLE sessions_schema_migrations (
+      version INTEGER PRIMARY KEY CHECK (version > 0),
+      name TEXT NOT NULL UNIQUE,
+      checksum TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    ) STRICT;
+    INSERT INTO sessions_schema_migrations (version, name, checksum, applied_at)
+    VALUES (
+      1,
+      'bootstrap',
+      'sha256-utf8-v1:obsolete-development-baseline',
+      '2026-07-14T00:00:00.000Z'
+    );`);
+    database.close();
+    await secureDatabase(paths.database);
+    const before = await readFile(paths.database);
+    const beforeJournalMode = readJournalMode(paths.database);
+
+    await expect(
+      forgetSession(paths, createSqliteIndexMaintenance({ now }), target),
+    ).rejects.toMatchObject({ code: "corrupt-data" });
+
+    await expect(readFile(paths.database)).resolves.toEqual(before);
+    expect(readJournalMode(paths.database)).toBe(beforeJournalMode);
+    await expect(readdir(paths.directory)).resolves.toEqual(["sessions.sqlite3"]);
+  });
+
   test("redacts one retained copy while preserving aggregate and shared evidence", async () => {
-    const paths = await seededSchemaFourPaths();
+    const paths = await seededCurrentPaths();
     const maintenance = createSqliteIndexMaintenance({
       now,
       token: () => "forget-owner",
@@ -60,15 +99,14 @@ describe("SQLite session forget maintenance", () => {
       expect(
         database
           .prepare(
-            `SELECT failed_count, missing_count, removed_count, omitted_item_count
+            `SELECT failed_count, missing_count, omitted_item_count
              FROM sessions_index_runs`,
           )
           .get(),
       ).toEqual({
         failed_count: 1,
         missing_count: 1,
-        removed_count: 1,
-        omitted_item_count: 3,
+        omitted_item_count: 2,
       });
       expect(
         database
@@ -99,40 +137,14 @@ describe("SQLite session forget maintenance", () => {
     try {
       expect(
         afterRetry.prepare("SELECT omitted_item_count FROM sessions_index_runs").get(),
-      ).toEqual({ omitted_item_count: 3 });
+      ).toEqual({ omitted_item_count: 2 });
     } finally {
       afterRetry.close();
     }
   });
 
-  test("migrates schema 3 under carried forget ownership and leaves no index run", async () => {
-    const paths = await schemaThreePaths();
-
-    await expect(
-      forgetSession(
-        paths,
-        createSqliteIndexMaintenance({ now, token: () => "schema-three-forget-owner" }),
-        target,
-      ),
-    ).resolves.toMatchObject({ outcome: "forgotten" });
-
-    const database = new DatabaseSync(paths.database, { readOnly: true });
-    try {
-      expect(readMigrationHistory(database).currentVersion).toBe(4);
-      expect(count(database, "sessions_session_tracking")).toBe(0);
-      expect(count(database, "sessions_source_instances")).toBe(1);
-      expect(count(database, "sessions_index_runs")).toBe(0);
-      expect(readWriterLeaseHealth(database, { now })).toEqual({
-        status: "free",
-        generation: 1,
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   test("refuses a live writer without mutating the target", async () => {
-    const paths = await seededSchemaFourPaths();
+    const paths = await seededCurrentPaths();
     const database = new DatabaseSync(paths.database);
     acquireWriterLease(database, "index", { now, token: () => "live-index-owner" });
     database.close();
@@ -151,7 +163,7 @@ describe("SQLite session forget maintenance", () => {
     const unchanged = new DatabaseSync(paths.database, { readOnly: true });
     try {
       expect(count(unchanged, "sessions_session_tracking")).toBe(2);
-      expect(count(unchanged, "sessions_index_run_items")).toBe(3);
+      expect(count(unchanged, "sessions_index_run_items")).toBe(2);
       expect(unchanged.prepare("SELECT omitted_item_count FROM sessions_index_runs").get()).toEqual(
         { omitted_item_count: 0 },
       );
@@ -161,7 +173,7 @@ describe("SQLite session forget maintenance", () => {
   });
 
   test("is idempotent when deletion commits before cleanup loses the lease", async () => {
-    const paths = await seededSchemaFourPaths();
+    const paths = await seededCurrentPaths();
     let clockCalls = 0;
     const expiringClock = () => {
       clockCalls += 1;
@@ -194,7 +206,7 @@ describe("SQLite session forget maintenance", () => {
     try {
       expect(count(database, "sessions_session_tracking")).toBe(1);
       expect(database.prepare("SELECT omitted_item_count FROM sessions_index_runs").get()).toEqual({
-        omitted_item_count: 3,
+        omitted_item_count: 2,
       });
     } finally {
       database.close();
@@ -202,26 +214,12 @@ describe("SQLite session forget maintenance", () => {
   });
 });
 
-async function seededSchemaFourPaths(): Promise<IndexPaths> {
+async function seededCurrentPaths(): Promise<IndexPaths> {
   const paths = await fixturePaths();
   const database = new DatabaseSync(paths.database);
   try {
     applyMigrations(database);
     seedRetainedEvidence(database);
-  } finally {
-    database.close();
-  }
-  await secureDatabase(paths.database);
-  return paths;
-}
-
-async function schemaThreePaths(): Promise<IndexPaths> {
-  const paths = await fixturePaths();
-  const database = new DatabaseSync(paths.database);
-  try {
-    applyMigrations(database, sqliteMigrations.slice(0, 3));
-    const sourceId = insertSource(database);
-    insertTracking(database, sourceId, target.nativeId);
   } finally {
     database.close();
   }
@@ -266,10 +264,10 @@ function seedRetainedEvidence(database: DatabaseSync): void {
     .prepare(
       `INSERT INTO sessions_index_runs (
          source_instance_id, status, started_at, finished_at,
-         discovered_count, failed_count, removed_count, missing_count
+         discovered_count, failed_count, missing_count
        ) VALUES (
          ?, 'completed', '2026-07-14T10:00:00.000Z', '2026-07-14T10:01:00.000Z',
-         1, 1, 1, 1
+         1, 1, 1
        )`,
     )
     .run(sourceId).lastInsertRowid;
@@ -279,10 +277,9 @@ function seedRetainedEvidence(database: DatabaseSync): void {
          run_id, ordinal, session_id, outcome, failure_code
        ) VALUES
          (?, 0, ?, 'failed', 'malformed'),
-         (?, 1, ?, 'missing', NULL),
-         (?, 2, ?, 'removed', NULL)`,
+         (?, 1, ?, 'missing', NULL)`,
     )
-    .run(run, targetId, run, targetId, run, targetId);
+    .run(run, targetId, run, targetId);
 }
 
 function insertSource(database: DatabaseSync): number | bigint {
@@ -385,4 +382,13 @@ function ftsCount(database: DatabaseSync, query: string): number {
     )
     .get(query) as { readonly count: number | bigint };
   return Number(row.count);
+}
+
+function readJournalMode(file: string): unknown {
+  const database = new DatabaseSync(file, { readOnly: true });
+  try {
+    return Object.values(database.prepare("PRAGMA journal_mode").get() ?? {})[0];
+  } finally {
+    database.close();
+  }
 }

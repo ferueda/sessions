@@ -105,10 +105,6 @@ export interface FailedLatestObservation {
   readonly failure: SessionIndexFailureCode;
 }
 
-export interface RemovedLatestObservation {
-  readonly outcome: "removed";
-}
-
 export type SessionFreshness =
   | {
       readonly status: "untracked";
@@ -130,11 +126,6 @@ export type SessionFreshness =
       readonly identity: SessionIdentity;
       readonly lastGood: SessionRevision;
       readonly latest: FailedLatestObservation;
-    }
-  | {
-      readonly status: "removed";
-      readonly identity: SessionIdentity;
-      readonly latest: RemovedLatestObservation;
     };
 
 export interface IndexedSessionSummary {

@@ -130,6 +130,34 @@ describe("source discovery workspace", () => {
     expect((error as AggregateError).errors[2]).toEqual(new Error("lease lost"));
   });
 
+  test("refuses close while an operation is awaiting setup", async () => {
+    const paths = await fixturePaths();
+    let setupStarted!: () => void;
+    let releaseSetup!: () => void;
+    const started = new Promise<void>((resolve) => {
+      setupStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseSetup = resolve;
+    });
+    let blockSetup = false;
+    const lifecycle = await openSourceDiscoveryWorkspace(paths, {
+      async assertLease() {
+        if (!blockSetup) return;
+        setupStarted();
+        await release;
+      },
+    });
+    blockSetup = true;
+
+    const operation = lifecycle.workspace.withPrivateDirectory(async () => "complete");
+    await started;
+    await expect(lifecycle.close()).rejects.toMatchObject({ code: "workspace-busy" });
+    releaseSetup();
+    await expect(operation).resolves.toBe("complete");
+    await expect(lifecycle.close()).resolves.toBeUndefined();
+  });
+
   test("rejects non-canonical roots and closes idempotently", async () => {
     const paths = await fixturePaths();
     expect(() =>

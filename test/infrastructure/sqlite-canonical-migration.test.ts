@@ -5,29 +5,21 @@ import { describe, expect, test } from "vitest";
 import {
   applyMigrations,
   readMigrationHistory,
-  sqliteMigrations,
 } from "../../src/infrastructure/sqlite/migrations.ts";
 
 const DIGEST = "a".repeat(64);
 
-describe("canonical repository migration", () => {
-  test.each([
-    ["a fresh database", false],
-    ["an existing schema 1 database", true],
-  ])("applies schema 2 to %s", (_label, bootstrapOnly) => {
+describe("canonical SQLite baseline", () => {
+  test("bootstraps the complete current schema in one migration", () => {
     const database = openDatabase();
     try {
-      if (bootstrapOnly) applyMigrations(database, [sqliteMigrations[0]!]);
+      const history = applyMigrations(database);
 
-      const canonicalMigrations = sqliteMigrations.slice(0, 2);
-      const history = applyMigrations(database, canonicalMigrations);
-
-      expect(history).toMatchObject({ currentVersion: 2, pending: [] });
+      expect(history).toMatchObject({ currentVersion: 1, pending: [] });
       expect(history.applied.map(({ version, name }) => ({ version, name }))).toEqual([
         { version: 1, name: "bootstrap" },
-        { version: 2, name: "canonical_repository" },
       ]);
-      expect(readMigrationHistory(database, canonicalMigrations).currentVersion).toBe(2);
+      expect(readMigrationHistory(database).currentVersion).toBe(1);
       expect(strictApplicationTables(database)).toEqual([
         "sessions_canonical_sessions",
         "sessions_content_occurrences",
@@ -39,7 +31,25 @@ describe("canonical repository migration", () => {
         "sessions_schema_migrations",
         "sessions_session_tracking",
         "sessions_source_instances",
+        "sessions_writer_lease",
       ]);
+      expect(tableColumns(database, "sessions_source_instances")).toEqual(
+        expect.arrayContaining(["coverage_status", "coverage_observed_at"]),
+      );
+      expect(tableColumns(database, "sessions_entries")).toEqual(
+        expect.arrayContaining(["tool_name", "tool_namespace"]),
+      );
+      expect(tableColumns(database, "sessions_index_runs")).toContain("missing_count");
+      expect(tableColumns(database, "sessions_index_runs")).not.toContain("removed_count");
+      expect(
+        database
+          .prepare(
+            `SELECT partial
+             FROM pragma_index_list('sessions_content_occurrences')
+             WHERE name = 'sessions_content_occurrences_content_idx'`,
+          )
+          .get(),
+      ).toEqual({ partial: 1 });
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       database.close();
@@ -166,21 +176,83 @@ describe("canonical repository migration", () => {
     }
   });
 
-  test("enforces removed revisions, exact run counts, and the diagnostic-item cap", () => {
+  test("enforces tool ownership and strict content variants at the baseline", () => {
     const database = migratedDatabase();
     try {
-      const sourceInstanceId = insertSourceInstance(database, "removal-profile");
-      const removedSessionId = Number(
+      const { sessionId } = insertTrackedSession(database);
+      const insertEntry = database.prepare(
+        `INSERT INTO sessions_entries (
+           session_id, ordinal, kind, actor, tool_name, tool_namespace, source_locator_uri
+         ) VALUES (?, 0, ?, 'tool', ?, ?, 'memory://entry/0')`,
+      );
+
+      expect(() => insertEntry.run(sessionId, "message", "read", null)).toThrow(
+        /CHECK constraint failed/u,
+      );
+      expect(() => insertEntry.run(sessionId, "tool-call", null, "filesystem")).toThrow(
+        /CHECK constraint failed/u,
+      );
+      expect(() => insertEntry.run(sessionId, "tool-call", "read", "filesystem")).not.toThrow();
+
+      const contentId = insertContent(database, DIGEST, "strict variant proof");
+      const insertOccurrence = database.prepare(
+        `INSERT INTO sessions_content_occurrences (
+           session_id, entry_ordinal, segment_ordinal, content_id,
+           content_class, source_type, origin, confidence, source_metadata_json
+         ) VALUES (?, 0, ?, ?, ?, ?, 'tool', 'high', '{}')`,
+      );
+      insertOccurrence.run(sessionId, 0, contentId, null, null);
+      insertOccurrence.run(sessionId, 1, null, "structured", "tool-output");
+
+      for (const invalid of [
+        "",
+        "-leading",
+        "trailing-",
+        "double--dash",
+        "Upper",
+        "under_score",
+        "nul\0byte",
+        "évidence",
+        "a".repeat(65),
+      ]) {
+        expect(() => insertOccurrence.run(sessionId, 2, null, "unknown", invalid)).toThrow(
+          /CHECK constraint failed/u,
+        );
+      }
+      expect(() =>
+        insertOccurrence.run(sessionId, 2, contentId, "structured", "tool-output"),
+      ).toThrow(/CHECK constraint failed/u);
+      expect(() => insertOccurrence.run(sessionId, 2, null, null, null)).toThrow(
+        /CHECK constraint failed/u,
+      );
+
+      expect(() =>
+        insertOccurrence.run(sessionId, 2, null, "unknown", "a".repeat(64)),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  test("enforces current revisions, run-item outcomes, and the diagnostic-item cap", () => {
+    const database = migratedDatabase();
+    try {
+      const sourceInstanceId = insertSourceInstance(database, "run-profile");
+      const failedSessionId = Number(
         database
           .prepare(
             `INSERT INTO sessions_session_tracking (
                source_instance_id,
                native_id,
-               latest_outcome
-             ) VALUES (?, 'removed-session', 'removed')
+               latest_fingerprint_scheme,
+               latest_fingerprint_digest,
+               latest_adapter_version,
+               latest_outcome,
+               latest_failure_code
+             ) VALUES (?, 'failed-session', 'sha256-json-v1', ?, '1', 'failed', 'malformed')
              RETURNING session_id`,
           )
-          .get(sourceInstanceId)?.session_id,
+          .get(sourceInstanceId, DIGEST)?.session_id,
       );
 
       expect(() =>
@@ -193,7 +265,7 @@ describe("canonical repository migration", () => {
                latest_fingerprint_digest,
                latest_adapter_version,
                latest_outcome
-             ) VALUES (?, 'invalid-removal', 'sha256-json-v1', ?, '1', 'removed')`,
+             ) VALUES (?, 'invalid-removed-outcome', 'sha256-json-v1', ?, '1', 'removed')`,
           )
           .run(sourceInstanceId, DIGEST),
       ).toThrow(/CHECK constraint failed/u);
@@ -230,16 +302,26 @@ describe("canonical repository migration", () => {
            ordinal,
            session_id,
            outcome
-         ) VALUES (?, ?, ?, 'removed')`,
+         ) VALUES (?, ?, ?, 'missing')`,
       );
       for (let ordinal = 0; ordinal < 100; ordinal += 1) {
-        insertItem.run(runId, ordinal, removedSessionId);
+        insertItem.run(runId, ordinal, failedSessionId);
       }
 
       expect(rowCount(database, "sessions_index_run_items")).toBe(100);
-      expect(() => insertItem.run(runId, 100, removedSessionId)).toThrow(
-        /CHECK constraint failed/u,
-      );
+      expect(() => insertItem.run(runId, 100, failedSessionId)).toThrow(/CHECK constraint failed/u);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO sessions_index_run_items (
+               run_id,
+               ordinal,
+               session_id,
+               outcome
+             ) VALUES (?, 0, ?, 'removed')`,
+          )
+          .run(runId, failedSessionId),
+      ).toThrow(/CHECK constraint failed/u);
       expect(() =>
         database
           .prepare(
@@ -363,4 +445,13 @@ function rowCount(database: DatabaseSync, table: string): number {
     readonly count: number | bigint;
   };
   return Number(row.count);
+}
+
+function tableColumns(database: DatabaseSync, table: string): readonly string[] {
+  if (!/^sessions_[a-z_]+$/u.test(table)) throw new TypeError("Unsafe test table name");
+  return (
+    database.prepare(`PRAGMA table_info("${table}")`).all() as unknown as readonly {
+      readonly name: string;
+    }[]
+  ).map(({ name }) => name);
 }

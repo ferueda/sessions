@@ -54,40 +54,43 @@ export async function openSourceDiscoveryWorkspace(
   const workspace: SourceDiscoveryWorkspace = {
     async withPrivateDirectory<T>(operation: (directory: string) => Promise<T>): Promise<T> {
       if (closed) throw new SourceDiscoveryWorkspaceError("workspace-closed");
-      await options.assertLease();
-      await assertSafeScratchRoot(paths.scratch, platform);
-
-      let directory: string;
-      try {
-        directory = await mkdtemp(path.join(paths.scratch, "attempt-"));
-        await securePrivateDirectory(directory, platform);
-      } catch (error) {
-        throw new SourceDiscoveryWorkspaceError("unsafe-scratch-root", { cause: error });
-      }
-
       activeOperations += 1;
-      let result: T | undefined;
-      const errors: unknown[] = [];
       try {
-        result = await operation(directory);
-      } catch (error) {
-        errors.push(error);
-      } finally {
+        await options.assertLease();
+        await assertSafeScratchRoot(paths.scratch, platform);
+
+        let directory: string;
         try {
-          await removePrivateAttempt(paths.scratch, directory, platform);
+          directory = await mkdtemp(path.join(paths.scratch, "attempt-"));
+          await securePrivateDirectory(directory, platform);
         } catch (error) {
-          errors.push(new SourceDiscoveryWorkspaceError("unsafe-scratch-root", { cause: error }));
+          throw new SourceDiscoveryWorkspaceError("unsafe-scratch-root", { cause: error });
         }
-        activeOperations -= 1;
+
+        let result: T | undefined;
+        const errors: unknown[] = [];
         try {
-          await options.assertLease();
+          result = await operation(directory);
         } catch (error) {
           errors.push(error);
+        } finally {
+          try {
+            await removePrivateAttempt(paths.scratch, directory, platform);
+          } catch (error) {
+            errors.push(new SourceDiscoveryWorkspaceError("unsafe-scratch-root", { cause: error }));
+          }
+          try {
+            await options.assertLease();
+          } catch (error) {
+            errors.push(error);
+          }
         }
-      }
 
-      throwCollectedErrors(errors, "Source discovery operation cleanup failed");
-      return result as T;
+        throwCollectedErrors(errors, "Source discovery operation cleanup failed");
+        return result as T;
+      } finally {
+        activeOperations -= 1;
+      }
     },
   };
 

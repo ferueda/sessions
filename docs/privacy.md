@@ -21,7 +21,7 @@ not a best-effort feature.
 - No TTL or automatic pruning exists. Only explicit `sessions forget` or
   `sessions data clear --yes` removes retained content.
 - Paths and doctor inspect library/source readiness without indexing, creating
-  storage, applying migrations, or reading rollout content.
+  storage, modifying storage, or reading rollout content.
 
 Search, portable export, Cursor, library import/restore, and automatic analysis
 are not current commands.
@@ -40,6 +40,12 @@ is `sessions.sqlite3`, with known `sessions.sqlite3-wal` and
 `sessions.sqlite3-shm` sidecars. The only ephemeral workspace is the exact
 `.scratch` child. Sessions does not read, migrate, or delete the pre-public cache
 database or legacy Harness JSONL cache.
+
+Pre-alpha builds recognize one current Sessions-owned database baseline. Earlier
+development databases are neither upgraded nor deleted automatically. A user may
+select a fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete
+Sessions-owned directory and index again; provider histories remain untouched.
+Data-preserving migration support begins with the first published release.
 
 `sessions paths` reports these owned paths without creating them. It also reports
 sanitized Codex home/state roots; it does not enumerate rollout files or print

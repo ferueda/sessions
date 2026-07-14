@@ -75,8 +75,8 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-M5 implements the first complete vertical slice: one Codex adapter, schema-4
-durable canonical evidence, non-destructive source-presence reconciliation,
+M5 implements the first complete vertical slice: one Codex adapter, current
+baseline durable canonical evidence, non-destructive source-presence reconciliation,
 index/list/show, scoped forget, all-data clear, and source-aware diagnostics. The
 maintained file-by-file map is the
 [current architecture guide](contributing/architecture.md); this memo remains the
@@ -89,10 +89,10 @@ Adapters import application/domain but never infrastructure or CLI. CLI imports
 application/domain, never concrete infrastructure or adapters. The binary alone
 may import all layers to wire them.
 
-Schema 4 persists exact text and privacy-safe omissions, tool identity/linkage,
-capture/source-observation state, and rebuildable FTS. Complete-scan absence marks
-a retained snapshot missing instead of deleting it. One generation lease fences
-index, forget, and clear; schema-3 migration/ownership cutover is atomic.
+The current baseline persists exact text and privacy-safe omissions, tool
+identity/linkage, capture/source-observation state, rebuildable FTS, and writer
+coordination directly. Complete-scan absence marks a retained snapshot missing
+instead of deleting it. One generation lease fences index, forget, and clear.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -316,7 +316,14 @@ context can include directly linked tool-result entries even when they are
 non-adjacent; those results retain the relation without receiving an invented
 copy of the call's tool identity.
 
-SQLite migrations are ordered, transactional, and forward-only for released versions. An incompatible or failed migration leaves the previous database recoverable and prints a remediation path; it never silently rebuilds or discards canonical user data. M5's schema-3 cutover arbitrates the existing persistent lease before migration, then installs the new generation/final purpose after the lease-table rebuild in the same transaction and fences every prior schema-3 owner. Data clear acquires valid schema-3/4 ownership before unlink instead of treating schema 3 as an uncoordinated old database. Repair and projection rebuilds distinguish canonical integrity from derived FTS integrity.
+Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
+earlier development builds are unsupported and fail closed without migration or
+deletion; users can select a fresh Sessions data directory and index again.
+Compatibility begins with the first published release. From that point, SQLite
+migrations are ordered, checksummed, transactional, and forward-only; they must
+preserve canonical evidence, arbitrate writer ownership before schema mutation,
+and fail recoverably. Repair and projection rebuilds distinguish canonical
+integrity from derived FTS integrity.
 
 ## Privacy and local state
 
@@ -345,16 +352,16 @@ SQLite migrations are ordered, transactional, and forward-only for released vers
 
 Detailed promises belong to [the privacy contract](privacy.md).
 
-The public only-owned-file clear path validates path safety, acquires/carries a
-schema-3/4 clear lease, checkpoints, and removes only database/WAL/SHM files plus
-the exact `.scratch` subtree without following symlinks. Schema 3 is deleted
-without migrating merely to clear it. Post-close identity/lease verification
-fences races; later failure leaves clear intent for clear-only recovery. Orphan
-scratch without its lease-bearing database is recovery-required. A session-scoped
-transaction backs `sessions forget`; it preserves aggregate run evidence and
-incoming relation tuples so it does not silently rewrite other retained
-snapshots. Reindex can recapture the selected identity. No public `index clear`
-command exists.
+The public only-owned-file clear path validates the current baseline and path
+safety, acquires its clear lease, checkpoints, and removes only database/WAL/SHM
+files plus the exact `.scratch` subtree without following symlinks. Unsupported
+development databases are refused, not deleted. Post-close identity/lease
+verification fences races; later failure leaves clear intent for clear-only
+recovery. Orphan scratch without its lease-bearing database is recovery-required.
+A session-scoped transaction backs `sessions forget`; it preserves aggregate run
+evidence and incoming relation tuples so it does not silently rewrite other
+retained snapshots. Reindex can recapture the selected identity. No public
+`index clear` command exists.
 
 ## CLI contract
 
@@ -444,7 +451,7 @@ Doctor supports human output through `sessions doctor` and JSON through `session
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "command": "doctor",
   "ok": true,
   "checks": [

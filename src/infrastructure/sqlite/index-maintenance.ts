@@ -138,7 +138,7 @@ async function clearSqliteIndex(
   if (schema === "invalid") {
     throw new IndexMaintenanceError("corrupt-data");
   }
-  if (schema === "legacy") {
+  if (schema === "empty") {
     if (hasRecoveryState) {
       throw new IndexMaintenanceError("recovery-required");
     }
@@ -157,7 +157,7 @@ const absentResult: ClearIndexResult = Object.freeze({
   shmRemoved: false,
 });
 
-type ClearSchema = "coordinated" | "invalid" | "legacy";
+type ClearSchema = "current" | "empty" | "invalid";
 
 function inspectDatabaseSchema(
   file: string,
@@ -180,10 +180,10 @@ function inspectDatabaseSchema(
     });
     const history = readMigrationHistory(database, options.migrations);
     schema =
-      history.currentVersion === 3 || history.currentVersion === 4
-        ? "coordinated"
-        : history.currentVersion < 3
-          ? "legacy"
+      history.currentVersion === options.supportedSchemaVersion && history.pending.length === 0
+        ? "current"
+        : history.currentVersion === 0
+          ? "empty"
           : "invalid";
   } catch {
     schema = "invalid";
@@ -303,25 +303,14 @@ function acquireClearLease(
 ): WriterLeaseIdentity {
   return runImmediateTransaction(database, () => {
     const history = readMigrationHistory(database, options.migrations);
-    if (history.currentVersion !== 3 && history.currentVersion !== 4) {
+    if (history.currentVersion !== options.supportedSchemaVersion || history.pending.length !== 0) {
       throw new IndexMaintenanceError("concurrent-change");
     }
-    if (history.currentVersion === 4 && history.pending.length !== 0) {
-      throw new IndexMaintenanceError("concurrent-change");
-    }
-    if (history.currentVersion === 3) assertSchemaThreeClearLeaseIsPossible(database);
     return acquireWriterLeaseInTransaction(database, "clear", {
       now: options.now,
       ...(options.token === undefined ? {} : { token: options.token }),
     });
   });
-}
-
-function assertSchemaThreeClearLeaseIsPossible(database: DatabaseSync): void {
-  const row = database
-    .prepare("SELECT purpose FROM sessions_writer_lease WHERE singleton = 1")
-    .get() as { readonly purpose?: unknown } | undefined;
-  if (row?.purpose === "forget") throw new SqliteWriterLeaseError("corrupt-data");
 }
 
 interface ScratchRootState {

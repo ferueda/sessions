@@ -6,7 +6,7 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 
 > **Status: pre-alpha.** The first Codex-backed vertical slice is implemented:
 > explicit durable indexing, retained-session list/show, scoped forget, all-data
-> clear, source diagnostics, and schema-v4 storage. Search, portable export,
+> clear, source diagnostics, and the current canonical storage baseline. Search, portable export,
 > Cursor, the packaged Agent Skill, and npm release remain planned.
 
 ## Why Sessions
@@ -66,6 +66,12 @@ deletes the known Sessions database/sidecars and its exact temporary workspace.
 `doctor` and `paths` inspect runtime, library, and Codex source readiness without
 indexing or creating state. All runtime operation is local, network-free, and
 telemetry-free.
+
+Pre-alpha builds recognize one current on-disk baseline. Databases created by
+earlier development builds are not upgraded or deleted automatically; use a fresh
+`SESSIONS_DATA_DIR` or manually remove the old Sessions-owned directory and index
+again. Data-preserving forward migrations become a compatibility promise with the
+first published release.
 
 Codex defaults to `~/.codex`. `CODEX_HOME` selects another Codex home. The state
 database location follows Codex's `sqlite_home` configuration, then

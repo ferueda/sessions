@@ -12,7 +12,7 @@ describe("human CLI rendering", () => {
   test("escapes controls in reported local paths", () => {
     const output = renderPaths(
       {
-        schemaVersion: 2,
+        schemaVersion: 1,
         command: "paths",
         library: {
           directory: "/data/\u001b[31m",
@@ -23,7 +23,7 @@ describe("human CLI rendering", () => {
           initialized: false,
           state: "uninitialized",
           schemaVersion: null,
-          supportedSchemaVersion: 4,
+          supportedSchemaVersion: 1,
         },
         sources: [],
       },

@@ -13,20 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
 import { clearData } from "../../src/application/clear-index.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
-import type { IndexMaintenanceError } from "../../src/application/ports/index-maintenance.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
-import {
-  applyMigrations,
-  readMigrationHistory,
-  sqliteMigrations,
-} from "../../src/infrastructure/sqlite/migrations.ts";
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
@@ -53,6 +46,18 @@ describe("SQLite index maintenance", () => {
       shmRemoved: false,
     });
     await expect(stat(paths.directory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("removes an empty interrupted-initialization database", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    await writeFile(paths.database, "", { mode: 0o600 });
+
+    await expect(clearData(paths, createSqliteIndexMaintenance())).resolves.toMatchObject({
+      outcome: "cleared",
+      databaseRemoved: true,
+    });
+    await expect(stat(paths.database)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("clears a current index while retaining its directory and unrelated files", async () => {
@@ -110,68 +115,6 @@ describe("SQLite index maintenance", () => {
     });
     await expect(readFile(path.join(paths.scratch, "orphan.txt"), "utf8")).resolves.toBe("retain");
   });
-
-  test("carries a schema-3 clear lease without applying migration 4", async () => {
-    const paths = await fixturePaths();
-    await createSchemaThreeIndex(paths);
-    let lockedVersion: number | undefined;
-    let lockedPurpose: unknown;
-
-    await expect(
-      clearData(
-        paths,
-        createSqliteIndexMaintenance({
-          async beforeFileRemoval() {
-            const url = pathToFileURL(paths.database);
-            url.searchParams.set("mode", "ro");
-            url.searchParams.set("immutable", "1");
-            const database = new DatabaseSync(url.href, { readOnly: true });
-            try {
-              lockedVersion = readMigrationHistory(database).currentVersion;
-              lockedPurpose = database
-                .prepare("SELECT purpose FROM sessions_writer_lease WHERE singleton = 1")
-                .get()?.purpose;
-            } finally {
-              database.close();
-            }
-          },
-        }),
-      ),
-    ).resolves.toMatchObject({ outcome: "cleared", databaseRemoved: true });
-    expect(lockedVersion).toBe(3);
-    expect(lockedPurpose).toBe("clear");
-  });
-
-  test.each([
-    ["live", "2026-07-14T12:00:20.000Z"],
-    ["expired", "2026-07-14T12:01:00.000Z"],
-  ])(
-    "classifies an impossible %s schema-3 forget lease as corrupt without mutation",
-    async (_state, clearAt) => {
-      const paths = await fixturePaths();
-      const scratchFile = path.join(paths.scratch, "retain.txt");
-      const neighboringFile = path.join(paths.directory, "retain-neighbor.txt");
-      await createImpossibleSchemaThreeForgetIndex(paths);
-      await mkdir(paths.scratch, { mode: 0o700 });
-      await writeFile(scratchFile, "retain scratch", { mode: 0o600 });
-      await writeFile(neighboringFile, "retain neighbor", { mode: 0o600 });
-      const before = await snapshotSchemaThreeClearState(paths, scratchFile, neighboringFile);
-
-      await expect(
-        clearData(
-          paths,
-          createSqliteIndexMaintenance({
-            now: () => new Date(clearAt),
-            token: () => "replacement-clear-owner",
-          }),
-        ),
-      ).rejects.toMatchObject({ code: "corrupt-data" });
-
-      await expect(
-        snapshotSchemaThreeClearState(paths, scratchFile, neighboringFile),
-      ).resolves.toEqual(before);
-    },
-  );
 
   test("refuses a current index owned by a live indexing writer", async () => {
     const paths = await fixturePaths();
@@ -260,17 +203,15 @@ describe("SQLite index maintenance", () => {
     ).resolves.toMatchObject({ outcome: "cleared", databaseRemoved: true });
   });
 
-  test("removes an older known database without migrating it", async () => {
+  test("refuses an obsolete development database without mutating it", async () => {
     const paths = await fixturePaths();
-    await createOlderIndex(paths);
+    await createObsoleteDevelopmentIndex(paths);
     const before = await readFile(paths.database);
 
-    await expect(clearData(paths, createSqliteIndexMaintenance())).resolves.toMatchObject({
-      outcome: "cleared",
-      databaseRemoved: true,
+    await expect(clearData(paths, createSqliteIndexMaintenance())).rejects.toMatchObject({
+      code: "corrupt-data",
     });
-    expect(before.length).toBeGreaterThan(0);
-    await expect(stat(paths.database)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(paths.database)).resolves.toEqual(before);
   });
 
   test("refuses a corrupt known database without removing neighboring files", async () => {
@@ -289,7 +230,8 @@ describe("SQLite index maintenance", () => {
 
   test("rejects a substituted non-current database without deleting the replacement", async () => {
     const paths = await fixturePaths();
-    await createOlderIndex(paths);
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    await writer.close();
 
     await expect(
       clearData(
@@ -307,18 +249,6 @@ describe("SQLite index maintenance", () => {
     await expect(readFile(paths.database, "utf8")).resolves.toBe(
       "replacement owned by another operation",
     );
-  });
-
-  test("refuses recovery sidecars beside an older database", async () => {
-    const paths = await fixturePaths();
-    await createOlderIndex(paths);
-    await writeFile(paths.wal, "possible recovery state", { mode: 0o600 });
-
-    await expect(clearData(paths, createSqliteIndexMaintenance())).rejects.toEqual(
-      expect.objectContaining<Partial<IndexMaintenanceError>>({ code: "recovery-required" }),
-    );
-    await expect(readFile(paths.wal, "utf8")).resolves.toBe("possible recovery state");
-    expect(await stat(paths.database)).toBeDefined();
   });
 
   test("refuses sidecar-only state", async () => {
@@ -423,119 +353,24 @@ async function fixturePaths(): Promise<IndexPaths> {
   };
 }
 
-async function createOlderIndex(paths: IndexPaths): Promise<void> {
-  await mkdir(paths.directory, { mode: 0o700 });
-  const database = new DatabaseSync(paths.database);
-  applyMigrations(database, sqliteMigrations.slice(0, 2));
-  database.close();
-  if (process.platform !== "win32") await chmod(paths.database, 0o600);
-}
-
-async function createSchemaThreeIndex(paths: IndexPaths): Promise<void> {
-  await mkdir(paths.directory, { mode: 0o700 });
-  const database = new DatabaseSync(paths.database);
-  applyMigrations(database, sqliteMigrations.slice(0, 3));
-  database.close();
-  if (process.platform !== "win32") await chmod(paths.database, 0o600);
-}
-
-async function createImpossibleSchemaThreeForgetIndex(paths: IndexPaths): Promise<void> {
+async function createObsoleteDevelopmentIndex(paths: IndexPaths): Promise<void> {
   await mkdir(paths.directory, { mode: 0o700 });
   const database = new DatabaseSync(paths.database);
   try {
-    database.exec("PRAGMA journal_mode = WAL");
-    applyMigrations(database, sqliteMigrations.slice(0, 3));
-    const source = database
-      .prepare(
-        `INSERT INTO sessions_source_instances (kind, instance_id)
-         VALUES ('synthetic', 'impossible-schema-three-forget')
-         RETURNING source_instance_id`,
-      )
-      .get() as { readonly source_instance_id: number | bigint };
+    database.exec(`CREATE TABLE sessions_schema_migrations (
+      version INTEGER PRIMARY KEY CHECK (version > 0),
+      name TEXT NOT NULL UNIQUE,
+      checksum TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    ) STRICT;`);
     database
       .prepare(
-        `INSERT INTO sessions_index_runs (source_instance_id, status, started_at)
-         VALUES (?, 'active', '2026-07-14T12:00:00.000Z')`,
+        `INSERT INTO sessions_schema_migrations (version, name, checksum, applied_at)
+         VALUES (1, 'bootstrap', ?, '2026-07-14T12:00:00.000Z')`,
       )
-      .run(source.source_instance_id);
-    database.exec("PRAGMA ignore_check_constraints = ON");
-    database
-      .prepare(
-        `UPDATE sessions_writer_lease
-         SET generation = 7,
-             purpose = 'forget',
-             owner_token = 'impossible-forget-owner',
-             acquired_at = '2026-07-14T12:00:00.000Z',
-             heartbeat_at = '2026-07-14T12:00:10.000Z',
-             expires_at = '2026-07-14T12:00:40.000Z'
-         WHERE singleton = 1`,
-      )
-      .run();
-    database.exec("PRAGMA ignore_check_constraints = OFF");
-    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      .run(`sha256-utf8-v1:${"0".repeat(64)}`);
   } finally {
     database.close();
   }
   if (process.platform !== "win32") await chmod(paths.database, 0o600);
-}
-
-interface SchemaThreeClearSnapshot {
-  readonly schema: readonly Record<string, unknown>[];
-  readonly history: readonly Record<string, unknown>[];
-  readonly lease: Record<string, unknown> | undefined;
-  readonly runs: readonly Record<string, unknown>[];
-  readonly database: Buffer;
-  readonly wal: Buffer | undefined;
-  readonly shm: Buffer | undefined;
-  readonly scratch: Buffer;
-  readonly neighbor: Buffer;
-}
-
-async function snapshotSchemaThreeClearState(
-  paths: IndexPaths,
-  scratchFile: string,
-  neighboringFile: string,
-): Promise<SchemaThreeClearSnapshot> {
-  const database = new DatabaseSync(paths.database, { readOnly: true });
-  let snapshot: Omit<SchemaThreeClearSnapshot, "database" | "wal" | "shm" | "scratch" | "neighbor">;
-  try {
-    snapshot = {
-      schema: database
-        .prepare(
-          `SELECT type, name, tbl_name, sql
-           FROM sqlite_schema
-           WHERE name NOT LIKE 'sqlite_%'
-           ORDER BY type, name`,
-        )
-        .all() as readonly Record<string, unknown>[],
-      history: database
-        .prepare("SELECT * FROM sessions_schema_migrations ORDER BY version")
-        .all() as readonly Record<string, unknown>[],
-      lease: database.prepare("SELECT * FROM sessions_writer_lease").get(),
-      runs: database
-        .prepare("SELECT * FROM sessions_index_runs ORDER BY run_id")
-        .all() as readonly Record<string, unknown>[],
-    };
-  } finally {
-    database.close();
-  }
-  return {
-    ...snapshot,
-    database: await readFile(paths.database),
-    wal: await readFileIfPresent(paths.wal),
-    shm: await readFileIfPresent(paths.shm),
-    scratch: await readFile(scratchFile),
-    neighbor: await readFile(neighboringFile),
-  };
-}
-
-async function readFileIfPresent(file: string): Promise<Buffer | undefined> {
-  try {
-    return await readFile(file);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
 }

@@ -12,12 +12,7 @@ import {
   minimalDocument,
   observation,
 } from "../contracts/session-index.contract.ts";
-import {
-  applyMigrations,
-  CURRENT_INDEX_SCHEMA_VERSION,
-  readMigrationHistory,
-  sqliteMigrations,
-} from "../../src/infrastructure/sqlite/migrations.ts";
+import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import {
@@ -40,39 +35,6 @@ afterEach(async () => {
 });
 
 describe("SQLite writer coordination", () => {
-  test("migrates schema 2 to the current schema without changing canonical data", () => {
-    const database = openDatabase();
-    try {
-      applyMigrations(database, sqliteMigrations.slice(0, 2));
-      database
-        .prepare(
-          `INSERT INTO sessions_source_instances (kind, instance_id)
-           VALUES ('synthetic', 'preserved-profile')`,
-        )
-        .run();
-
-      const history = applyMigrations(database);
-
-      expect(CURRENT_INDEX_SCHEMA_VERSION).toBe(4);
-      expect(history).toMatchObject({ currentVersion: 4, pending: [] });
-      expect(readMigrationHistory(database).currentVersion).toBe(4);
-      expect(
-        database.prepare("SELECT kind, instance_id FROM sessions_source_instances").all(),
-      ).toEqual([{ kind: "synthetic", instance_id: "preserved-profile" }]);
-      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toEqual({
-        singleton: 1,
-        generation: 0,
-        purpose: null,
-        owner_token: null,
-        acquired_at: null,
-        heartbeat_at: null,
-        expires_at: null,
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   test("admits one live writer and exposes no owner token in health", () => {
     const database = migratedDatabase();
     const clock = fakeClock("2026-07-13T12:00:00.000Z");

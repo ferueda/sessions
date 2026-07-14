@@ -1,7 +1,24 @@
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 export function openSqliteWriterDatabase(file: string, busyTimeoutMs: number): DatabaseSync {
-  return new DatabaseSync(file, {
+  return new DatabaseSync(file, writerOptions(busyTimeoutMs));
+}
+
+/** Open an existing database without SQLite's default create-if-missing behavior. */
+export function openExistingSqliteWriterDatabase(
+  file: string,
+  busyTimeoutMs: number,
+): DatabaseSync {
+  const url = pathToFileURL(file);
+  url.searchParams.set("mode", "rw");
+  return new DatabaseSync(url.href, writerOptions(busyTimeoutMs));
+}
+
+function writerOptions(
+  busyTimeoutMs: number,
+): NonNullable<ConstructorParameters<typeof DatabaseSync>[1]> {
+  return {
     allowBareNamedParameters: false,
     allowExtension: false,
     allowUnknownNamedParameters: false,
@@ -9,7 +26,7 @@ export function openSqliteWriterDatabase(file: string, busyTimeoutMs: number): D
     enableDoubleQuotedStringLiterals: false,
     enableForeignKeyConstraints: true,
     timeout: busyTimeoutMs,
-  });
+  };
 }
 
 export function configureSqliteWriterDatabase(database: DatabaseSync, busyTimeoutMs: number): void {

@@ -69,8 +69,11 @@ provider, create a destination conversation, or execute its contents.
 - Retention, absence reconciliation, deletion, paths, migrations, health checks,
   and export are core application/storage concerns; source adapters remain
   limited to probe, discover, read, and normalize.
-- Schema upgrades and repair guidance must preserve canonical user data because
-  reindexing may no longer be possible after provider expiry.
+- Before the first published release, one current baseline is recognized and
+  earlier development databases fail closed; users may need a fresh library and
+  reindex. From the first release onward, schema upgrades and repair guidance must
+  preserve canonical user data because reindexing may no longer be possible after
+  provider expiry.
 - Clear language must distinguish rebuilding derived search state from deleting
   retained data. Destructive deletion is explicit and scoped to Sessions-owned
   database/sidecar files, the exact ephemeral scratch subtree, or canonical

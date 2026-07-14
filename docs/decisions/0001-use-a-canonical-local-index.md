@@ -14,4 +14,4 @@ Use a Sessions-owned SQLite database with FTS5 as the canonical query store. Ind
 
 ## Consequences
 
-Results are stable across commands and providers, and local state is rebuildable. Sessions must own migrations, permissions, reconciliation, clearing, and honest deletion limitations. FTS5 becomes a runtime capability checked by doctor.
+Results are stable across commands and providers, and local state is rebuildable. Sessions must own its current storage baseline, future released migrations, permissions, reconciliation, clearing, and honest deletion limitations. FTS5 becomes a runtime capability checked by doctor.

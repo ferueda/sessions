@@ -16,9 +16,10 @@ Tests prove contracts at the highest stable seam that can observe them. They are
 | Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
 
 Canonical domain/application contracts, synthetic adapter conformance,
-programmable fake-source indexing, schema-3/4 lease-safe cutover, real-SQLite
-non-destructive reconciliation, forget/all-data maintenance, immutable library
-health, and the complete current CLI contract run today. The Codex proof uses
+programmable fake-source indexing, fresh-baseline bootstrap, obsolete-development-
+schema rejection, current writer fencing, real-SQLite non-destructive
+reconciliation, forget/all-data maintenance, immutable library health, and the
+complete current CLI contract run today. The Codex proof uses
 generated current/base/optional state schemas plus plain/Zstandard rollouts and
 active-WAL capture stress; it never reads developer history. Search/export and
 Cursor contracts arrive with their milestones.
@@ -59,9 +60,10 @@ optimization, not a substitute for `pnpm check` before merging implementation.
   absence. Projection rebuilds preserve canonical rows; only explicit
   forget/data-clear cases exercise transcript deletion.
 - Use injected clocks and fake schedulers for lease/heartbeat tests; do not sleep.
-- When a migration changes lease semantics, prove old-schema live/expired owners
-  are acquired, refused, carried, and fenced before table changes or clear; never
-  test migration and coordination as unrelated paths.
+- After compatibility begins with the first published release, any migration that
+  changes lease semantics must prove old-schema ownership is arbitrated and fenced
+  before table changes. Pre-alpha baseline changes instead reject obsolete
+  development databases without mutation.
 - Prove inspection commands preserve database bytes, timestamps, run rows, directory entries, and absent state.
 - Prove fresh-library list returns an empty success without opening a reader,
   creating state, or resolving a provider.

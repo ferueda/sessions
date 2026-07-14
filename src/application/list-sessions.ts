@@ -41,30 +41,37 @@ export async function withReader<T>(
 ): Promise<T> {
   let reader: IndexReader | undefined;
   let result: T | undefined;
-  let operationError: unknown;
+  const operationFailure: CapturedFailure = { caught: false, error: undefined };
   try {
     reader = await lifecycle.openReader(paths);
     result = await operation(reader);
   } catch (error) {
-    operationError = error;
+    operationFailure.caught = true;
+    operationFailure.error = error;
   }
 
-  let closeError: unknown;
+  const closeFailure: CapturedFailure = { caught: false, error: undefined };
   if (reader !== undefined) {
     try {
       await reader.close();
     } catch (error) {
-      closeError = error;
+      closeFailure.caught = true;
+      closeFailure.error = error;
     }
   }
-  if (operationError !== undefined && closeError !== undefined) {
+  if (operationFailure.caught && closeFailure.caught) {
     throw new AggregateError(
-      [operationError, closeError],
+      [operationFailure.error, closeFailure.error],
       "Session library read and close both failed",
-      { cause: operationError },
+      { cause: operationFailure.error },
     );
   }
-  if (operationError !== undefined) throw operationError;
-  if (closeError !== undefined) throw closeError;
+  if (operationFailure.caught) throw operationFailure.error;
+  if (closeFailure.caught) throw closeFailure.error;
   return result as T;
+}
+
+interface CapturedFailure {
+  caught: boolean;
+  error: unknown;
 }

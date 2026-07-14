@@ -64,7 +64,7 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
     ]);
     assertCommand(doctor, 0, "doctor");
     const doctorReport = parseJson(doctor.stdout);
-    assert.equal(doctorReport.schemaVersion, 2);
+    assert.equal(doctorReport.schemaVersion, 1);
     assert.equal(doctorReport.command, "doctor");
     assert.equal(doctorReport.ok, true);
     assert.deepEqual(
@@ -79,7 +79,7 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
     ]);
     assertCommand(paths, 0, "paths");
     const pathsReport = parseJson(paths.stdout);
-    assert.equal(pathsReport.schemaVersion, 2);
+    assert.equal(pathsReport.schemaVersion, 1);
     assert.equal(pathsReport.command, "paths");
     const library = readObject(pathsReport.library);
     assert.equal(library.directory, dataDirectory);
@@ -290,7 +290,7 @@ function assertCompleteIndex(
 ): void {
   assertCommand(result, 0, "complete index");
   const report = parseJson(result.stdout);
-  assert.equal(report.schemaVersion, 2);
+  assert.equal(report.schemaVersion, 1);
   assert.equal(report.command, "index");
   assert.equal(report.incompleteSources, 0);
   const reportCounts = readObject(report.counts);

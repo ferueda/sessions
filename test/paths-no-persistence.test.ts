@@ -38,7 +38,7 @@ describe("paths persistence boundary", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 1,
       command: "paths",
       library: {
         directory: ownedDirectory,

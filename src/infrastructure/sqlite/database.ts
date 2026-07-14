@@ -45,7 +45,7 @@ import {
   applyWriterMigrations,
   acquireWriterSchema,
   validateWriterSchemaCatalog,
-} from "./writer-schema-cutover.ts";
+} from "./writer-schema.ts";
 import {
   assertWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
@@ -193,8 +193,7 @@ export function createSqliteIndexLifecycle(
         });
         const ownedLease = acquired.lease;
         lease = ownedLease;
-        // Start renewal immediately after a schema-3 cutover commits. Custom
-        // releases then run while this carried identity remains fenced.
+        // Start renewal before any pending release migration runs.
         heartbeat = startWriterLeaseHeartbeat(database, ownedLease, {
           now,
           ...(options.writerScheduler === undefined ? {} : { scheduler: options.writerScheduler }),

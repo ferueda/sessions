@@ -101,17 +101,17 @@ The owned directory is platform application data, or the exact absolute
 sidecars, and the exact ephemeral `.scratch` child. The pre-public cache path and
 legacy Harness JSONL cache are never reused, migrated, or deleted.
 
-Schema 4 stores canonical text/omitted segments, exact tool identity and linkage,
-source instances, latest successful fingerprints/documents, capture timestamps,
-source presence/coverage, bounded run evidence, and derived external-content
-FTS. Only text enters interning and FTS. Omitted content stores class, source type,
-ordinal, and provenance—never media bytes or references.
+The current baseline creates canonical text/omitted segments, exact tool identity
+and linkage, source instances, latest successful fingerprints/documents, capture
+timestamps, source presence/coverage, bounded run evidence, derived
+external-content FTS, and writer coordination directly. Only text enters
+interning and FTS. Omitted content stores class, source type, ordinal, and
+provenance—never media bytes or references.
 
 One renewable generation lease serializes `index`, `forget`, and `clear`. Every
-mutation asserts ownership inside its transaction. Schema-3 index/forget
-migration and lease acquisition happen as one atomic cutover; clear can coordinate
-schema 3 without migrating it. Expired takeover fences stale writers and
-interrupts abandoned active index runs.
+mutation asserts ownership inside its transaction. Expired takeover fences stale
+writers and interrupts abandoned active index runs. Unsupported development
+databases fail closed; no pre-release schema cutover or lease carry-forward exists.
 
 A complete scan marks unseen retained sessions `missing`; unavailable or
 incomplete discovery leaves effective source state `unknown`. Neither deletes

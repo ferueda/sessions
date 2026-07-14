@@ -71,17 +71,10 @@ describe("SQLite ready-index health", () => {
     });
   });
 
-  test("accepts valid tracking-only history with migrated null observation facts", async () => {
+  test("accepts a valid first-seen failure without a canonical document", async () => {
     const paths = await initializedPaths();
     mutateDatabase(paths.database, (database) => {
-      const fixture = seedValidTrackingOnly(database);
-      database
-        .prepare(
-          `INSERT INTO sessions_session_tracking (
-             source_instance_id, native_id, latest_outcome, presence_status
-           ) VALUES (?, 'legacy-removed', 'removed', 'missing')`,
-        )
-        .run(fixture.sourceInstanceId);
+      seedValidTrackingOnly(database);
     });
 
     await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
@@ -156,30 +149,6 @@ describe("SQLite ready-index health", () => {
            WHERE session_id = ?`,
         )
         .run(fixture.sessionId);
-    });
-
-    await expectCanonicalIntegrityFailure(paths);
-  });
-
-  test("rejects legacy removed tracking with a retained failure code", async () => {
-    expect.hasAssertions();
-    const paths = await initializedPaths();
-    mutateDatabase(paths.database, (database) => {
-      const fixture = seedValidTrackingOnly(database);
-      database.exec("PRAGMA ignore_check_constraints = ON");
-      database
-        .prepare(
-          `UPDATE sessions_session_tracking
-           SET latest_fingerprint_scheme = NULL,
-               latest_fingerprint_digest = NULL,
-               latest_adapter_version = NULL,
-               latest_outcome = 'removed',
-               latest_failure_code = 'unreadable',
-               presence_status = 'missing'
-           WHERE session_id = ?`,
-        )
-        .run(fixture.sessionId);
-      database.exec("PRAGMA ignore_check_constraints = OFF");
     });
 
     await expectCanonicalIntegrityFailure(paths);

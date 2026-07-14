@@ -181,7 +181,7 @@ describe("runIndex", () => {
       { source: ready.instance, status: "completed" },
     ]);
     expect(report).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 1,
       command: "index",
       counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, missing: 0 },
       incompleteSources: 2,

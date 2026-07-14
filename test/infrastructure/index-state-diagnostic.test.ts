@@ -73,8 +73,8 @@ describe("createIndexStateDiagnostic", () => {
       {
         status: "ready",
         initialized: true,
-        schemaVersion: 3,
-        supportedSchemaVersion: 3,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
       },
       {
         ...healthyIndex,
@@ -89,12 +89,12 @@ describe("createIndexStateDiagnostic", () => {
 
     expect(outcome).toEqual({
       ok: false,
-      summary: "Index schema 3 failed health checks",
+      summary: "Index schema 1 failed health checks",
       details: {
         state: "ready",
         initialized: "true",
-        schemaVersion: "3",
-        supportedSchemaVersion: "3",
+        schemaVersion: "1",
+        supportedSchemaVersion: "1",
         canonicalIntegrity: "ok",
         foreignKeys: "ok",
         ftsStructure: "ok",
@@ -113,8 +113,8 @@ describe("createIndexStateDiagnostic", () => {
     const state: IndexState = {
       status: "ready",
       initialized: true,
-      schemaVersion: 3,
-      supportedSchemaVersion: 3,
+      schemaVersion: 1,
+      supportedSchemaVersion: 1,
     };
     const inspector: IndexStateInspector & IndexHealthInspector = {
       async inspect() {
@@ -127,12 +127,12 @@ describe("createIndexStateDiagnostic", () => {
 
     await expect(createIndexStateDiagnostic(() => paths, inspector).run()).resolves.toEqual({
       ok: false,
-      summary: "Index schema 3 health inspection failed",
+      summary: "Index schema 1 health inspection failed",
       details: {
         state: "ready",
         initialized: "true",
-        schemaVersion: "3",
-        supportedSchemaVersion: "3",
+        schemaVersion: "1",
+        supportedSchemaVersion: "1",
         health: "inspection-failed",
       },
     });

@@ -47,7 +47,7 @@ describe("doctor persistence boundary", () => {
       readonly checks?: readonly { readonly id?: unknown }[];
     };
     expect(report).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 1,
       command: "doctor",
       ok: false,
     });

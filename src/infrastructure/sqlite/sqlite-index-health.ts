@@ -162,12 +162,11 @@ function sessionTrackingIsValid(database: DatabaseSync): boolean {
       if (document === undefined || summary === undefined) return false;
       continue;
     }
-    // First-seen failures and legacy removals legitimately retain tracking without a document.
+    // A first-seen failure legitimately retains tracking without a document.
     if (freshness.status === "untracked" || document !== undefined || summary !== undefined) {
       return false;
     }
     if (row.captured_at !== null) return false;
-    if (freshness.status === "removed" && row.presence_status !== "missing") return false;
     if (freshness.status === "unindexed" && row.presence_status !== "present") return false;
   }
   return true;
@@ -326,7 +325,7 @@ function readRunCounts(database: DatabaseSync): RunCounts {
            FROM sessions_index_runs AS run
            WHERE run.discovered_count <> run.unchanged_count + run.indexed_count + run.failed_count
               OR run.stale_count > run.failed_count
-              OR run.failed_count + run.missing_count + run.removed_count <>
+              OR run.failed_count + run.missing_count <>
                  run.omitted_item_count + (
                    SELECT COUNT(*)
                    FROM sessions_index_run_items AS item

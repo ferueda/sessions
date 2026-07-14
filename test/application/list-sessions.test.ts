@@ -44,6 +44,21 @@ describe("listSessions", () => {
     await expect(listSessions({ paths, lifecycle, limit })).rejects.toBeInstanceOf(TypeError);
     expect(lifecycle.inspect).not.toHaveBeenCalled();
   });
+
+  test("preserves an undefined repository rejection as a failed read", async () => {
+    const lifecycle = lifecycleWith([]);
+    const reader = await lifecycle.openReader(paths);
+    vi.mocked(reader.sessions.listSummaries).mockRejectedValueOnce(undefined);
+    lifecycle.openReader.mockClear();
+
+    const outcome = await listSessions({ paths, lifecycle }).then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    expect(outcome).toEqual({ status: "rejected", error: undefined });
+    expect(reader.close).toHaveBeenCalledOnce();
+  });
 });
 
 function lifecycleWith(
@@ -57,8 +72,8 @@ function lifecycleWith(
     state: {
       status: "ready" as const,
       initialized: true as const,
-      schemaVersion: 4,
-      supportedSchemaVersion: 4,
+      schemaVersion: 1,
+      supportedSchemaVersion: 1,
     },
     sessions,
     close: vi.fn<() => Promise<void>>(async () => undefined),
@@ -71,7 +86,7 @@ function lifecycleWith(
             status: "uninitialized" as const,
             initialized: false as const,
             schemaVersion: null,
-            supportedSchemaVersion: 4,
+            supportedSchemaVersion: 1,
           },
     ),
     openReader: vi.fn<IndexLifecycle["openReader"]>(async () => reader),

@@ -201,6 +201,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
         .prepare("UPDATE sessions_schema_migrations SET checksum = ? WHERE version = 1")
         .run("sha256-utf8-v1:".padEnd(79, "0"));
     });
+    const obsoleteBytes = await readFile(checksumPaths.database);
     await expect(lifecycle.inspect(checksumPaths)).resolves.toMatchObject({
       status: "incompatible",
       reason: "migration-checksum-mismatch",
@@ -209,6 +210,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     await expect(lifecycle.openWriter(checksumPaths)).rejects.toMatchObject({
       state: { status: "incompatible", reason: "migration-checksum-mismatch" },
     });
+    await expect(readFile(checksumPaths.database)).resolves.toEqual(obsoleteBytes);
 
     const newerPaths = await fixturePaths();
     const newerWriter = await lifecycle.openWriter(newerPaths);

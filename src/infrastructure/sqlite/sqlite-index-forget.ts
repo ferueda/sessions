@@ -1,10 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { BigIntStats } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 import type { IndexPaths } from "../../application/ports/index-lifecycle.ts";
 import { IndexMaintenanceError } from "../../application/ports/index-maintenance.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity } from "../../domain/session.ts";
-import { MigrationHistoryError, type SqliteMigration } from "./migrations.ts";
+import { MigrationHistoryError, readMigrationHistory, type SqliteMigration } from "./migrations.ts";
 import {
   assertCanonicalIndexPaths,
   inspectIndexPathSafety,
@@ -13,9 +16,9 @@ import {
 import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
 import {
   configureSqliteWriterDatabase,
-  openSqliteWriterDatabase,
+  openExistingSqliteWriterDatabase,
 } from "./sqlite-writer-database.ts";
-import { acquireWriterSchema, applyWriterMigrations } from "./writer-schema-cutover.ts";
+import { acquireWriterSchema, applyWriterMigrations } from "./writer-schema.ts";
 import {
   assertWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
@@ -56,6 +59,20 @@ export async function forgetSqliteSession(
     }
     return "absent";
   }
+  const preflight = await inspectForgetDatabase(
+    paths.database,
+    options.migrations,
+    options.busyTimeoutMs,
+  );
+  if (preflight.status === "empty") {
+    if (safety.presence.wal || safety.presence.shm) {
+      throw new IndexMaintenanceError("recovery-required");
+    }
+    return "absent";
+  }
+  if (preflight.status === "unsupported") {
+    throw new IndexMaintenanceError("corrupt-data");
+  }
 
   let database: DatabaseSync | undefined;
   let lease: WriterLeaseIdentity | undefined;
@@ -64,7 +81,13 @@ export async function forgetSqliteSession(
   let operationError: unknown;
 
   try {
-    database = openSqliteWriterDatabase(paths.database, options.busyTimeoutMs);
+    database = openExistingSqliteWriterDatabase(paths.database, options.busyTimeoutMs);
+    assertDatabaseSnapshot(preflight.snapshot, await snapshotDatabase(paths.database));
+    const openedHistory = readMigrationHistory(database, options.migrations);
+    if (openedHistory.currentVersion === 0) {
+      throw new MigrationHistoryError("invalid-history", 0);
+    }
+    assertDatabaseSnapshot(preflight.snapshot, await snapshotDatabase(paths.database));
     configureSqliteWriterDatabase(database, options.busyTimeoutMs);
     const acquired = acquireWriterSchema(database, "forget", options.migrations, {
       now: options.now,
@@ -135,6 +158,85 @@ export async function forgetSqliteSession(
       ),
     },
   );
+}
+
+type ForgetDatabasePreflight =
+  | { readonly status: "empty" | "recognized"; readonly snapshot: DatabaseSnapshot }
+  | { readonly status: "unsupported"; readonly snapshot: DatabaseSnapshot };
+
+interface DatabaseSnapshot {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly mode: bigint;
+  readonly links: bigint;
+  readonly size: bigint;
+  readonly modified: bigint;
+  readonly changed: bigint;
+}
+
+async function inspectForgetDatabase(
+  file: string,
+  migrations: readonly SqliteMigration[],
+  timeoutMs: number,
+): Promise<ForgetDatabasePreflight> {
+  const before = await snapshotDatabase(file);
+  const url = pathToFileURL(file);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  let database: DatabaseSync | undefined;
+  let status: ForgetDatabasePreflight["status"] = "unsupported";
+  try {
+    database = new DatabaseSync(url.href, {
+      allowExtension: false,
+      defensive: true,
+      enableDoubleQuotedStringLiterals: false,
+      enableForeignKeyConstraints: true,
+      readOnly: true,
+      timeout: timeoutMs,
+    });
+    status =
+      readMigrationHistory(database, migrations).currentVersion === 0 ? "empty" : "recognized";
+  } catch {
+    status = "unsupported";
+  } finally {
+    database?.close();
+  }
+  assertDatabaseSnapshot(before, await snapshotDatabase(file));
+  return { status, snapshot: before };
+}
+
+async function snapshotDatabase(file: string): Promise<DatabaseSnapshot> {
+  try {
+    return snapshotFromStats(await lstat(file, { bigint: true }));
+  } catch (error) {
+    throw new IndexMaintenanceError("concurrent-change", { cause: error });
+  }
+}
+
+function snapshotFromStats(stats: BigIntStats): DatabaseSnapshot {
+  return {
+    device: stats.dev,
+    inode: stats.ino,
+    mode: stats.mode,
+    links: stats.nlink,
+    size: stats.size,
+    modified: stats.mtimeNs,
+    changed: stats.ctimeNs,
+  };
+}
+
+function assertDatabaseSnapshot(expected: DatabaseSnapshot, actual: DatabaseSnapshot): void {
+  if (
+    expected.device !== actual.device ||
+    expected.inode !== actual.inode ||
+    expected.mode !== actual.mode ||
+    expected.links !== actual.links ||
+    expected.size !== actual.size ||
+    expected.modified !== actual.modified ||
+    expected.changed !== actual.changed
+  ) {
+    throw new IndexMaintenanceError("concurrent-change");
+  }
 }
 
 function forgetInTransaction(

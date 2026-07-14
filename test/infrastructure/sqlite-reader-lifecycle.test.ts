@@ -97,18 +97,24 @@ describe("SQLite reader lifecycle", () => {
     });
     await expect(stat(absentPaths.directory)).rejects.toMatchObject({ code: "ENOENT" });
 
-    const versionOnePaths = await fixturePaths();
-    await createVersionOneIndex(versionOnePaths);
-    const beforeBytes = await readFile(versionOnePaths.database);
-    await expect(lifecycle.openReader(versionOnePaths)).rejects.toMatchObject({
+    const baselinePaths = await fixturePaths();
+    await createBaselineIndex(baselinePaths);
+    const beforeBytes = await readFile(baselinePaths.database);
+    const futureLifecycle = createSqliteIndexLifecycle({
+      migrations: [
+        ...sqliteMigrations,
+        { version: 2, name: "future_marker", sql: "CREATE TABLE future_marker (id INTEGER);" },
+      ],
+    });
+    await expect(futureLifecycle.openReader(baselinePaths)).rejects.toMatchObject({
       state: {
         status: "migration-required",
         schemaVersion: 1,
-        supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+        supportedSchemaVersion: 2,
       },
     });
-    expect(await readFile(versionOnePaths.database)).toEqual(beforeBytes);
-    const database = openReadOnly(versionOnePaths.database);
+    expect(await readFile(baselinePaths.database)).toEqual(beforeBytes);
+    const database = openReadOnly(baselinePaths.database);
     expect(
       database.prepare("SELECT version FROM sessions_schema_migrations ORDER BY version").all(),
     ).toEqual([{ version: 1 }]);
@@ -210,7 +216,7 @@ function openReadOnly(file: string): DatabaseSync {
   return new DatabaseSync(url.href, { readOnly: true });
 }
 
-async function createVersionOneIndex(paths: IndexPaths): Promise<void> {
+async function createBaselineIndex(paths: IndexPaths): Promise<void> {
   await mkdir(paths.directory, { mode: 0o700 });
   const database = new DatabaseSync(paths.database);
   try {

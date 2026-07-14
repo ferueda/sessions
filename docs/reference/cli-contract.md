@@ -6,6 +6,9 @@
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
 
+Pre-alpha structured schemas may reset before publication. Compatibility begins
+with the first published contract; no earlier development contract is supported.
+
 ## Current commands
 
 ```text
@@ -22,10 +25,9 @@ sessions data clear --yes [--format human|json]
 ```
 
 The bare command prints help. `index` is the only ordinary command that reads
-rollout content or initializes the durable library. `index` and `forget` can
-migrate an existing library before performing their writer operation. `doctor`
-and `paths` inspect runtime, library, and registered-source readiness without
-indexing or creating state.
+rollout content or initializes the durable library. `forget` mutates only a
+current initialized library. `doctor` and `paths` inspect runtime, library, and
+registered-source readiness without indexing or creating state.
 
 `index` selects all registered sources when `--source` is omitted. The only
 current source is `codex`; an unknown source is invalid usage before writer open.
@@ -57,7 +59,7 @@ state. Both leave provider data untouched.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "command": "doctor",
   "ok": true,
   "checks": [
@@ -98,12 +100,12 @@ All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed c
 
 ### Paths JSON
 
-`sessions paths --format json` writes one schema-2 document. Before
+`sessions paths --format json` writes one schema-1 document. Before
 initialization, a Linux default may look like:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "command": "paths",
   "library": {
     "directory": "/home/user/.local/share/sessions",
@@ -114,13 +116,13 @@ initialization, a Linux default may look like:
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 4
+    "supportedSchemaVersion": 1
   },
   "sources": []
 }
 ```
 
-Schema 2 reports the Sessions-owned application-data library, scratch workspace,
+Schema 1 reports the Sessions-owned application-data library, scratch workspace,
 known database/sidecar paths, state, schema support, and admitted source probes.
 Current state values are `uninitialized`, `ready`, `migration-required`,
 `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
@@ -167,16 +169,15 @@ uninitialized library, remains a sanitized not-found operational failure.
 
 ## Current operational JSON
 
-M5's first public operational reports are stable contracts. Transcript-bearing
-list/show output remains human-only until the M7 DTO work.
+The current pre-alpha operational reports are exact test-backed contracts.
+Transcript-bearing list/show output remains human-only until the M7 DTO work.
 
-`sessions index --format json` emits schema 2 because missing/coverage supersede
-the internal pre-public schema-1 meaning. A complete representative report
-is:
+`sessions index --format json` emits the current schema-1 report. A complete
+representative report is:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "command": "index",
   "startedAt": "2026-07-14T12:00:00.000Z",
   "finishedAt": "2026-07-14T12:01:00.000Z",
@@ -190,7 +191,7 @@ is:
   },
   "sources": [
     {
-      "schemaVersion": 2,
+      "schemaVersion": 1,
       "source": {
         "kind": "codex",
         "instanceId": "local-sha256-v1:0000000000000000000000000000000000000000000000000000000000000000"
@@ -252,9 +253,8 @@ either `missing`, or `failed` with one of
 `unsupported-format`, or `repository-write`. A source is either `completed` with
 complete coverage and no `failure`, or `incomplete` with unknown coverage and one
 of `source-unavailable`, `source-unreadable`, `probe-failed`, `discovery-failed`,
-`interrupted`, or `repository-write`. New reports never emit the legacy
-schema-3 `removed` count/outcome. Source reports sort by raw source tuple; items
-retain persisted run-item order. Top counts and omissions are safe sums.
+`interrupted`, or `repository-write`. Source reports sort by raw source tuple;
+items retain persisted run-item order. Top counts and omissions are safe sums.
 
 Forget and all-data deletion emit these exact schema-1 shapes:
 
@@ -290,11 +290,11 @@ and `scratchRemoved` reports the exact owned subtree. `absent` requires every
 boolean to be false. Orphan scratch without its lease-bearing database is a
 recovery-required failure, not a successful report.
 
-Paths schema 2 uses `library` and includes admitted source probes:
+Paths schema 1 uses `library` and includes admitted source probes:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "command": "paths",
   "library": {
     "directory": "/home/user/.local/share/sessions",
@@ -305,7 +305,7 @@ Paths schema 2 uses `library` and includes admitted source probes:
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 4
+    "supportedSchemaVersion": 1
   },
   "sources": [
     {
@@ -334,7 +334,7 @@ equal. A malformed/thrown probe becomes
 without failing paths. Failure before a stable source identity exists, or library
 inspection failure, emits no partial report and exits `1`.
 
-Doctor schema 2 keeps `{ schemaVersion, command: "doctor", ok, checks }` and each
+Doctor schema 1 uses `{ schemaVersion, command: "doctor", ok, checks }` and each
 `{ id, label, ok, summary, details }` check. Check order is `node-runtime`,
 `sqlite-fts5`, `library-state`, `source-codex`. The ready `library-state` string
 details are exactly `state`, `initialized`, `schemaVersion`,

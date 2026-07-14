@@ -5,11 +5,16 @@
 - Date: 2026-07-14
 - Plan review: passed with zero findings on 2026-07-14
   (`20260714-181209-1e9112`)
-- Implementation verification: 55 test files and 508 tests, compiled and
-  offline-packed workflow smokes, and a privacy-safe live Codex index/list/show/
-  clear smoke passed on 2026-07-14; `pnpm check` passed. All accepted change-review
-  findings were fixed; final-cycle follow-ups passed independent targeted closure
-  verification after the workflow run limit.
+- Scope amendment: before launch, collapse development schemas into one current
+  baseline; do not carry compatibility for earlier development databases.
+- Implementation verification: 53 test files and 493 tests, compiled-distribution
+  and offline-packed workflow smokes, and a sandboxed live Codex paths/doctor/
+  index/list/show/forget/recapture/clear smoke passed on 2026-07-14. The live run
+  denied network and every write outside its isolated Sessions root, and proved
+  obsolete-baseline forget/clear refusal leaves bytes, journal mode, and directory
+  entries unchanged. `pnpm check` passed. All accepted change-review findings were
+  fixed; the final implementation and quality follow-up passed
+  (`20260714-212823-8f25d3`), and its NUL-constraint coverage advisory was applied.
 
 ## Goal
 
@@ -32,7 +37,7 @@ remain later milestones.
 
 ## Locked decisions
 
-### Canonical evidence and schema 4
+### Canonical evidence and current storage baseline
 
 - `ContentSegment` becomes a discriminated union. `TextContentSegment` has
   `kind: "text"`, exact text, and its existing `sha256-utf8-v1` hash.
@@ -59,24 +64,18 @@ remain later milestones.
 - `SessionEntry` adds optional exact `toolName` and `toolNamespace`. Both are
   valid only on `tool-call`; namespace requires a name. Preserve M1's existing
   generic admission/storage semantics for `toolCallId` and
-  `relatedEntryOrdinal`: schema-3 documents may carry a call ID on another entry
-  kind or a generic relation involving tool-shaped kinds, and schema 4 must
-  continue to round-trip them. The Codex adapter is stricter: it writes call IDs
-  only on `tool-call`/`tool-result`, links a result only to the exact matching
-  call, requires matching IDs when both linked entries expose one, and leaves
-  unprovable counterparts unlinked. Results never inherit name or namespace.
-- Migration 4, `canonical_library_evidence`, adds checked tool columns, durable
-  capture/source-observation state, and replaces the
-  text-only occurrence table with one strict discriminated occurrence table.
-  Its primary key continues to enforce one segment variant per
+  `relatedEntryOrdinal` independently of provider-specific entry kinds. The Codex
+  adapter is stricter: it writes call IDs only on `tool-call`/`tool-result`, links
+  a result only to the exact matching call, requires matching IDs when both linked
+  entries expose one, and leaves unprovable counterparts unlinked. Results never
+  inherit name or namespace.
+- The single current baseline creates checked tool columns, durable capture/source-
+  observation state, and one strict discriminated occurrence table directly. Its
+  primary key enforces one segment variant per
   session/entry/ordinal. A database check requires either a text `content_id` or
-  omitted `content_class`/`source_type`, never both. Existing schema-3 rows copy
-  as text; existing tool IDs and generic relations copy unchanged; migrations
-  1–3 remain byte-for-byte unchanged. Existing canonical documents and legacy
-  run history survive with unknown historical capture/coverage facts. The new
-  occurrence check also enforces the canonical source-type byte/grammar contract.
-  The new reader therefore has no reindex/rebuild requirement solely because
-  schema 4 was applied.
+  omitted `content_class`/`source_type`, never both. The occurrence check enforces
+  the canonical source-type byte/grammar contract. Earlier development databases
+  are unsupported and fail closed without migration or deletion.
 
 ### Durable library and source observation
 
@@ -124,11 +123,9 @@ remain later milestones.
   source state is `unknown` whenever the source's latest coverage is unknown;
   otherwise it is the session's last observed presence. Snapshot freshness
   remains an independent `current`/`stale` value.
-- Schema-3 sources migrate with coverage `unknown`; existing canonical rows keep
-  all content and last-good revisions, record last observed presence `present`,
-  and leave historically unknowable timestamps null. Legacy `removed` tracking,
-  counts, and run items remain readable historical evidence, but new indexing
-  never writes `removed` or deletes a canonical document.
+- New source instances begin with coverage `unknown`; capture and presence facts
+  become known only through indexing. New indexing marks missing state without
+  deleting a canonical document.
 - Indexing uses this state machine:
 
   | Observation                                            | Effective source state | Canonical snapshot                            |
@@ -156,24 +153,23 @@ remain later milestones.
   interrupted runs leave coverage `unknown`. `finishedAt` belongs only to
   run/report history. The SQLite lifecycle clock owns leases, heartbeat/recovery,
   and interrupted-run history only; it never populates library
-  observation/capture columns. Historically unknowable migrated timestamps stay
-  null.
+  observation/capture columns. Facts not yet observed remain null.
 - Starting a source run makes current scan coverage unknown. Only complete
   discovery followed by successful presence reconciliation records complete
   coverage. `recordUnchanged`, successful replacement, and a discovered read
   failure record present; `recordMissing` updates presence/run evidence only and
   never deletes entries, relations, occurrences, content values, or FTS rows.
   Reappearance restores present; an unchanged fingerprint still skips `read()`.
-- Provider-neutral run reports replace newly written `removed` outcomes/counts
-  with `missing`; incomplete source status represents unknown coverage rather
-  than fabricating per-session absence. Legacy removed history remains readable.
+- Provider-neutral run reports use `missing` for complete-scan absence; incomplete
+  source status represents unknown coverage rather than fabricating per-session
+  absence.
 - M7 owns the versioned public canonical projection, deterministic document
   digest, persistence/backfill if needed, and portable export schemas. M5 stores
   the capture/source revision facts needed to construct it but does not invent a
   partially specified digest.
 - `sessions forget <canonical-id> [--format human|json]` is idempotent and removes
-  the selected tracking identity even when it has only failed or legacy-removed
-  state. In one fenced immediate transaction it compensates every deleted
+  the selected tracking identity even when it has only failed state. In one
+  fenced immediate transaction it compensates every deleted
   historical run-item detail by incrementing that run's `omittedItemCount`,
   deletes tracking and its owned canonical snapshot/outgoing relations/entries/
   occurrences/run-item details through foreign keys, then garbage-collects only
@@ -182,7 +178,7 @@ remain later milestones.
   owned by other retained snapshots remain. Therefore forget removes the selected
   snapshot/tracking record, not every mention in other sessions. Internal run
   history must continue to satisfy
-  `failed + missing + legacy removed = stored items + omitted items`; omitted
+  `failed + missing = stored items + omitted items`; omitted
   count is monotonic and includes both cap-omitted and later forget-redacted
   details. Return `forgotten` only when tracking existed and `absent` otherwise.
   A later index can create a new tracking row for the same canonical identity;
@@ -225,59 +221,27 @@ Ready-library health renders a live forget lease as `forget-live`, alongside
 is healthy only with `index-live`; live forget/clear or expired with an active run
 is unhealthy. Tokens and lease timestamps never enter public diagnostics.
 
-### Lease-safe schema cutover
+### Storage baseline and writer safety
 
-The migration-requiring requested purpose (`index | forget`) is known before
-migration. A current schema-4 database uses the matrix above for every writer
-purpose before any application write. An existing schema-3 database routes index
-and forget through the coordinator below; clear never enters this coordinator or
-applies migration 4.
+Pre-alpha Sessions recognizes one current on-disk baseline. Index may bootstrap a
+truly empty owned database; forget never initializes storage. Earlier development
+databases, checksum mismatches, newer schemas, unrecognized databases, and corrupt
+history fail closed without migration or deletion. Users can select a fresh
+`SESSIONS_DATA_DIR` and index again. The ordered, checksummed transactional
+migration ledger remains so data-preserving forward migrations can begin with the
+first published release.
 
-1. A dedicated coordinator opens `BEGIN IMMEDIATE`, re-reads/validates exact
-   schema-3 history and its `free | index | clear` lease state, and arbitrates
-   the requested final purpose (`index | forget`). Live index/clear and expired
-   clear roll back with `writer-busy`; malformed or impossible state rolls back
-   with `corrupt-data`. Refusal changes no schema, history, lease, active run, or
-   canonical data.
-2. For an allowed free/expired state, retain the old generation in memory, execute
-   static checksummed migration 4 (including its lease-table rebuild/copy), then
-   update the new row to generation + 1, the actual requested purpose, new token,
-   and fresh lifecycle-clock timestamps. Interrupt active runs at that same time,
-   insert migration history, assert the final identity, and commit as one atomic
-   ownership/schema transition. Because `forget` is written only after the new
-   check exists, no provisional schema-3 purpose is needed.
-3. Re-sample the lifecycle clock after migration SQL and roll back if it moved
-   behind the prior lease timestamp. Start heartbeat immediately after commit.
-   Later setup failure releases only the carried schema-4 identity; the old
-   generation/token remains fenced.
+The current baseline includes writer coordination from creation. Index and forget
+acquire the requested lease before any application mutation. Synthetic future
+migrations run only while that lease remains live and are recorded atomically;
+any future migration that changes lease semantics requires a release-specific
+ownership design and tests.
 
-Migration application/history insertion and lease arbitration expose reusable
-transaction bodies so the coordinator never nests `BEGIN IMMEDIATE`. Generic
-schema-3-to-4 migration outside this path is impossible. History is re-read under
-the transaction to close inspect/open races; if another process already reached
-schema 4, acquisition restarts against the normal schema-4 matrix. Fresh and
-pre-schema-3 databases retain ordered migration behavior, then use this cutover
-whenever schema 3 is the locked current version.
-
-`sessions data clear` never invokes the migration coordinator and never applies
-migration 4. After path-safety inspection, it opens the existing database, begins
-`IMMEDIATE`, re-reads migration history under the lock, and dispatches by exact
-schema:
-
-- Schema 3 admits only `free | index | clear`. Free acquires clear; any live
-  index/clear returns `writer-busy`; expired index/clear is taken over; a
-  `forget` or malformed row is `corrupt-data`.
-- Schema 4 admits `free | index | forget | clear`. Free acquires clear; any live
-  purpose returns `writer-busy`; any expired purpose is taken over; malformed
-  state is `corrupt-data`.
-
-In the same allowed transaction, clear samples the lifecycle clock, increments
-generation, writes purpose `clear` with a new token/fresh timestamps, interrupts
-active runs at that timestamp, asserts the carried identity, and commits. It
-writes no schema or migration history. Every refusal rolls back without mutation.
-Older pre-lease schemas retain their separately classified legacy policy; valid
-schema 3 cannot enter that direct-unlink branch. Newer, unrecognized, corrupt, or
-unsafe state is refused.
+After path-safety inspection, `sessions data clear` accepts only the exact current
+baseline, re-reads history inside `BEGIN IMMEDIATE`, and acquires `clear` using the
+normal matrix. Unsupported development state is refused unchanged. A truly empty
+database can be removed as interrupted initialization only when no recovery
+sidecar or scratch state exists.
 
 After clear acquisition, heartbeat remains active while the service validates
 database state and scratch without mutation, then recursively removes only the
@@ -286,7 +250,7 @@ destructive-intent boundary when scratch exists; when absent, the boundary is
 the final-renewal/checkpoint sequence immediately before close/unlink. Any later
 failure leaves the clear lease so only clear can resume after expiry. It then
 stops scheduled heartbeat, performs one
-final renewal, checkpoints/truncates, asserts the carried lease, closes without
+final renewal, checkpoints/truncates, asserts the lease, closes without
 releasing, snapshots the post-close database/WAL/SHM identities, verifies the
 lease through an immutable sidecar-free open, immediately re-stats the captured
 identities, then unlinks only SHM, WAL, and database. A safe failure before
@@ -295,12 +259,11 @@ scratch returns `absent`; an orphan scratch root without its lease-bearing
 database is `recovery-required`, not removed without coordination. Unsafe
 scratch or partial database state is refused.
 
-Fixtures cover live and expired schema-3 index/clear, schema-4 expired-forget
-clear takeover, mutation-free refusal, generation takeover, active-run
-interruption, migration/history/commit rollback, post-commit setup cleanup,
-already-schema-4 races, and stale-owner assert/write/heartbeat/release fencing.
-Schema-3 clear proves that schema/history remain byte-for-byte at version 3
-before owned unlink. Scratch fixtures cover stale-root takeover, live-lease no-
+Fixtures cover fresh baseline creation, obsolete-development-schema refusal,
+current live/expired arbitration, mutation-free refusal, generation takeover,
+active-run interruption, synthetic future migration rollback, setup cleanup, and
+stale-owner assert/write/heartbeat/release fencing. Scratch fixtures cover
+stale-root takeover, live-lease no-
 touch, unsafe root/symlink refusal, lease loss inside a workspace callback,
 operation-plus-cleanup aggregation, writer-close release/close attempts after
 cleanup failure, clear failures on both sides of destructive intent, post-close
@@ -779,7 +742,7 @@ valid event discriminator uses the generic unknown treatment.
 - `sessions index [--source codex] [--format human|json]` selects all registered
   sources when omitted. Unknown/unregistered sources are usage failures before a
   writer opens. A complete report exits `0`; a fully rendered incomplete report
-  exits `1`. Reports use `missing`, never a newly produced `removed` outcome, and
+  exits `1`. Reports use `missing` for complete-scan absence and
   expose source coverage without deleting retained snapshots.
 - `sessions forget <canonical-id> [--format human|json]` returns `forgotten` or
   `absent`; both exit `0`. Identity usage errors fail before opening a writer.
@@ -822,9 +785,8 @@ M7's DTO deferral applies to transcript/query/export records only. M5 publishes
 these exact operational JSON contracts; numeric counts are non-negative safe
 integers, timestamps are canonical UTC milliseconds, `SessionRef.canonicalId` is
 the canonical printable ID, and arrays retain the deterministic orders stated
-below. Index uses schema 2 because the internal pre-public schema-1 meaning is
-superseded by missing/coverage semantics; forget and data clear are first-public
-schema 1:
+below. All current pre-alpha operational reports use schema 1; compatibility
+begins with the first published contract:
 
 ```ts
 type SourceRef = { kind: string; instanceId: string };
@@ -834,7 +796,7 @@ type SessionRef = {
   nativeId: string;
 };
 
-type IndexCountsV2 = {
+type IndexCountsV1 = {
   discovered: number;
   unchanged: number;
   updated: number;
@@ -843,7 +805,7 @@ type IndexCountsV2 = {
   stale: number;
 };
 
-type IndexItemV2 =
+type IndexItemV1 =
   | { identity: SessionRef; outcome: "missing" }
   | {
       identity: SessionRef;
@@ -857,15 +819,15 @@ type IndexItemV2 =
         | "repository-write";
     };
 
-type SourceIndexReportV2 = {
-  schemaVersion: 2;
+type SourceIndexReportV1 = {
+  schemaVersion: 1;
   source: SourceRef;
   status: "completed" | "incomplete";
   coverage: { status: "complete" | "unknown"; observedAt: string };
   startedAt: string;
   finishedAt: string;
-  counts: IndexCountsV2;
-  items: readonly IndexItemV2[];
+  counts: IndexCountsV1;
+  items: readonly IndexItemV1[];
   omittedItemCount: number;
   failure?:
     | "source-unavailable"
@@ -876,13 +838,13 @@ type SourceIndexReportV2 = {
     | "repository-write";
 };
 
-type IndexReportV2 = {
-  schemaVersion: 2;
+type IndexReportV1 = {
+  schemaVersion: 1;
   command: "index";
   startedAt: string;
   finishedAt: string;
-  counts: IndexCountsV2;
-  sources: readonly SourceIndexReportV2[];
+  counts: IndexCountsV1;
+  sources: readonly SourceIndexReportV1[];
   incompleteSources: number;
   omittedItemCount: number;
 };
@@ -916,16 +878,15 @@ For a source report, completed means `coverage.status = complete` and no
 observation time equals source `startedAt`. `discovered = unchanged + updated +
 failed`, and `stale <= failed`; missing is reconciliation, not discovery. Items
 contain only failed/missing details and satisfy `failed + missing = items.length +
-omittedItemCount` when the report is returned. Schema-4 `removed` counts/items are
-legacy persisted history only: never rename them to missing and never emit them
-in a new M5 index report. Top counts/omissions are safe sums; sources are ordered
-by raw source kind/instance ID and items by repository outcome order.
+omittedItemCount` when the report is returned. Top counts/omissions are safe sums;
+sources are ordered by raw source kind/instance ID and items by repository outcome
+order.
 
-Paths schema 2 is exactly:
+Paths schema 1 is exactly:
 
 ```ts
-type PathsReportV2 = {
-  schemaVersion: 2;
+type PathsReportV1 = {
+  schemaVersion: 1;
   command: "paths";
   library: {
     directory: string;
@@ -969,8 +930,8 @@ report: the latter two use the exact failed union with no guessed location or ra
 error. Failure before a stable `SourceRef` exists, or library inspection failure,
 produces no partial JSON and exits operationally.
 
-Doctor schema 2 retains the exact top-level/check shape from schema 1 and changes
-the order to `node-runtime`, `sqlite-fts5`, `library-state`, `source-codex`.
+Doctor schema 1 uses the exact top-level/check shape and orders checks as
+`node-runtime`, `sqlite-fts5`, `library-state`, `source-codex`.
 `library-state` replaces `index-state`; its common string details are `state`,
 `initialized`, `schemaVersion`, and `supportedSchemaVersion`, plus the existing
 state-specific `reason` and/or `target`. Ready state adds exactly
@@ -1004,35 +965,27 @@ uses the standard `{ id, label, ok, summary, details }` shape.
    union and tool/link invariants above. Preserve contiguous mixed segment
    ordinals and deep immutable snapshots. Update `test/fixtures/session.ts`, the
    synthetic source, and source/index contract helpers to construct explicit
-   text or omitted variants. Keep a legacy non-tool `toolCallId` fixture and add
+   text or omitted variants. Keep a provider-neutral non-tool `toolCallId` fixture and add
    separate canonical `tool-call`/`tool-result` evidence fixtures. Lock the exact
    source-type predicate and validation path with 1/64-byte valid tokens plus
    empty, 65-byte, uppercase, Unicode, whitespace, control, slash/backslash, URL,
    data-URL, underscore, and leading/trailing/double-hyphen failures.
 
-2. `src/infrastructure/sqlite/migrations/0004-canonical-library-evidence.ts`
-   and `src/infrastructure/sqlite/migrations.ts` — add schema 4 without editing
-   prior migrations. Rebuild occurrences transactionally and recreate its content
-   index as a partial index for non-null `content_id`. Add source coverage state,
-   canonical capture/last-seen/presence state, `missing` run evidence, and the
-   `forget` writer-lease purpose while preserving legacy `removed` history,
-   leases, FTS, last-good revisions, and canonical documents. Schema-3 sources
-   migrate to unknown coverage; canonical rows retain content with null unknown
-   timestamps. Add a schema-3-to-4 test proving exact document/text/FTS and writer
-   history preservation, SQL impossible-state checks, clean foreign keys,
-   rollback, and legacy removed readability. Seed currently valid schema-3 rows
-   containing a non-tool call ID and a tool-result relation to a non-call entry;
-   prove both survive migration and reconstruction unchanged. The omitted
+2. `src/infrastructure/sqlite/migrations/0001-bootstrap.ts`,
+   `src/infrastructure/sqlite/migrations.ts`, and `writer-schema.ts` — create the
+   exact current canonical library, evidence union, source observation, missing
+   run evidence, FTS, and `index | forget | clear` coordination in one baseline.
+   Keep the generic ordered/checksummed migration ledger for future published
+   releases, but do not support earlier development databases. Index alone may
+   bootstrap an empty database; forget and clear fail closed on unsupported state.
+   Future appended migrations run under an owned index/forget lease. The omitted
    branch's SQL check enforces the same 1–64-byte ASCII kebab grammar. Keep
-   run-item `ON DELETE CASCADE`; define `omitted_item_count` as details omitted
-   by either the 100-item cap or later scoped forget, and make run-record
-   integrity use the locked failed/missing/legacy-removed equation. Rebuild the
-   lease table constraint to admit `forget` while preserving exact free/index/
-   clear rows from schema 3. Add the index/forget-only lease-aware migration
-   coordinator and prove it owns/carries the requested lease before exposing
-   schema 4; do not call the ordinary migrate-before-acquire path for initialized
-   schema 3. Data clear uses the separate non-migrating schema-version dispatcher
-   above.
+   run-item `ON DELETE CASCADE`; define `omitted_item_count` as details omitted by
+   either the 100-item cap or later scoped forget, and make run-record integrity
+   use `failed + missing = stored items + omitted items`. Tests prove one-row
+   bootstrap history, final strict constraints, future-migration rollback,
+   obsolete-development-schema refusal without mutation, and current writer
+   fencing.
 
 3. `src/infrastructure/sqlite/sqlite-session-document.ts`,
    `sqlite-session-state.ts`, `sqlite-session-index.ts`, and focused repository
@@ -1172,8 +1125,7 @@ uses the standard `{ id, label, ok, summary, details }` shape.
    non-destructive `recordMissing`; make run start/interrupt record unknown source
    coverage and complete finalization record complete coverage; update every
    discovered outcome's presence/last-seen and every replacement's capture time.
-   Add the exact M5 index report's `missing` count/items and coverage while
-   reading legacy `removed` history without emitting it as current output.
+   Add the exact M5 index report's `missing` count/items and coverage.
    Derive every library observation/capture field from the run's application-
    owned `startedAt`; never use the SQLite lifecycle clock for those fields. Add
    `listSummaries({ limit })` with effective source state, freshness, and capture
@@ -1186,7 +1138,7 @@ uses the standard `{ id, label, ok, summary, details }` shape.
    transaction. Run-record health validates the post-forget equation. Tests use
    deliberately divergent application/lifecycle clocks and multiple candidates
    to prove the shared observation instant, exact complete/incomplete/interrupted
-   transitions, migrated nulls, and capture preservation across unchanged,
+   transitions and capture preservation across unchanged,
    failure, missing, replacement, and reappearance. Equal-time identities whose
    raw and printable orders differ (`z` and `é`) straddle a SQL limit boundary to
    prove activity/null ordering, raw-tuple tie-breaks, bounded `N + 1`, and no
@@ -1208,24 +1160,24 @@ uses the standard `{ id, label, ok, summary, details }` shape.
 10. `src/infrastructure/state/paths.ts`, state/lifecycle values, and path tests —
     implement the application-data and `SESSIONS_DATA_DIR` contract above and
     rename the owned database to `sessions.sqlite3`. Add the exact `.scratch`
-    child to `IndexPaths`, paths schema 2, lease-scoped writer cleanup, and
+    child to `IndexPaths`, paths schema 1, lease-scoped writer cleanup, and
     data-clear report. Preserve non-mutating path inspection, safety checks,
     POSIX modes, and only-known-file scope except for recursive removal of this
     one validated Sessions-owned scratch root without following symlinks. Do not
     inspect, migrate, or remove the prior cache. Bump paths structured output to
-    the exact schema-2 `library`/`sources` report above rather than silently
-    changing schema 1. Remove valid schema 3 from non-current direct clear;
-    schemas 3 and 4 cannot be unlinked until clear owns their existing carried
-    lease. Clear removes scratch under active heartbeat, crosses destructive
+    the exact schema-1 `library`/`sources` report above. Clear accepts only the
+    current validated baseline and refuses obsolete development databases without
+    migration or deletion. It removes scratch under active heartbeat, crosses destructive
     intent, then stops heartbeat, refreshes/asserts ownership, checkpoints,
     closes, and verifies post-close file identities/the immutable lease
     immediately before unlink. It never removes orphan scratch without a lease-
-    bearing database. Keep pre-lease legacy schemas separately classified.
+    bearing database. A truly empty interrupted-initialization file is removable
+    only without recovery sidecars or scratch state.
 
 11. Extract `src/application/admit-source-probe.ts` from the private validator in
     `run-index.ts`; reuse it from indexing, `get-paths.ts`, and a new generic
     source diagnostic. Add sorted source status and only the Codex home/effective
-    state roots to paths schema 2. Bump doctor output to schema 2, rename the
+    state roots to paths schema 1. Set doctor output to schema 1, rename the
     machine-facing `index-state` check to `library-state`, distinguish canonical
     integrity from derived FTS integrity/remediation, and add `source-codex` after
     existing runtime/library checks using the exact details unions above.
@@ -1297,8 +1249,8 @@ uses the standard `{ id, label, ok, summary, details }` shape.
 ## Verify
 
 - Focused domain/storage gates:
-  `pnpm vitest run test/domain/session-validation.test.ts test/application/validate-session.test.ts test/infrastructure/sqlite-canonical-library-evidence-migration.test.ts test/infrastructure/sqlite-session-index.test.ts test/infrastructure/sqlite-index-health.test.ts`.
-- Lease/cutover gates:
+  `pnpm vitest run test/domain/session-validation.test.ts test/application/validate-session.test.ts test/infrastructure/sqlite-canonical-migration.test.ts test/infrastructure/sqlite-session-index.test.ts test/infrastructure/sqlite-index-health.test.ts`.
+- Lease/storage gates:
   `pnpm vitest run test/infrastructure/sqlite-writer-coordination.test.ts test/infrastructure/index-maintenance.test.ts test/infrastructure/sqlite-lifecycle.test.ts`.
 - Focused adapter gates: `pnpm vitest run test/adapters/codex` plus the shared
   source contract invocation. Run the state-snapshot feasibility file first and

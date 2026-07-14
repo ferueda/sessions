@@ -171,7 +171,7 @@ async function invoke(
 
 function passingDoctor(): DoctorReport {
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     command: "doctor",
     ok: true,
     checks: [{ id: "pass", label: "Passing check", ok: true, summary: "available", details: {} }],
@@ -180,7 +180,7 @@ function passingDoctor(): DoctorReport {
 
 function pathsReport(): PathsReport {
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     command: "paths",
     library: {
       directory: "/data/sessions",
@@ -191,7 +191,7 @@ function pathsReport(): PathsReport {
       initialized: false,
       state: "uninitialized",
       schemaVersion: null,
-      supportedSchemaVersion: 4,
+      supportedSchemaVersion: 1,
     },
     sources: [],
   };
@@ -199,7 +199,7 @@ function pathsReport(): PathsReport {
 
 function indexReport(incomplete: boolean): IndexReport {
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     command: "index",
     startedAt: "2026-07-14T00:00:00.000Z",
     finishedAt: "2026-07-14T00:00:01.000Z",
