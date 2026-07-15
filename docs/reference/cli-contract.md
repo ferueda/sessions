@@ -179,7 +179,10 @@ Current state values are `uninitialized`, `ready`, `migration-required`,
 
 The human format presents the same fields. An incompatible state is still a paths
 report and exits `0`; doctor evaluates health. Resolution/inspection failure emits
-no partial report and exits `1`.
+no partial report and exits `1`. A pre-release migration-checksum mismatch fails
+closed with recovery guidance: select a fresh `SESSIONS_DATA_DIR`, or back up and
+remove only the obsolete Sessions-owned directory reported by `sessions paths`,
+then index again. `data clear` does not claim that incompatible database.
 
 ## Remaining V1 commands
 
