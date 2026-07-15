@@ -11,12 +11,12 @@ Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-r
 
 Active storage-hardening plans, in execution order:
 
-1. [Compact collision-safe canonical content storage](260714-compact-content-storage.md)
-2. [Deletion and physical compaction contract](260714-deletion-compaction-contract.md)
-3. [Expose and repair orphaned canonical content](260714-orphan-observability-repair.md)
+1. [Deletion and physical compaction contract](260714-deletion-compaction-contract.md)
+2. [Expose and repair orphaned canonical content](260714-orphan-observability-repair.md)
 
-Land and implement the compact-content baseline before beginning compaction.
-Implement orphan repair only after the compaction lease extension has landed
-and its plan has been reconciled with the resulting schema and lease contracts.
+Land the compact-content implementation before beginning compaction, then
+reconcile the compaction plan with the resulting schema. Implement orphan repair
+only after the compaction lease extension has landed and its plan has been
+reconciled with the resulting schema and lease contracts.
 
 Resume M7 after the storage-hardening sequence is complete.
