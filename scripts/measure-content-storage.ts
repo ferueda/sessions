@@ -82,7 +82,12 @@ interface InternStatements {
 }
 
 async function main(): Promise<void> {
-  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "sessions-content-storage-"));
+  let temporaryRoot: string;
+  try {
+    temporaryRoot = await mkdtemp(path.join(tmpdir(), "sessions-content-storage-"));
+  } catch {
+    throw new Error("temporary measurement directory could not be created");
+  }
   let report: ReturnType<typeof createReport> | undefined;
   let failure: unknown;
   let cleanupFailed = false;
