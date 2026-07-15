@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import { validateSessionDocument } from "../../domain/session-validation.ts";
 import { isCanonicalSourceType, isContentClass } from "../../domain/source-type.ts";
@@ -17,6 +17,7 @@ export function replaceCanonicalDocument(
   sessionId: number,
   document: SessionDocument,
 ): void {
+  const obsoleteContentCandidates = readContentCandidates(database, sessionId);
   database.prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?").run(sessionId);
   database
     .prepare(
@@ -40,7 +41,7 @@ export function replaceCanonicalDocument(
 
   insertRelations(database, sessionId, document.relations);
   insertEntries(database, sessionId, document.entries);
-  garbageCollectContent(database);
+  deleteUnreferencedContent(database, obsoleteContentCandidates);
 }
 
 export function readCanonicalDocument(
@@ -74,15 +75,30 @@ export function readCanonicalDocument(
   return validated.document;
 }
 
-export function garbageCollectContent(database: DatabaseSync): void {
-  database.exec(
+function readContentCandidates(database: DatabaseSync, sessionId: number): readonly number[] {
+  const rows = database
+    .prepare(
+      `SELECT DISTINCT content_id
+       FROM sessions_content_occurrences
+       WHERE session_id = ? AND content_id IS NOT NULL
+       ORDER BY content_id`,
+    )
+    .all(sessionId) as unknown as readonly { readonly content_id?: unknown }[];
+  return rows.map((row) => integerAt(row.content_id));
+}
+
+function deleteUnreferencedContent(database: DatabaseSync, candidates: readonly number[]): void {
+  if (candidates.length === 0) return;
+  const statement = database.prepare(
     `DELETE FROM sessions_content_values
-     WHERE NOT EXISTS (
-       SELECT 1
-       FROM sessions_content_occurrences AS occurrence
-       WHERE occurrence.content_id = sessions_content_values.content_id
-     )`,
+     WHERE content_id = ?
+       AND NOT EXISTS (
+         SELECT 1
+         FROM sessions_content_occurrences AS occurrence
+         WHERE occurrence.content_id = sessions_content_values.content_id
+       )`,
   );
+  for (const contentId of candidates) statement.run(contentId);
 }
 
 function insertRelations(
@@ -147,6 +163,7 @@ function insertEntries(
        source_metadata_json
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  let contentStatements: ContentStatements | undefined;
 
   for (const entry of entries) {
     entryStatement.run(
@@ -163,7 +180,10 @@ function insertEntries(
       entry.sourceLocator.recordId ?? null,
     );
     for (const segment of entry.content) {
-      const contentId = segment.kind === "text" ? internContent(database, segment) : null;
+      const contentId =
+        segment.kind === "text"
+          ? internContent((contentStatements ??= prepareContentStatements(database)), segment)
+          : null;
       occurrenceStatement.run(
         sessionId,
         entry.ordinal,
@@ -179,24 +199,34 @@ function insertEntries(
   }
 }
 
-function internContent(database: DatabaseSync, segment: TextContentSegment): number {
-  database
-    .prepare(
+function prepareContentStatements(database: DatabaseSync): ContentStatements {
+  return {
+    insert: database.prepare(
       `INSERT INTO sessions_content_values (hash_scheme, digest, text)
        VALUES (?, ?, ?)
        ON CONFLICT (hash_scheme, digest, text) DO NOTHING`,
-    )
-    .run(segment.contentHash.scheme, segment.contentHash.digest, segment.text);
-  const row = database
-    .prepare(
+    ),
+    find: database.prepare(
       `SELECT content_id
        FROM sessions_content_values
        WHERE hash_scheme = ? AND digest = ? AND text = ?`,
-    )
-    .get(segment.contentHash.scheme, segment.contentHash.digest, segment.text) as
-    | { readonly content_id?: unknown }
-    | undefined;
+    ),
+  };
+}
+
+function internContent(statements: ContentStatements, segment: TextContentSegment): number {
+  statements.insert.run(segment.contentHash.scheme, segment.contentHash.digest, segment.text);
+  const row = statements.find.get(
+    segment.contentHash.scheme,
+    segment.contentHash.digest,
+    segment.text,
+  ) as { readonly content_id?: unknown } | undefined;
   return integerAt(row?.content_id);
+}
+
+interface ContentStatements {
+  readonly insert: StatementSync;
+  readonly find: StatementSync;
 }
 
 function readRelations(database: DatabaseSync, sessionId: number): readonly SessionRelation[] {

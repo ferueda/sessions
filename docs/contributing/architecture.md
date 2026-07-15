@@ -111,6 +111,12 @@ and writer coordination directly. Only text enters interning and FTS. Omitted
 content stores class, source type, ordinal, and provenance—never media bytes or
 references.
 
+Canonical replacement captures the prior document's distinct content IDs before
+cascade deletion, then prunes only those still unreferenced after insertion in
+the same transaction. Replacement is not a whole-library orphan-repair path; a
+legitimate producer of unrelated orphans would require explicit writer
+maintenance outside the per-session hot path.
+
 One renewable generation lease serializes `index`, `forget`, and `clear`. Every
 mutation asserts ownership inside its transaction. Expired takeover fences stale
 writers between transactions and interrupts abandoned active index runs. An
