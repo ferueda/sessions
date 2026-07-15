@@ -9,4 +9,7 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. Resume M7 as the next roadmap work.
+Active storage-hardening plan:
+
+- [Deletion and physical compaction contract](260714-deletion-compaction-contract.md)
+  — execute after the compact-content baseline redesign, then resume M7.
