@@ -26,7 +26,11 @@ import {
   sameRevision,
 } from "./sqlite-session-state.ts";
 import { runImmediateTransaction, SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
-import { assertWriterLease, type WriterLeaseIdentity } from "./writer-lease.ts";
+import {
+  assertWriterLease,
+  runLeasedImmediateTransaction,
+  type WriterLeaseIdentity,
+} from "./writer-lease.ts";
 
 const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
   "unavailable",
@@ -95,6 +99,8 @@ export function createCoordinatedSqliteSessionIndex(
   }
   const reader = createSqliteSessionIndexReader(database);
   const assertLease = (): void => assertWriterLease(database, options.lease, options);
+  const runLeasedReplacement = <T>(operation: () => T): T =>
+    runLeasedImmediateTransaction(database, options.lease, options, operation);
   const index: SessionIndexWriter = {
     ...reader,
 
@@ -170,8 +176,7 @@ export function createCoordinatedSqliteSessionIndex(
       assertIdentity(replacement.observation.identity);
       let activeRunValidated = false;
       try {
-        runImmediateTransaction(database, () => {
-          assertLease();
+        runLeasedReplacement(() => {
           const context = assertActiveRun(database, run, replacement.observation.identity.source);
           activeRunValidated = true;
           const sessionId = ensureTracking(
@@ -194,8 +199,7 @@ export function createCoordinatedSqliteSessionIndex(
       } catch (operationError) {
         if (!activeRunValidated) throw operationError;
         try {
-          runImmediateTransaction(database, () => {
-            assertLease();
+          runLeasedReplacement(() => {
             recordFailure(database, run, replacement.observation, "repository-write");
           });
         } catch (failureRecordingError) {

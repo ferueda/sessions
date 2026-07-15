@@ -428,6 +428,103 @@ describe("SQLite writer coordination", () => {
     }
   });
 
+  test("renews repository replacement after its transaction crosses lease expiry", async () => {
+    const database = migratedDatabase();
+    const acquiredAt = () => new Date("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(database, "index", {
+        now: acquiredAt,
+        token: () => "long-replacement-owner",
+      });
+      const index = createCoordinatedSqliteSessionIndex(database, {
+        lease,
+        now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
+          "2026-07-13T12:00:20.000Z",
+          "2026-07-13T12:01:00.000Z",
+        ]),
+      });
+      const sessionIdentity = identity("long-replacement-profile", "session-one");
+      const sessionObservation = observation(sessionIdentity, "revision-a");
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+
+      await index.replaceSession(
+        run,
+        admittedReplacement(sessionObservation, minimalDocument(sessionIdentity)),
+      );
+
+      await expect(index.getFreshness(sessionIdentity)).resolves.toMatchObject({
+        status: "current",
+        lastGood: sessionObservation.revision,
+      });
+      const after = () => new Date("2026-07-13T12:01:00.000Z");
+      expect(readWriterLeaseHealth(database, { now: after })).toMatchObject({
+        status: "live",
+        generation: lease.generation,
+        heartbeatAt: "2026-07-13T12:01:00.000Z",
+        expiresAt: "2026-07-13T12:01:30.000Z",
+      });
+      expect(interruptOwnedRunsAndReleaseWriterLease(database, lease, { now: after })).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("recovers an expired exact owner while recording a replacement failure", async () => {
+    const database = migratedDatabase();
+    const acquiredAt = () => new Date("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(database, "index", {
+        now: acquiredAt,
+        token: () => "failed-replacement-owner",
+      });
+      const index = createCoordinatedSqliteSessionIndex(database, {
+        lease,
+        now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
+          "2026-07-13T12:00:20.000Z",
+          "2026-07-13T12:01:00.000Z",
+          "2026-07-13T12:01:00.000Z",
+        ]),
+      });
+      const sessionIdentity = identity("failed-replacement-profile", "session-one");
+      const sessionObservation = observation(sessionIdentity, "revision-a");
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      database.exec(`CREATE TRIGGER fail_canonical_insert
+                     BEFORE INSERT ON sessions_canonical_sessions
+                     BEGIN
+                       SELECT RAISE(ABORT, 'synthetic replacement failure');
+                     END`);
+
+      await expect(
+        index.replaceSession(
+          run,
+          admittedReplacement(sessionObservation, minimalDocument(sessionIdentity)),
+        ),
+      ).rejects.toThrow("synthetic replacement failure");
+
+      await expect(index.getFreshness(sessionIdentity)).resolves.toMatchObject({
+        status: "unindexed",
+        latest: { outcome: "failed", failure: "repository-write" },
+      });
+      const after = () => new Date("2026-07-13T12:01:00.000Z");
+      expect(readWriterLeaseHealth(database, { now: after })).toMatchObject({
+        status: "live",
+        generation: lease.generation,
+        heartbeatAt: "2026-07-13T12:01:00.000Z",
+      });
+      expect(interruptOwnedRunsAndReleaseWriterLease(database, lease, { now: after })).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
   test("fences every stale repository mutation before it can change state", async () => {
     const database = migratedDatabase();
     const clock = fakeClock("2026-07-13T12:00:00.000Z");
@@ -687,6 +784,16 @@ function fakeClock(initial: string): {
     set(timestamp) {
       milliseconds = Date.parse(timestamp);
     },
+  };
+}
+
+function sequencedClock(timestamps: readonly string[]): () => Date {
+  let index = 0;
+  return () => {
+    const timestamp = timestamps[index];
+    if (timestamp === undefined) throw new Error("Sequenced clock was exhausted");
+    index += 1;
+    return new Date(timestamp);
   };
 }
 

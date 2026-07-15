@@ -3,9 +3,11 @@ import { open } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 
+import { yieldToEventLoop } from "../../application/yield-to-event-loop.ts";
 import type { RolloutFileStat } from "./paths.ts";
 
 export const MAX_CODEX_ROLLOUT_RECORD_BYTES = 32 * 1024 * 1024;
+const COOPERATIVE_YIELD_RECORD_INTERVAL = 64;
 const UNREADABLE_FILE_SYSTEM_CODES = new Set([
   "EACCES",
   "EBADF",
@@ -107,20 +109,28 @@ async function consumeRollout(
   const source = handle.createReadStream({ autoClose: false });
   const consume = async (records: AsyncIterable<Buffer>): Promise<void> => {
     let ordinal = 0;
+    let recordsSinceYield = 0;
     const decoder = new TextDecoder("utf-8", { fatal: true });
     for await (const record of records) {
       if (record.byteLength === 0) {
         await options.onBlankRecord?.();
-        continue;
+      } else {
+        let value: unknown;
+        try {
+          value = JSON.parse(decoder.decode(record));
+        } catch (error) {
+          throw new CodexRolloutError("malformed", { cause: error });
+        }
+        await options.onRecord(value, ordinal);
+        ordinal += 1;
       }
-      let value: unknown;
-      try {
-        value = JSON.parse(decoder.decode(record));
-      } catch (error) {
-        throw new CodexRolloutError("malformed", { cause: error });
+
+      recordsSinceYield += 1;
+      if (recordsSinceYield === COOPERATIVE_YIELD_RECORD_INTERVAL) {
+        // Large rollouts can otherwise starve activity and writer-lease timers.
+        await yieldToEventLoop();
+        recordsSinceYield = 0;
       }
-      await options.onRecord(value, ordinal);
-      ordinal += 1;
     }
   };
   if (options.representation === "zstd") {
