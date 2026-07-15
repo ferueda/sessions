@@ -9,4 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. Resume M7 as the next roadmap work.
+Active executor plan:
+
+- [Eliminate whole-library cleanup from session replacement](260714-index-replacement-performance.md)
+  — pre-M7 performance hardening for the confirmed changed-session indexing hot
+  path.
+
+Resume M7 after this plan is implemented and removed.
