@@ -680,6 +680,18 @@ Outcome: the entire planned V1 command surface is scriptable and bounded, and on
 retained session can be extracted as portable provider-neutral context without
 Sessions delivering it.
 
+Execution is split into two independently reviewable plans, followed by deferred
+Markdown presentation work:
+
+1. build the canonical public projection, persisted document digest, and
+   same-snapshot attribution;
+2. deliver bounded JSON/JSONL for list, search, show, and export;
+3. add Markdown over the same projection after M8 and before M9/V1.
+
+The first two steps complete the provider-neutral export engine required to begin
+M8. Deferring Markdown changes sequencing, not V1 scope; it remains a pre-M9 gate
+unless the product contract is explicitly revised.
+
 Primary change areas:
 
 - `src/application/export-session.ts`;
@@ -690,9 +702,10 @@ Primary change areas:
 
 Required behavior:
 
-- Support Markdown, JSON, and independently parseable JSONL export from retained
+- First support JSON and independently parseable JSONL export from retained
   canonical documents only, including when source state is missing or unknown.
-  Export never probes or reopens provider histories.
+  Export never probes or reopens provider histories. Add Markdown later over the
+  exact same projection without changing eligible evidence or digest semantics.
 - Define one public snapshot envelope: canonical identity, capture time, source
   state and observation time, adapter version, versioned document digest,
   freshness, lineage metadata, omissions, and truncation. The digest is stable

@@ -2,6 +2,8 @@
 
 Work style: concise, evidence-backed, root-cause first.
 
+Use clear, simple language. Avoid jargon and unnecessary complexity. Prefer short, familiar words over technical terms.
+
 ## Protocol
 
 - Verify behavior in code; do not guess.
