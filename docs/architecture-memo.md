@@ -299,7 +299,7 @@ Properties:
 - **Last-good preservation:** failed reads leave the prior canonical snapshot available and report staleness.
 - **Adapter-version aware:** parser corrections trigger controlled re-normalization.
 - **Non-destructive reconciliation:** a complete scan can mark a retained session missing but never delete it; malformed, conflicting, wrong-source, unavailable, unreadable, or incomplete discovery proves no absence.
-- **Single writer:** a renewable generation lease admits one high-level writer, and every repository mutation fences stale owners transactionally.
+- **Single writer:** a renewable generation lease admits one high-level writer. Expiry fences work between transactions; an immediate transaction may renew the unchanged exact generation, purpose, and token at entry and exit because its SQLite write lock prevents takeover. Rollback or process failure discards that renewal and partial work.
 - **Recoverable:** a later writer can recover valid WAL state, interrupt abandoned runs after lease expiry, and reindex idempotently.
 
 Probe/discovery/read failures are sanitized per-source outcomes and do not prevent later selected sources from running. A failed or incomplete source scan leaves current source coverage unknown and retained snapshots untouched. Repository, lease, or finalization failures abort the invocation because persistence trust is lost. Sources run sequentially; V1 adds no daemon, parallel indexing, retries, or progress surface.

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -50,7 +51,26 @@ describe("SQLite FTS projection repair", () => {
       ftsRemediation: "rebuild-required",
     });
 
-    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    const clock = sequencedClock([
+      "2026-07-14T12:00:00.000Z",
+      "2026-07-14T12:00:20.000Z",
+      "2026-07-14T12:01:00.000Z",
+    ]);
+    const writer = await createSqliteIndexLifecycle({
+      now: clock.now,
+      writerToken: () => "cross-expiry-repair-owner",
+    }).openWriter(paths);
+    expect(clock.reads().slice(0, 3)).toEqual([
+      "2026-07-14T12:00:00.000Z",
+      "2026-07-14T12:00:20.000Z",
+      "2026-07-14T12:01:00.000Z",
+    ]);
+    expect(readWriterLeaseHealth(writer.database, { now: clock.now })).toMatchObject({
+      status: "live",
+      generation: 2,
+      heartbeatAt: "2026-07-14T12:01:00.000Z",
+      expiresAt: "2026-07-14T12:01:30.000Z",
+    });
     await writer.close();
 
     expect(readCanonicalRows(paths.database)).toEqual(canonicalBefore);
@@ -196,8 +216,23 @@ END;`);
 
   test("canonical corruption fails closed without rebuilding the projection", async () => {
     const paths = await initializedPaths();
+    const text = "damaged projection evidence";
+    const contentHash = hashContent(text);
     mutateDatabase(paths.database, (database) => {
       database.exec("PRAGMA foreign_keys = OFF");
+      const inserted = database
+        .prepare(
+          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
+           VALUES (?, ?, ?)`,
+        )
+        .run(contentHash.scheme, contentHash.digest, text);
+      database
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(inserted.lastInsertRowid, text);
+      database.exec("DROP TRIGGER sessions_content_values_ai");
       database
         .prepare(
           `INSERT INTO sessions_content_occurrences (
@@ -207,24 +242,14 @@ END;`);
         )
         .run();
     });
+    const canonicalBefore = readCanonicalRows(paths.database);
+    const projectionBefore = readFtsProjectionState(paths.database);
 
     await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
       code: "canonical-corrupt",
     });
-    const database = openImmutable(paths.database);
-    try {
-      expect(
-        database
-          .prepare(
-            `SELECT 1
-             FROM sqlite_schema
-             WHERE type = 'trigger' AND name = 'sessions_content_values_ai'`,
-          )
-          .get(),
-      ).toBeDefined();
-    } finally {
-      database.close();
-    }
+    expect(readCanonicalRows(paths.database)).toEqual(canonicalBefore);
+    expect(readFtsProjectionState(paths.database)).toEqual(projectionBefore);
   });
 });
 
@@ -308,6 +333,53 @@ function readFtsTableDefinition(file: string): string {
   } finally {
     database.close();
   }
+}
+
+function readFtsProjectionState(file: string): unknown {
+  const database = openImmutable(file);
+  try {
+    const schema = database
+      .prepare(
+        `SELECT name, type, sql
+         FROM sqlite_schema
+         WHERE name = 'sessions_content_fts'
+            OR name LIKE 'sessions_content_fts\\_%' ESCAPE '\\'
+            OR name LIKE 'sessions_content_values\\_%' ESCAPE '\\'
+         ORDER BY name COLLATE BINARY`,
+      )
+      .all();
+    const rows = [
+      ["sessions_content_fts_config", "k"],
+      ["sessions_content_fts_data", "id"],
+      ["sessions_content_fts_docsize", "id"],
+      ["sessions_content_fts_idx", "segid, term"],
+    ].map(([table, order]) => [
+      table,
+      database.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all(),
+    ]);
+    return { schema, rows };
+  } finally {
+    database.close();
+  }
+}
+
+function sequencedClock(timestamps: readonly string[]): {
+  readonly now: () => Date;
+  readonly reads: () => readonly string[];
+} {
+  const milliseconds = timestamps.map(Date.parse);
+  const last = milliseconds.at(-1);
+  if (last === undefined) throw new TypeError("Sequenced clock requires a timestamp");
+  let index = 0;
+  const reads: string[] = [];
+  return {
+    now() {
+      const date = new Date(milliseconds[Math.min(index++, milliseconds.length - 1)] ?? last);
+      reads.push(date.toISOString());
+      return date;
+    },
+    reads: () => reads,
+  };
 }
 
 function mutateDatabase(file: string, mutate: (database: DatabaseSync) => void): void {

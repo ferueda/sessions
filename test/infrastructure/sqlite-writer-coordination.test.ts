@@ -20,6 +20,7 @@ import {
   heartbeatWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
   readWriterLeaseHealth,
+  runLeasedImmediateTransaction,
   startWriterLeaseHeartbeat,
   type WriterLeaseScheduler,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
@@ -206,6 +207,168 @@ describe("SQLite writer coordination", () => {
         generation: 2,
         purpose: "index",
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("renews an expired exact owner without changing its generation", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "recovering-owner",
+      });
+      clock.set("2026-07-13T12:01:00.000Z");
+
+      expect(runLeasedImmediateTransaction(database, lease, { now: clock.now }, () => 42)).toBe(42);
+      expect(readWriterLeaseHealth(database, { now: clock.now })).toMatchObject({
+        status: "live",
+        generation: lease.generation,
+        purpose: lease.purpose,
+        heartbeatAt: "2026-07-13T12:01:00.000Z",
+        expiresAt: "2026-07-13T12:01:30.000Z",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("renews after body expiry while the immediate transaction blocks takeover", async () => {
+    const { first, second } = await fileBackedDatabases();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(first, "index", {
+        now: clock.now,
+        token: () => "long-transaction-owner",
+      });
+      clock.set("2026-07-13T12:00:20.000Z");
+
+      runLeasedImmediateTransaction(first, lease, { now: clock.now }, () => {
+        first.exec("CREATE TABLE lease_sentinel (value TEXT NOT NULL)");
+        first.prepare("INSERT INTO lease_sentinel VALUES (?)").run("committed");
+        clock.set("2026-07-13T12:01:00.000Z");
+
+        expect(() =>
+          acquireWriterLease(second, "index", {
+            now: clock.now,
+            token: () => "blocked-takeover-owner",
+          }),
+        ).toThrow(expect.objectContaining({ errcode: 5 }));
+      });
+
+      expect(second.prepare("SELECT value FROM lease_sentinel").get()).toEqual({
+        value: "committed",
+      });
+      expect(readWriterLeaseHealth(second, { now: clock.now })).toMatchObject({
+        status: "live",
+        generation: lease.generation,
+        heartbeatAt: "2026-07-13T12:01:00.000Z",
+        expiresAt: "2026-07-13T12:01:30.000Z",
+      });
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test("fences an owner after a committed takeover before running its body", async () => {
+    const { first, second } = await fileBackedDatabases();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const stale = acquireWriterLease(first, "index", {
+        now: clock.now,
+        token: () => "stale-transaction-owner",
+      });
+      clock.set("2026-07-13T12:01:00.000Z");
+      const replacement = acquireWriterLease(second, "index", {
+        now: clock.now,
+        token: () => "replacement-transaction-owner",
+      });
+      let bodyRan = false;
+
+      expect(() =>
+        runLeasedImmediateTransaction(first, stale, { now: clock.now }, () => {
+          bodyRan = true;
+          first.exec("CREATE TABLE stale_owner_sentinel (value INTEGER NOT NULL)");
+        }),
+      ).toThrow(expect.objectContaining({ code: "writer-lease-lost" }));
+
+      expect(bodyRan).toBe(false);
+      expect(
+        first.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'stale_owner_sentinel'").get(),
+      ).toBeUndefined();
+      expect(readWriterLeaseHealth(first, { now: clock.now })).toMatchObject({
+        status: "live",
+        generation: replacement.generation,
+      });
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test("rolls back entry renewal and body writes when the body throws", async () => {
+    const { first, second } = await fileBackedDatabases();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(first, "index", {
+        now: clock.now,
+        token: () => "rolling-back-owner",
+      });
+      const leaseBefore = leaseRow(first);
+      clock.set("2026-07-13T12:01:00.000Z");
+
+      expect(() =>
+        runLeasedImmediateTransaction(first, lease, { now: clock.now }, () => {
+          first.exec("CREATE TABLE rolled_back_sentinel (value INTEGER NOT NULL)");
+          first.prepare("INSERT INTO rolled_back_sentinel VALUES (1)").run();
+          throw new Error("synthetic body failure");
+        }),
+      ).toThrow("synthetic body failure");
+
+      expect(leaseRow(second)).toEqual(leaseBefore);
+      expect(
+        second.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'rolled_back_sentinel'").get(),
+      ).toBeUndefined();
+      const replacement = acquireWriterLease(second, "index", {
+        now: clock.now,
+        token: () => "post-rollback-owner",
+      });
+      expect(replacement.generation).toBe(lease.generation + 1);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test("rolls back when the leased transaction clock moves backward at exit", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const lease = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "backward-transaction-owner",
+      });
+      const leaseBefore = leaseRow(database);
+      let bodyRan = false;
+      clock.set("2026-07-13T12:00:10.000Z");
+
+      expect(() =>
+        runLeasedImmediateTransaction(database, lease, { now: clock.now }, () => {
+          bodyRan = true;
+          database.exec("CREATE TABLE backward_clock_sentinel (value INTEGER NOT NULL)");
+          clock.set("2026-07-13T12:00:09.000Z");
+        }),
+      ).toThrow(expect.objectContaining({ code: "writer-lease-lost" }));
+      expect(bodyRan).toBe(true);
+      expect(leaseRow(database)).toEqual(leaseBefore);
+      expect(
+        database
+          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'backward_clock_sentinel'")
+          .get(),
+      ).toBeUndefined();
     } finally {
       database.close();
     }
@@ -406,8 +569,8 @@ describe("SQLite writer coordination", () => {
   });
 });
 
-function openDatabase(): DatabaseSync {
-  const database = new DatabaseSync(":memory:", {
+function openDatabase(file = ":memory:"): DatabaseSync {
+  const database = new DatabaseSync(file, {
     allowExtension: false,
     defensive: true,
     enableDoubleQuotedStringLiterals: false,
@@ -421,6 +584,25 @@ function migratedDatabase(): DatabaseSync {
   const database = openDatabase();
   applyMigrations(database);
   return database;
+}
+
+async function fileBackedDatabases(): Promise<{
+  readonly first: DatabaseSync;
+  readonly second: DatabaseSync;
+}> {
+  const root = await mkdtemp(path.join(tmpdir(), "sessions-writer-lease-transaction-"));
+  temporaryDirectories.push(root);
+  const file = path.join(root, "sessions.sqlite3");
+  const first = openDatabase(file);
+  applyMigrations(first);
+  const second = openDatabase(file);
+  first.exec("PRAGMA busy_timeout = 0");
+  second.exec("PRAGMA busy_timeout = 0");
+  return { first, second };
+}
+
+function leaseRow(database: DatabaseSync): unknown {
+  return database.prepare("SELECT * FROM sessions_writer_lease WHERE singleton = 1").get();
 }
 
 function insertActiveRun(database: DatabaseSync): number {

@@ -215,7 +215,8 @@ export function createSqliteIndexLifecycle(
               throw new Error("Canonical SQLite integrity check failed");
             }
           },
-          assertWriterLease: () => assertWriterLease(database, ownedLease, { now }),
+          lease: ownedLease,
+          now,
         });
         // Persistent FTS configuration is a write and must happen only after
         // this handle owns the high-level writer lease.

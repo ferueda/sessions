@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
+import { runLeasedImmediateTransaction, type WriterLeaseIdentity } from "./writer-lease.ts";
 
 export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
 
@@ -59,7 +59,8 @@ export interface FtsProjectionHealth {
 
 export interface RepairFtsProjectionOptions {
   readonly assertCanonicalIntegrity: () => void;
-  readonly assertWriterLease: () => void;
+  readonly lease: WriterLeaseIdentity;
+  readonly now: () => Date;
 }
 
 export class SqliteFtsProjectionRepairError extends Error {
@@ -90,16 +91,12 @@ export function repairFtsProjection(
   database: DatabaseSync,
   options: RepairFtsProjectionOptions,
 ): boolean {
-  assertCanonical(options.assertCanonicalIntegrity);
-
   try {
-    return runImmediateTransaction(database, () => {
-      options.assertWriterLease();
+    return runLeasedImmediateTransaction(database, options.lease, { now: options.now }, () => {
       assertCanonical(options.assertCanonicalIntegrity);
 
       const before = inspectFtsProjectionSafely(database);
       if (before.structure && before.content && ftsProjectionSemanticContentIsValid(database)) {
-        options.assertWriterLease();
         return false;
       }
 
@@ -118,7 +115,6 @@ export function repairFtsProjection(
         throw new SqliteFtsProjectionRepairError("projection-repair-failed");
       }
       assertCanonical(options.assertCanonicalIntegrity);
-      options.assertWriterLease();
       return true;
     });
   } catch (error) {

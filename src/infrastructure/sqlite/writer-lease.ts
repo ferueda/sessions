@@ -131,34 +131,29 @@ export function assertWriterLease(
   assertWriterLeaseAt(database, identity, now.timestamp);
 }
 
+/** Run synchronous work while an immediate transaction fences this exact owner. */
+export function runLeasedImmediateTransaction<T>(
+  database: DatabaseSync,
+  identity: WriterLeaseIdentity,
+  options: WriterLeaseOperationOptions,
+  operation: () => T,
+): T {
+  return runImmediateTransaction(database, () => {
+    renewExactWriterLease(database, identity, canonicalNow(options.now), true);
+    const result = operation();
+    renewExactWriterLease(database, identity, canonicalNow(options.now), true);
+    return result;
+  });
+}
+
 export function heartbeatWriterLease(
   database: DatabaseSync,
   identity: WriterLeaseIdentity,
   options: WriterLeaseOperationOptions,
 ): void {
   const now = canonicalNow(options.now);
-  const expiresAt = expiryFrom(now.date);
   runImmediateTransaction(database, () => {
-    assertWriterLeaseAt(database, identity, now.timestamp);
-    const result = database
-      .prepare(
-        `UPDATE sessions_writer_lease
-         SET heartbeat_at = ?, expires_at = ?
-         WHERE singleton = 1
-           AND generation = ?
-           AND purpose = ?
-           AND owner_token = ?
-           AND expires_at > ?`,
-      )
-      .run(
-        now.timestamp,
-        expiresAt,
-        identity.generation,
-        identity.purpose,
-        identity.token,
-        now.timestamp,
-      );
-    if (result.changes !== 1) throw new SqliteWriterLeaseError("writer-lease-lost");
+    renewExactWriterLease(database, identity, now, false);
   });
 }
 
@@ -351,6 +346,40 @@ function assertWriterLeaseAt(
   }
 }
 
+function renewExactWriterLease(
+  database: DatabaseSync,
+  identity: WriterLeaseIdentity,
+  now: { readonly date: Date; readonly timestamp: string },
+  allowExpired: boolean,
+): void {
+  const row = readLeaseRow(database);
+  assertLeaseClockDidNotMoveBackward(row, identity, now.timestamp);
+  if (
+    !isCurrentLease(row, identity) ||
+    (!allowExpired && (row.expires_at === null || row.expires_at <= now.timestamp))
+  ) {
+    throw new SqliteWriterLeaseError("writer-lease-lost");
+  }
+
+  const result = database
+    .prepare(
+      `UPDATE sessions_writer_lease
+       SET heartbeat_at = ?, expires_at = ?
+       WHERE singleton = 1
+         AND generation = ?
+         AND purpose = ?
+         AND owner_token = ?`,
+    )
+    .run(
+      now.timestamp,
+      expiryFrom(now.date),
+      identity.generation,
+      identity.purpose,
+      identity.token,
+    );
+  if (result.changes !== 1) throw new SqliteWriterLeaseError("writer-lease-lost");
+}
+
 function assertLeaseClockDidNotMoveBackward(
   row: NormalizedLeaseRow,
   identity: WriterLeaseIdentity,
@@ -372,12 +401,14 @@ function isCurrentLiveLease(
   identity: WriterLeaseIdentity,
   now: string,
 ): boolean {
+  return isCurrentLease(row, identity) && row.expires_at !== null && row.expires_at > now;
+}
+
+function isCurrentLease(row: NormalizedLeaseRow, identity: WriterLeaseIdentity): boolean {
   return (
     row.generation === identity.generation &&
     row.purpose === identity.purpose &&
-    row.owner_token === identity.token &&
-    row.expires_at !== null &&
-    row.expires_at > now
+    row.owner_token === identity.token
   );
 }
 

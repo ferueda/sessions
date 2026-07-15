@@ -113,8 +113,13 @@ references.
 
 One renewable generation lease serializes `index`, `forget`, and `clear`. Every
 mutation asserts ownership inside its transaction. Expired takeover fences stale
-writers and interrupts abandoned active index runs. Unsupported development
-databases fail closed; no pre-release schema cutover or lease carry-forward exists.
+writers between transactions and interrupts abandoned active index runs. An
+immediate transaction that has already serialized the writer may renew its
+unchanged exact generation, purpose, and token at entry and exit even if wall
+time crosses expiry, because SQLite prevents a competing takeover while that
+transaction is held. Rollback or process failure discards both the transactional
+renewal and partial work. Unsupported development databases fail closed; no
+pre-release schema cutover or lease carry-forward exists.
 
 A complete scan marks unseen retained sessions `missing`; unavailable or
 incomplete discovery leaves effective source state `unknown`. Neither deletes
