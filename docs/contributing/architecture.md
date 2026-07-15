@@ -27,15 +27,15 @@ list / search / show
   -> immutable library reader (no adapter)
   -> src/infrastructure/sqlite/sqlite-session-query.ts (list/search only)
 
-forget / data compact / data clear
-  -> src/application/{forget-session,compact-index,clear-index}.ts
+forget / data repair-orphans / data compact / data clear
+  -> src/application/{forget-session,repair-orphaned-content,compact-index,clear-index}.ts
   -> src/infrastructure/sqlite/index-maintenance.ts
 ```
 
 The composition root is the only production module that imports both a concrete
 adapter and infrastructure. It resolves Codex lazily: help, version, list,
-search, show, forget, data compact, and data clear do not resolve provider
-configuration.
+search, show, forget, data repair-orphans, data compact, and data clear do not
+resolve provider configuration.
 Index, paths, and doctor intentionally resolve or probe the registered source.
 
 ## Ownership
@@ -121,8 +121,8 @@ the same transaction. Replacement is not a whole-library orphan-repair path; a
 legitimate producer of unrelated orphans would require explicit writer
 maintenance outside the per-session hot path.
 
-One renewable generation lease serializes `index`, `forget`, `compact`, and
-`clear`. Every mutation asserts ownership inside its transaction. Expired
+One renewable generation lease serializes `index`, `forget`, `repair`, `compact`,
+and `clear`. Every mutation asserts ownership inside its transaction. Expired
 takeover fences stale
 writers between transactions and interrupts abandoned active index runs. An
 immediate transaction that has already serialized the writer may renew its
@@ -140,9 +140,16 @@ another transcript read.
 
 `forget` transactionally deletes one selected tracking identity and its owned
 canonical evidence while preserving aggregate redacted run history, shared text,
-and incoming relations owned by other sessions. `data clear --yes` removes only
-the validated Sessions database/WAL/SHM paths and exact scratch subtree. Neither
-operation touches a provider.
+incoming relations owned by other sessions, and unrelated historical orphans.
+It prunes only former content IDs that become unreferenced. Immutable health
+reports content reachability independently from canonical, foreign-key, and FTS
+health. `data repair-orphans` owns the only whole-library canonical orphan scan:
+it holds a dedicated repair lease across fixed internal committed batches,
+deletes only still-unreferenced candidates with matching FTS rows, and reports
+aggregate rows and logical UTF-8 bytes. It is provider-free, exposes no public
+batch/cursor state, and is safe to restart after a failure. `data clear --yes`
+removes only the validated Sessions database/WAL/SHM paths and exact scratch
+subtree. None of these operations touches a provider.
 
 The current baseline selects SQLite `auto_vacuum=INCREMENTAL` only while creating
 a genuinely new owned database, before WAL or schema writes. Existing files in
@@ -153,14 +160,21 @@ committed batch is durable and rerunnable. The operation reports observed main
 database file lengths only; it does not run full `VACUUM`, repack partial pages,
 delete canonical rows, or claim forensic erasure.
 
+Orphan repair is logical canonical deletion, not physical reclamation. A later
+doctor proves reachability; `data compact` remains the separate explicit route
+for returning reusable whole pages. Orphan repair never rebuilds FTS. Its
+candidate deletes compose with the existing canonical-content FTS triggers,
+while index-writer projection repair remains the distinct operation that rebuilds
+derived FTS from healthy canonical content.
+
 Immutable readers expose separate `sessions` reconstruction and provider-neutral
 `query` ports. List/search use one SQLite snapshot for complete pages, context,
 and support; show reconstructs the exact canonical document. None resolve or
 reopen Codex, so retained content remains usable after provider disappearance.
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content; doctor
-stays read-only and reports canonical integrity separately from projection
-health.
+stays read-only and reports canonical integrity, content reachability, and
+projection health separately.
 
 ## Query boundary
 

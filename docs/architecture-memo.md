@@ -2,7 +2,7 @@
 
 - Status: accepted design baseline
 - Date: 2026-07-13
-- Last updated: 2026-07-14
+- Last updated: 2026-07-15
 - Scope: standalone repository through V1
 
 ## Executive summary
@@ -80,7 +80,8 @@ lexical search, pagination, bounded context, lineage resolution, support counts,
 and canonical-only FTS projection repair. The baseline also includes durable
 canonical evidence, non-destructive source-presence reconciliation,
 index/list/search/show, scoped forget, all-data clear, source-aware diagnostics,
-and explicit bounded physical page reclamation. The maintained file-by-file map is the
+explicit orphan observability/deletion, and bounded physical page reclamation. The
+maintained file-by-file map is the
 [current architecture guide](contributing/architecture.md); this memo remains the
 stable target design.
 
@@ -95,9 +96,9 @@ The current baseline persists exact text and privacy-safe omissions, tool
 identity/linkage, complete/unknown lineage coverage, capture/source-observation
 state, rebuildable FTS, a random library identity, and writer coordination
 directly. Complete-scan absence marks a retained snapshot missing instead of
-deleting it. One generation lease fences index, forget, compact, and clear;
-query cursors bind the observed writer generation and become stale after a later
-writer.
+deleting it. One generation lease fences index, forget, repair, compact, and
+clear; query cursors bind the observed writer generation and become stale after a
+later writer.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -323,6 +324,18 @@ durable and rerunnable; the operation changes physical allocation only and
 reports observed main-file lengths without promising savings or partial-page
 repacking.
 
+Immutable health separately reports canonical content reachability: a content
+value with no retained occurrence is orphaned even when foreign keys and FTS are
+otherwise healthy. Doctor reports `contentReachability`, `orphanContentRows`, and
+`orphanContentBytes`; a live repair lease appears as `repair-live`.
+`data repair-orphans` is explicit provider-free canonical maintenance under its
+own renewable `repair` lease. One invocation scans to completion in fixed
+internal windows, deletes only still-unreferenced candidates with matching FTS
+rows, checkpoints between committed batches, and reports aggregate deleted rows
+and logical UTF-8 bytes. Failure emits no success report; completed batches
+remain durable and a fresh invocation safely restarts. No limit, cursor, partial
+result, or automatic repair policy is public.
+
 The application exposes immutable provider-neutral list/search query values and
 one query repository beside canonical reconstruction on each read snapshot.
 Shared filters cover exact source/instance, effective source state, workspace,
@@ -354,13 +367,14 @@ Malformed/query-mismatched cursors are usage failures; recreated-library or
 later-generation cursors are stale operational failures. Every admitted writer
 may conservatively stale cursors.
 
-FTS structure and rebuild logic are shared by bootstrap and repair. An explicit
+FTS structure and rebuild logic are shared by bootstrap and projection repair. An explicit
 leased index-writer open first distinguishes canonical corruption from FTS-only
 damage, then rebuilds only the projection from canonical content values. Doctor
-remains immutable and reports that repair is required. No public repair command
-exists. Show reconstructs canonical sessions directly rather than routing
-through search; planned export will do the same, including for retained sessions
-whose latest source state is missing or unknown.
+remains immutable and reports `rebuild-required`; `data repair-orphans` never
+rebuilds FTS and refuses candidates whose derived row is missing. Show
+reconstructs canonical sessions directly rather than routing through search;
+planned export will do the same, including for retained sessions whose latest
+source state is missing or unknown.
 
 Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
 earlier development builds are unsupported and fail closed without migration or
@@ -391,6 +405,8 @@ integrity from derived FTS integrity.
   after explicit invocation.
 - `sessions data compact` reclaims reusable whole database pages without deleting
   canonical rows, resolving a provider, or claiming forensic erasure.
+- `sessions data repair-orphans` deletes only canonical content with no retained
+  occurrence and reports aggregate logical payload, never provider data or paths.
 - Rebuilding derived FTS/query state never deletes retained canonical rows.
 - SQLite core `secure_delete` and FTS5 secure-delete are enabled when supported, but docs make no encryption or forensic secure-erasure claim.
 - The library stores the latest successful normalized canonical snapshot needed for faithful show/export, not entire raw provider payloads or every historical revision.
@@ -412,6 +428,11 @@ retained snapshots. Reindex can recapture the selected identity. No public
 `index clear` command exists.
 
 Scoped forget makes freed pages reusable but does not guarantee file shrink.
+`sessions data repair-orphans` is separate provider-free logical maintenance:
+doctor identifies unreachable canonical rows, repair deletes them in fixed
+internal committed batches, and a later doctor proves reachability is healthy.
+It never rebuilds FTS, exposes continuation state, or claims physical bytes were
+reclaimed.
 `sessions data compact` is separate provider-free maintenance: it checkpoints
 WAL and returns reusable whole pages in bounded committed batches. Failure after
 progress emits no report; rerun resumes safely. It neither deletes retained
@@ -430,6 +451,7 @@ sessions list [filters] [--limit N] [--cursor TOKEN]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
+sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
@@ -779,7 +801,7 @@ Confirm npm scope ownership, configure trusted publisher/environment, add releas
 - Search/show/export operate only on canonical library data, including retained
   sessions whose provider source is missing or currently unknown.
 - Rebuilding derived search state preserves canonical data; only explicit
-  forget/data-clear behavior deletes it.
+  forget, orphan repair, or data-clear behavior deletes it.
 - Provenance and deduplication prevent copied/injected/delegated content from being reported as independent repeated user intent.
 - Source-observed tool name, namespace, and linkage distinguish execution evidence from
   injected, requested, declared, or mention-only evidence without inventing

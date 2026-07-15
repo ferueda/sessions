@@ -7,8 +7,8 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > **Status: pre-alpha.** The Codex-backed retained-library and query slice is
 > implemented: explicit durable indexing, filtered/paginated list, lexical
 > search with evidence context and support counts, show, scoped forget, all-data
-> clear, explicit SQLite page reclamation, source diagnostics, and the current
-> canonical storage baseline.
+> clear, explicit orphan-content diagnosis/repair, explicit SQLite page
+> reclamation, source diagnostics, and the current canonical storage baseline.
 > Portable export, Cursor, the packaged Agent Skill, and npm release remain
 > planned.
 
@@ -55,6 +55,7 @@ sessions list [filters] [--limit N] [--cursor TOKEN]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
+sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
@@ -82,6 +83,12 @@ the [CLI contract](docs/reference/cli-contract.md).
 `forget` deletes one Sessions-owned retained copy without touching Codex. A later
 index can capture it again while the provider still has it. Deleted database
 pages become reusable, but forget does not promise immediate file shrink.
+`doctor` reports canonical content that no retained occurrence reaches;
+`data repair-orphans` explicitly deletes that unreachable text in fixed internal
+batches without resolving a provider. Its row and logical UTF-8 byte totals are
+not reclaimed-disk measurements. A failed invocation can leave completed batches
+durably deleted and is safe to rerun; there is no public limit, cursor, or partial
+report.
 `data compact` explicitly returns reusable whole pages to the filesystem in
 bounded batches; it does not remove canonical evidence or repack partially used
 pages. A failed run can leave completed batches durably reclaimed and is safe to
@@ -121,8 +128,9 @@ The public delivery target is `npm install --global @ferueda/sessions` or `npx @
 Provider histories are inputs, never mutation targets. Indexing is explicit,
 local, and network-free. It creates a durable normalized canonical snapshot in
 platform application data; provider disappearance does not delete it. FTS/query
-projections remain rebuildable, while only explicit forget/data-clear operations
-remove retained content. Explicit compaction changes physical allocation only.
+projections remain rebuildable, while only explicit forget, orphan repair, or
+data-clear operations remove retained content. Explicit compaction changes
+physical allocation only.
 See the [privacy contract](docs/privacy.md) for promises and limitations.
 
 ## Design and roadmap

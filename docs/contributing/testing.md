@@ -40,13 +40,13 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Layer                 | Current placement                                                               | Proves                                                                                               |
 | --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, query values, hashes, identity, parsing, bounds                                |
-| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/forget, failures                        |
+| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/forget/repair, failures                 |
 | Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation         |
 | SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows                     |
 | Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                            |
 | CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
 | Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
-| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus synthetic Codex indexing, query paging, observed tool filters/linkage, and show |
+| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus synthetic Codex indexing, query, show, orphan repair, compaction, and deletion  |
 | Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | The same workflow through an offline-installed tarball, plus allowlist and independence checks       |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,

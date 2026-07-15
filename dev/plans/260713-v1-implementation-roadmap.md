@@ -2,7 +2,7 @@
 
 - Status: active program roadmap
 - Date: 2026-07-13
-- Last updated: 2026-07-14
+- Last updated: 2026-07-15
 - Foundation baseline: PR #1, merged as `601f924`
 
 ## Goal
@@ -42,16 +42,16 @@ The repository now includes:
   repository-authoritative reports;
 - renewable writer leases, transactional mutation fencing, abandoned-run
   interruption, and valid WAL recovery;
-- internal only-owned-file clear/compact maintenance and immutable ready-index
-  health inspection used by doctor;
+- internal only-owned-file clear/repair/compact maintenance and immutable
+  ready-index health inspection used by doctor;
 - one current storage baseline with durable canonical evidence, exact text,
   privacy-safe omissions, incremental whole-page reclamation, generic tool
   identity/linkage, capture time, and source-presence state;
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- public `index`, `list`, `search`, `show`, `forget`, `data compact`, and
-  `data clear` workflows
+- public `index`, `list`, `search`, `show`, `forget`, `data repair-orphans`,
+  `data compact`, and `data clear` workflows
   backed only by the provider-neutral application and storage layers;
 - filtered/cursored retained-session list plus literal lexical search over one
   immutable canonical-library snapshot, with provider-neutral query values and
@@ -63,6 +63,8 @@ The repository now includes:
   iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
   doctor remains read-only;
+- aggregate orphan-content reachability in doctor plus explicit provider-free,
+  fixed-batch canonical orphan deletion under dedicated repair ownership;
 - platform application-data storage, non-destructive missing/unknown source
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
@@ -91,8 +93,8 @@ the same retained evidence without changing adapter responsibilities.
    review, and an equivalent-dependency check. Native Node APIs remain preferred.
 8. Update current-versus-planned docs in the same pull request as behavior.
 9. Treat canonical snapshots as durable user data. Provider disappearance,
-   projection rebuild, migration, or repair never implies permission to delete
-   them.
+   projection rebuild, or migration never implies permission to delete them;
+   canonical deletion remains an explicit user operation.
 
 ## Dependency map
 
@@ -627,8 +629,9 @@ Required behavior:
   metadata may supply evidence, never policy.
 - Rebuild or repair derived FTS rows only from canonical library data during an
   explicit leased index writer operation. FTS-only damage never recommends or
-  causes canonical deletion; doctor remains read-only and no public repair
-  command exists.
+  causes canonical deletion; doctor remains read-only and no public FTS
+  projection-repair command exists. The later public orphan-repair command is a
+  separate explicit canonical-deletion operation and never rebuilds FTS.
 - Continuation cursors bind the normalized query/order contract, a persistent
   library instance identity, and the current writer generation. Query mismatch is
   invalid usage; library recreation or a later admitted writer makes the cursor
@@ -658,9 +661,18 @@ Exit gate:
   no compatibility migration or silent mode rewrite exists before launch.
 - `sessions data compact` uses dedicated renewable ownership and bounded
   incremental-vacuum transactions with truncating checkpoints between batches.
-- Forget remains logical scoped deletion. Compaction is explicit provider-free
-  physical maintenance, reports observed main-file lengths only, preserves
-  canonical/FTS evidence, and is safely rerunnable after partial durable progress.
+- Doctor reports canonical content reachability independently from canonical,
+  foreign-key, and FTS health. `sessions data repair-orphans` uses dedicated
+  renewable ownership and fixed internal committed batches to delete only
+  still-unreferenced canonical content with matching FTS rows. It reports exact
+  decimal-string row and logical UTF-8 byte totals, exposes no public batching or
+  continuation state, and is safely restartable after partial durable progress.
+- Forget remains candidate-scoped logical deletion and preserves unrelated
+  historical orphans. Orphan repair is explicit provider-free logical
+  maintenance; it never rebuilds FTS. Compaction remains separate explicit
+  provider-free physical maintenance, reports observed main-file lengths only,
+  preserves canonical/FTS evidence, and is safely rerunnable after partial
+  durable progress.
 
 ### M7 — Complete export and stabilize CLI/structured output (current)
 
