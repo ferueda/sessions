@@ -50,6 +50,7 @@ import {
 } from "./render.ts";
 
 export interface CliOutput {
+  readonly stderrIsInteractive?: boolean;
   writeOut(text: string): void;
   writeErr(text: string): void;
 }
@@ -106,6 +107,15 @@ const retainedQueryFormatOption = () =>
 const exportFormatOption = () =>
   new Option("--format <format>", "output format").choices(["json", "jsonl"]).makeOptionMandatory();
 
+const writeLongOperationNotice = (output: CliOutput, message: string): void => {
+  if (output.stderrIsInteractive !== true) return;
+  try {
+    output.writeErr(`${message}\n`);
+  } catch {
+    // Terminal feedback is best-effort and must not change command behavior.
+  }
+};
+
 export function createProgram(options: ProgramOptions): Command {
   const program = new Command();
   program
@@ -147,6 +157,10 @@ export function createProgram(options: ProgramOptions): Command {
     )
     .addOption(operationalFormatOption())
     .action(async ({ source, format }: { source?: string; format: OperationalOutputFormat }) => {
+      writeLongOperationNotice(
+        options.output,
+        "Indexing sessions; this may take a couple of minutes.",
+      );
       const report = await options.index(source);
       options.output.writeOut(renderIndex(report, format));
       if (report.incompleteSources > 0) throw new OperationalExit();
@@ -264,14 +278,24 @@ export function createProgram(options: ProgramOptions): Command {
     .description("Delete unreachable canonical content from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      options.output.writeOut(renderDataRepairOrphans(await options.repairOrphanedData(), format));
+      writeLongOperationNotice(
+        options.output,
+        "Repairing orphaned content; this may take a couple of minutes.",
+      );
+      const report = await options.repairOrphanedData();
+      options.output.writeOut(renderDataRepairOrphans(report, format));
     });
   data
     .command("compact")
     .description("Reclaim reusable whole pages from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      options.output.writeOut(renderDataCompact(await options.compactData(), format));
+      writeLongOperationNotice(
+        options.output,
+        "Compacting Sessions data; this may take a couple of minutes.",
+      );
+      const report = await options.compactData();
+      options.output.writeOut(renderDataCompact(report, format));
     });
   data
     .command("clear")

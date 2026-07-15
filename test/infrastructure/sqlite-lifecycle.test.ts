@@ -247,7 +247,13 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       reason: "migration-checksum-mismatch",
       schemaVersion: 1,
     });
+    const incompatibleMessage = [
+      "Session library was created by an incompatible pre-release build.",
+      "Use a fresh SESSIONS_DATA_DIR, or back up and remove only the Sessions-owned directory",
+      'shown by "sessions paths", then run "sessions index" again',
+    ].join(" ");
     await expect(lifecycle.openWriter(checksumPaths)).rejects.toMatchObject({
+      message: incompatibleMessage,
       state: { status: "incompatible", reason: "migration-checksum-mismatch" },
     });
     await expect(lifecycle.openReader(checksumPaths)).rejects.toMatchObject({

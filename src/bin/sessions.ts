@@ -53,6 +53,7 @@ const resolvePaths = () =>
 const exitCode = await runCli(process.argv.slice(2), {
   version,
   output: {
+    stderrIsInteractive: process.stderr.isTTY === true && process.env.TERM !== "dumb",
     writeOut: (text) => process.stdout.write(text),
     writeErr: (text) => process.stderr.write(text),
   },

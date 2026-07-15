@@ -20,6 +20,61 @@ import { runCli } from "../src/cli/run.ts";
 import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
 
 describe("sessions CLI", () => {
+  test.each([
+    {
+      argv: ["index"],
+      message: "Indexing sessions; this may take a couple of minutes.",
+    },
+    {
+      argv: ["data", "compact"],
+      message: "Compacting Sessions data; this may take a couple of minutes.",
+    },
+    {
+      argv: ["data", "repair-orphans"],
+      message: "Repairing orphaned content; this may take a couple of minutes.",
+    },
+  ])("shows a startup notice for $argv on interactive stderr", async ({ argv, message }) => {
+    const events: string[] = [];
+    const invocation = await invoke(argv, {}, { interactive: true, events });
+
+    expect(invocation.exitCode).toBe(0);
+    expect(invocation.stderr).toBe(`${message}\n`);
+    expect(events[0]).toBe(`stderr:${message}\n`);
+    expect(events.at(-1)).toMatch(/^stdout:/u);
+  });
+
+  test("does not show a notice for commands outside the three-command scope", async () => {
+    const events: string[] = [];
+    const invocation = await invoke(["data", "clear", "--yes"], {}, { interactive: true, events });
+
+    expect(invocation.exitCode).toBe(0);
+    expect(events.every((event) => !event.startsWith("stderr:"))).toBe(true);
+  });
+
+  test("reports an operational error after the startup notice", async () => {
+    const events: string[] = [];
+    const failure = new Error("index failed");
+    const invocation = await invoke(
+      ["index"],
+      {
+        index: async () => {
+          throw failure;
+        },
+      },
+      { interactive: true, events },
+    );
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: `Indexing sessions; this may take a couple of minutes.\nsessions: ${failure.message}\n`,
+    });
+    expect(events).toEqual([
+      "stderr:Indexing sessions; this may take a couple of minutes.\n",
+      `stderr:sessions: ${failure.message}\n`,
+    ]);
+  });
+
   test("shows the current command surface", async () => {
     const invocation = await invoke([]);
 
@@ -610,6 +665,7 @@ describe("sessions CLI", () => {
 async function invoke(
   argv: readonly string[],
   overrides: Partial<Omit<ProgramOptions, "output" | "version">> = {},
+  terminal: { readonly interactive?: boolean; readonly events?: string[] } = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
@@ -636,11 +692,18 @@ async function invoke(
     ...defaults,
     ...overrides,
     output: {
+      ...(terminal.interactive === true
+        ? {
+            stderrIsInteractive: true,
+          }
+        : {}),
       writeOut: (text) => {
         stdout += text;
+        terminal.events?.push(`stdout:${text}`);
       },
       writeErr: (text) => {
         stderr += text;
+        terminal.events?.push(`stderr:${text}`);
       },
     },
   });

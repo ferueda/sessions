@@ -179,7 +179,10 @@ Current state values are `uninitialized`, `ready`, `migration-required`,
 
 The human format presents the same fields. An incompatible state is still a paths
 report and exits `0`; doctor evaluates health. Resolution/inspection failure emits
-no partial report and exits `1`.
+no partial report and exits `1`. A pre-release migration-checksum mismatch fails
+closed with recovery guidance: select a fresh `SESSIONS_DATA_DIR`, or back up and
+remove only the obsolete Sessions-owned directory reported by `sessions paths`,
+then index again. `data clear` does not claim that incompatible database.
 
 ## Remaining V1 commands
 
@@ -607,6 +610,13 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 - Exit `0`: success, including an empty result set.
 - Exit `1`: operational or capability failure.
 - Exit `2`: invalid command, flag, value, or required argument.
+
+`sessions index`, `sessions data repair-orphans`, and `sessions data compact`
+write one startup notice to interactive stderr warning that the operation may
+take a couple of minutes. Redirected or captured stderr remains quiet on
+success. This is expectation-setting only: it exposes no percentage, elapsed
+time, work total, ETA, cursor, partial outcome, or machine-readable progress
+contract.
 
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 Concurrent index/forget/repair/compact/clear ownership is a sanitized
