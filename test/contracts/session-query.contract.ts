@@ -35,6 +35,7 @@ export function runSessionQueryContract(
           filter: {
             source: corpus.present.identity.source.kind,
             instance: corpus.present.identity.source.instanceId,
+            nativeId: corpus.present.identity.nativeId,
             sourceState: "present",
             workspace: corpus.present.workspace,
             capturedAfter: before(SESSION_QUERY_CONTRACT_TIMES.present),
@@ -62,6 +63,77 @@ export function runSessionQueryContract(
           }),
         ),
       ).resolves.toEqual({ sessions: [] });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("finds retained sessions by exact provider-native ID", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    try {
+      const expected = corpus.ranking.binaryOrder.filter(
+        ({ identity }) => identity.nativeId === "same",
+      );
+      const narrowTarget = expected[1];
+      if (narrowTarget === undefined) throw new Error("Native-ID fixture requires two matches");
+      const listed = await fixture.query.list(
+        createSessionListQuery({
+          filter: { nativeId: "same" },
+          limit: 200,
+        }),
+      );
+      const searched = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "binaryrank",
+          filter: { nativeId: "same" },
+          limit: 20,
+          context: 0,
+        }),
+      );
+      const narrowed = await fixture.query.list(
+        createSessionListQuery({
+          filter: {
+            source: narrowTarget.identity.source.kind,
+            instance: narrowTarget.identity.source.instanceId,
+            nativeId: "same",
+          },
+          limit: 200,
+        }),
+      );
+      const wrongCase = await fixture.query.list(
+        createSessionListQuery({
+          filter: { nativeId: "Same" },
+          limit: 200,
+        }),
+      );
+      const contradictory = await fixture.query.list(
+        createSessionListQuery({
+          filter: {
+            nativeId: corpus.missing.identity.nativeId,
+            session: corpus.present.identity,
+          },
+          limit: 200,
+        }),
+      );
+
+      expect(listed.sessions.map(({ identity }) => key(identity))).toEqual(
+        expected.map(({ identity }) => key(identity)),
+      );
+      expect(searched.hits.map(({ session }) => key(session.identity))).toEqual(
+        expected.map(({ identity }) => key(identity)),
+      );
+      expect(searched.support).toEqual({
+        occurrences: 2,
+        uniqueContent: 1,
+        uniqueKnownRoots: 2,
+        unknownLineageSessions: 0,
+      });
+      expect(narrowed.sessions.map(({ identity }) => key(identity))).toEqual([
+        key(narrowTarget.identity),
+      ]);
+      expect(wrongCase.sessions).toEqual([]);
+      expect(contradictory.sessions).toEqual([]);
     } finally {
       await fixture.close();
     }

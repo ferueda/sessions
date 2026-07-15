@@ -40,6 +40,7 @@ Index the default local Codex installation, then inspect its retained copy:
 node dist/bin/sessions.js doctor
 node dist/bin/sessions.js index --source codex
 node dist/bin/sessions.js list
+node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
 node dist/bin/sessions.js search 'query engine' --context 2
 node dist/bin/sessions.js search -- '-term'
 node dist/bin/sessions.js show '<canonical-id>'
@@ -62,6 +63,13 @@ sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
+
+Use the shared exact `--native-id` filter with `list` to resolve a known
+provider-native session or thread ID to its canonical Sessions identity. It may
+return more than one retained session across source instances; add `--source`
+and `--instance` to narrow the match. The same filter scopes transcript
+`search`, while `show`, `export`, and `forget` continue to require the
+unambiguous canonical ID returned by list.
 
 `index` is the only ordinary command that reads Codex transcripts or initializes
 the library. It copies normalized evidence into Sessions-owned application data;

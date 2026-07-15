@@ -48,6 +48,7 @@ function appendCommonFilters(
 ): void {
   appendExact(conditions, parameters, "source.kind", filter.source);
   appendExact(conditions, parameters, "source.instance_id", filter.instance);
+  appendExact(conditions, parameters, "tracking.native_id", filter.nativeId);
   appendExact(conditions, parameters, EFFECTIVE_SOURCE_STATE_SQL, filter.sourceState);
   appendExact(conditions, parameters, "canonical.workspace", filter.workspace);
   appendExclusiveBound(conditions, parameters, "tracking.captured_at", ">", filter.capturedAfter);

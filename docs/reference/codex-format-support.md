@@ -130,6 +130,8 @@ does not emit content or lineage. Optional `session_id` is independently
 validated as a non-empty, well-formed group identity shared by a root thread and
 its descendants. It may differ from `id`, is not retained or projected, and is
 not direct lineage evidence.
+The shared CLI `--native-id` filter therefore matches the retained thread `id`,
+not this discarded group identity.
 
 A state-database spawn edge is authoritative and produces one high-confidence
 `parent` relation. Metadata IDs may only confirm that parent. Without a state
