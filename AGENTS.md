@@ -28,6 +28,7 @@ Work style: concise, evidence-backed, root-cause first.
 - Privacy contract: `docs/privacy.md`
 - CLI contract: `docs/reference/cli-contract.md`
 - Contributor index: `docs/contributing/index.md`
+- Testing: [canonical guide](docs/contributing/testing.md)
 - Active plans: `dev/plans/README.md`
 
 ## Verification

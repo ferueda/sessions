@@ -1,78 +1,141 @@
 # Testing
 
-Tests prove contracts at the highest stable seam that can observe them. They are deterministic and offline unless a command is explicitly a dependency/release operation.
+## Purpose
+
+Tests are part of the Sessions engineering harness. They keep canonical data,
+read-only provider boundaries, local persistence, CLI behavior, and package
+delivery visible while humans and agents change the repository.
+
+The goal is high-confidence feedback at the cheapest stable boundary, not maximum
+test count. This is the canonical testing strategy; other contributor docs should
+link here. [`package.json`](../../package.json) owns executable commands, and
+[commands](commands.md) documents their effects.
+
+## Principles
+
+- Encode durable intent: stable outcomes, contracts, and forbidden side effects,
+  not private call order, broad snapshots, incidental formatting, or prose.
+- Prefer a small, high-signal suite. Every slower test must justify its cost.
+- Choose the narrowest stable seam that proves the behavior. Add another layer
+  only for a materially different failure mode.
+- Keep related assertions in a coherent workflow-shaped test: set up the world,
+  act, then assert important intermediate and final outcomes.
+- Prefer explicit local setup and ready-to-run factories. Avoid hidden fixtures,
+  order dependencies, and shared mutable state.
+- Do not test guarantees already enforced by strict TypeScript.
+- Keep routine proof deterministic and offline. Never depend on contributor
+  provider/library state, external credentials, public networks, or sleeps.
+- At state boundaries, cover meaningful failure: incomplete discovery cannot
+  infer absence, missing sources retain canonical rows, inspection stays
+  non-mutating, and writers use the coordinated lifecycle.
+- Add regression coverage when a stable seam protects a realistic repeat
+  failure; do not manufacture brittle proof for a one-off symptom.
+- Keep a high bar for SQLite integration, subprocess, smoke, E2E, and live tests.
 
 ## Layers
 
-| Layer                   | Proves                                                                                       |
-| ----------------------- | -------------------------------------------------------------------------------------------- |
-| Domain/application unit | Canonical rules, probe aggregation, indexing/reconciliation decisions                        |
-| Provider golden fixture | Faithful parsing and malformed-format behavior                                               |
-| Adapter conformance     | Shared `probe`/`discover`/`read` contract and read-only operation                            |
-| SQLite integration      | Migrations, transactions, FTS behavior, permissions, last-good state                         |
-| Query corpus/contract   | Literal FTS, filters, rank/ties, cursors, context, lineage, and support units                |
-| CLI contract            | Arguments, streams, exit codes, human/structured schemas, bounded output                     |
-| Dist smoke              | Compiled JavaScript entrypoint works                                                         |
-| Package smoke           | Allowlisted tarball installs offline from the populated pnpm store and generated binary runs |
-| Docs contract           | Required routes exist and no contributor-machine paths drift in                              |
+All current Vitest suites live under `test/`; `vitest.config.ts` also permits
+`src/**/*.test.ts`. Smokes live in `scripts/`, outside default discovery.
 
-Canonical domain/application contracts, synthetic adapter conformance,
-programmable fake-source indexing, fresh-baseline bootstrap, obsolete-development-
-schema rejection, current writer fencing, real-SQLite non-destructive
-reconciliation, forget/all-data maintenance, immutable library health, and the
-complete current CLI contract run today. The Codex proof uses
-generated current/base/optional state schemas plus plain/Zstandard rollouts and
-active-WAL capture stress; it never reads developer history. M6 query proofs use
-a checked-in generic corpus and temporary SQLite libraries. Export and Cursor
-contracts arrive with their milestones.
+| Layer                 | Current placement                                                               | Proves                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, query values, hashes, identity, parsing, bounds                                |
+| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/forget, failures                        |
+| Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation         |
+| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows                     |
+| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                            |
+| CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
+| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
+| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus one synthetic Codex index/search/next-cursor/show journey                       |
+| Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | Tarball allowlist, offline install, installed binary independence and wiring                         |
 
-## Commands
+There is no separate E2E framework, system-smoke lane, networked provider test,
+or authenticated live command today. Export, Cursor, and the packaged Agent
+Skill remain planned rather than current coverage.
+
+## Choosing proof
+
+| Change                                    | Preferred proof                                                            | Focused command                                              | Handoff                                                   |
+| ----------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
+| Domain value, validator, hash, identity   | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                       | `pnpm check`                                              |
+| Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                  | `pnpm check`                                              |
+| Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`               | `pnpm check`                                              |
+| Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`               | `pnpm check`                                              |
+| Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | `pnpm test test/application/search-sessions.test.ts`         | `pnpm check`                                              |
+| CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                 | `pnpm check`                                              |
+| Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                            | `pnpm check`                                              |
+| Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                            | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
+| Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package` | `pnpm check`                                              |
+
+Do not repeat one acceptance criterion at every layer.
+
+## Authoring
+
+| Concern         | Guidance                                                                                                                                                                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Placement       | Mirror the owner under `test/domain`, `application`, `adapters`, or `infrastructure`; use `test/contracts` for reusable guarantees, `test/fixtures` for generated builders, and root `test/*.test.ts` only for cross-layer contracts.                     |
+| Shape and names | Name behavior plus consequence. Keep one coherent journey together; use `test.each` for a real invariant matrix. Existing shallow `describe` and cleanup-only `afterEach` use need not be normalized; prefer top-level tests and local setup in new work. |
+| Runner          | Vitest uses Node, imported APIs, automatic mock restoration, and a 30-second timeout. Reset mocks manually only for a mid-workflow boundary.                                                                                                              |
+| Setup and state | Factories return ready-to-run sources, documents, or lifecycles. Use generic synthetic data, deterministic IDs/clocks, in-memory SQLite when file lifecycle is irrelevant, and explicit temporary `CODEX_HOME`/`SESSIONS_DATA_DIR`.                       |
+| Resources       | Use `mkdtemp` under the OS temp directory. Close databases/readers/writers/workers/processes, then clean with `try/finally`, fixture `dispose()`, or a cleanup hook. Add `using` only when real disposal exists.                                          |
+| Assertions      | Match stable structured contracts exactly and unrelated fields partially. Also assert forbidden effects: unchanged provider bytes, absent state, retained rows, empty stderr, or no private paths.                                                        |
+| Subprocesses    | Prefer `runCli`; spawn only for a real process seam. Isolate cwd/env, capture status/stdout/stderr, expect quiet success, and include useful failure diagnostics. Await real state rather than sleeping.                                                  |
+| Prose/config    | Test parsed configuration, schemas, routes, metadata, rendered structure, or the smallest safety sentinel. Do not pin full prompts, help, docs, descriptions, or instructional copy without durable meaning.                                              |
+
+## Smoke and live policy
+
+The current dist and package smokes spawn production-built entrypoints against
+generated Codex state and isolated Sessions data. The package smoke installs
+offline from the populated pnpm store. Both clean temporary roots in `finally`
+and capture command/assertion context on failure.
+
+Add or broaden a smoke only for a critical journey that faster layers cannot
+credibly prove. Keep edge-case matrices focused. Use production-supported seams
+and local fakes; isolate any repositories, stores, roots, ports, and fake
+credentials. Clean on success and keep failure output bounded, or retain one
+bounded diagnostic root with an explicit cleanup protocol.
+
+No authenticated live protocol exists today. A future one must be opt-in and
+document authority, credential names/source (never values), disposable targets,
+stop conditions, redaction, and cleanup. Keep it outside Vitest, pre-commit,
+`pnpm check`, and routine CI. Live results are operational evidence, not
+deterministic regression coverage.
+
+## Verification
+
+Iterate with one focused path:
 
 ```bash
-pnpm test
-pnpm test:docs
-pnpm test:watch
-pnpm typecheck
-pnpm deps:check
-pnpm smoke:dist
-pnpm smoke:package
-pnpm check
-pnpm check:docs
+pnpm test test/application/run-index.test.ts
+pnpm test test/application/search-sessions.test.ts
+pnpm test test/adapters/codex/source.test.ts
+pnpm test test/application/codex-vertical-slice.sqlite.test.ts
+pnpm test test/cli.test.ts
 ```
 
-`pnpm check` is the definition of done: format, lint, dependency graph, types, tests, build, dist smoke, then packed-install smoke. CI invokes the same gate.
+Use `pnpm test:watch <path>` for watch mode. Add `pnpm typecheck`,
+`pnpm deps:check`, or `pnpm check:docs` when that contract changes.
 
-CI classifies the complete pull-request or push diff. A diff containing only
-Markdown files runs `pnpm check:docs` on Ubuntu; the required macOS and Windows
-check contexts complete without dependency setup or tests. Any non-Markdown path
-runs the full gate on all three operating systems. `pnpm check:docs` is a CI
-optimization, not a substitute for `pnpm check` before merging implementation.
+`pnpm check` is the local handoff gate: format, lint, dependency boundaries,
+types, Vitest, build, dist smoke, and package smoke. Repository policy requires
+it after the focused docs gate even for documentation-only local handoff.
 
-## Test rules
+CI classifies the complete diff. Markdown-only changes run `pnpm check:docs` on
+Ubuntu while required macOS/Windows contexts take their skip path. Any
+non-Markdown path runs `pnpm check:ci` (currently `pnpm check`) on all three.
+The main ruleset requires all three `Check (<os>)` contexts.
 
-- Isolate mutable state and clean temporary directories.
-- Await asynchronous work and assertions.
-- Prefer specific behavioral assertions over broad snapshots.
-- Use synthetic provider data and temporary provider/application-data paths.
-- Never call provider services or the network in unit/integration tests.
-- Test an operational failure as well as success when adding a state boundary.
-- Fully exhaust discovery before mutation; prove incomplete scans cannot reconcile deletions.
-- For M5 and later, prove complete scans mark unseen retained sessions missing
-  without deleting canonical rows, while unavailable or incomplete scans prove no
-  absence. Projection rebuilds preserve canonical rows; only explicit
-  forget/data-clear cases exercise transcript deletion.
-- Use injected clocks and fake schedulers for lease/heartbeat tests; do not sleep.
-- After compatibility begins with the first published release, any migration that
-  changes lease semantics must prove old-schema ownership is arbitrated and fenced
-  before table changes. Pre-alpha baseline changes instead reject obsolete
-  development databases without mutation.
-- Prove inspection commands preserve database bytes, timestamps, run rows, directory entries, and absent state.
-- Prove fresh-library list returns an empty success without opening a reader,
-  creating state, or resolving a provider.
-- Exercise writer behavior only through the coordinated lifecycle; do not construct an unguarded production writer.
-- For an adapter using a frozen discovery generation, distinguish snapshot-owned
-  inputs from live read inputs in conformance fixtures. Prove lease-scoped
-  workspace cleanup/error aggregation and fail the Codex milestone unless
-  concurrent writer/checkpoint/WAL-reset stress always captures one complete
-  committed generation without provider mutation.
-- Keep hooks cheap; passing a hook is not repository approval.
+Run a smoke directly only while changing its build/install/process boundary; the
+full gate already runs both. No current change requires live verification.
+Report focused checks, the final gate, and any skipped smoke/live check with its
+reason.
+
+## Maintenance
+
+- Turn repeated review feedback into this guide, focused tests, lint/schema
+  rules, scripts, or CI—in that order of increasing enforcement cost.
+- Pre-commit formats/lints staged files and typechecks. It is hygiene, not done.
+- Avoid drifting inventories: `package.json`, `vitest.config.ts`, and
+  `.github/workflows/ci.yml` own execution; [commands](commands.md) owns effects.
+- Update this guide for a genuinely new layer. Keep current/planned behavior
+  explicit and do not normalize unrelated tests.
