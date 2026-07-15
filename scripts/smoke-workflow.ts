@@ -12,7 +12,7 @@ export interface SmokeCommandResult {
   readonly stderr: string;
 }
 
-export interface M6SmokeWorkflowOptions {
+export interface SmokeWorkflowOptions {
   readonly temporaryRoot: string;
   readonly run: (args: readonly string[], environment: NodeJS.ProcessEnv) => SmokeCommandResult;
 }
@@ -29,7 +29,7 @@ const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_I
 const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
 
 /** Exercise the complete distribution journey through a spawned CLI, never through imports. */
-export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promise<void> {
+export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<void> {
   const fixture = await createCodexSourceFixture();
   const dataDirectory = path.join(options.temporaryRoot, "sessions-data");
   const oldCacheDirectory = path.join(options.temporaryRoot, "old-sessions-cache");
@@ -540,7 +540,7 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
 }
 
 async function stableProviderCommand(
-  options: M6SmokeWorkflowOptions,
+  options: SmokeWorkflowOptions,
   providerRoot: string,
   environment: NodeJS.ProcessEnv,
   args: readonly string[],

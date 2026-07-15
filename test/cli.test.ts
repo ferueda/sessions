@@ -20,7 +20,7 @@ import { runCli } from "../src/cli/run.ts";
 import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
 
 describe("sessions CLI", () => {
-  test("shows the M6 command surface", async () => {
+  test("shows the current command surface", async () => {
     const invocation = await invoke([]);
 
     expect(invocation.exitCode).toBe(0);

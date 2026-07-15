@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isPathWithin } from "./path-containment.ts";
-import { runM6SmokeWorkflow } from "./smoke-m6-workflow.ts";
+import { runSmokeWorkflow } from "./smoke-workflow.ts";
 
 interface PackedFile {
   readonly path: string;
@@ -79,7 +79,7 @@ try {
     throw new Error(`installed binary returned an invalid version: ${version.stdout}`);
   }
 
-  await runM6SmokeWorkflow({
+  await runSmokeWorkflow({
     temporaryRoot,
     run: (args, environment) =>
       run(process.execPath, [installedBinary, ...args], project, false, environment),
