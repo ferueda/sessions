@@ -8,6 +8,12 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
+import {
+  digestPublicSessionDocument,
+  projectPublicSessionDocument,
+  SESSION_DOCUMENT_DIGEST_SCHEME,
+} from "../../src/domain/public-session-document.ts";
+import type { SessionDocument } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
@@ -239,6 +245,19 @@ describe("SQLite ready-index health", () => {
     await expectCanonicalIntegrityFailure(paths);
   });
 
+  test("classifies a document digest mismatch as canonical rather than FTS damage", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      seedValidEmptyCanonicalSession(database);
+      database
+        .prepare("UPDATE sessions_canonical_sessions SET document_digest = zeroblob(32)")
+        .run();
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
   test.each([
     "coverage_observed_at",
     "presence_observed_at",
@@ -359,10 +378,11 @@ describe("SQLite ready-index health", () => {
         .run(fixture.sessionId);
       database
         .prepare(
-          `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage)
-           VALUES (?, 'unknown')`,
+          `INSERT INTO sessions_canonical_sessions (
+             session_id, lineage_coverage, document_digest_scheme, document_digest
+           ) VALUES (?, 'unknown', ?, ?)`,
         )
-        .run(fixture.sessionId);
+        .run(fixture.sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(32));
       database
         .prepare(
           `INSERT INTO sessions_entries (
@@ -525,6 +545,50 @@ function seedValidTrackingOnly(database: DatabaseSync): TrackingOnlyFixture {
     sourceInstanceId: source.lastInsertRowid,
     sessionId: tracking.lastInsertRowid,
   };
+}
+
+function seedValidEmptyCanonicalSession(database: DatabaseSync): void {
+  const fixture = seedValidTrackingOnly(database);
+  const observedAt = "2026-07-14T12:00:00.000Z";
+  const document: SessionDocument = {
+    identity: {
+      source: { kind: "synthetic", instanceId: "tracking-only" },
+      nativeId: "failed-session",
+    },
+    lineageCoverage: "unknown",
+    relations: [],
+    entries: [],
+  };
+  const digest = digestPublicSessionDocument(projectPublicSessionDocument(document));
+  database
+    .prepare(
+      `UPDATE sessions_source_instances
+       SET coverage_observed_at = ?
+       WHERE source_instance_id = ?`,
+    )
+    .run(observedAt, fixture.sourceInstanceId);
+  database
+    .prepare(
+      `UPDATE sessions_session_tracking
+       SET last_good_fingerprint_scheme = latest_fingerprint_scheme,
+           last_good_fingerprint_digest = latest_fingerprint_digest,
+           last_good_adapter_version = latest_adapter_version,
+           latest_outcome = 'indexed',
+           latest_failure_code = NULL,
+           presence_observed_at = ?,
+           captured_at = ?,
+           last_seen_at = ?
+       WHERE session_id = ?`,
+    )
+    .run(observedAt, observedAt, observedAt, fixture.sessionId);
+  const stored = Buffer.from(digest.digest, "hex");
+  database
+    .prepare(
+      `INSERT INTO sessions_canonical_sessions (
+         session_id, lineage_coverage, document_digest_scheme, document_digest
+       ) VALUES (?, 'unknown', ?, ?)`,
+    )
+    .run(fixture.sessionId, digest.scheme, stored);
 }
 
 function corruptObservationTimestamp(

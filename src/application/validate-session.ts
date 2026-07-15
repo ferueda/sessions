@@ -12,6 +12,11 @@ import {
   type SessionValidationIssue,
 } from "../domain/session-validation.ts";
 import { isSessionIdentity } from "../domain/session-identity.ts";
+import {
+  digestPublicSessionDocument,
+  projectPublicSessionDocument,
+  type SessionDocumentDigest,
+} from "../domain/public-session-document.ts";
 import type { SessionDocument, SessionIdentity, SourceInstance } from "../domain/session.ts";
 
 const observationBrand: unique symbol = Symbol("SessionObservation");
@@ -39,6 +44,7 @@ export interface ValidatedSessionReplacement {
   readonly [replacementBrand]: true;
   readonly observation: SessionObservation;
   readonly document: SessionDocument;
+  readonly documentDigest: SessionDocumentDigest;
 }
 
 export type SessionObservationIssueCode =
@@ -333,12 +339,15 @@ export function admitSessionReplacement(
   if (!result.ok) return result;
 
   const document = freezeDocument(result.document);
+  const publicDocument = projectPublicSessionDocument(document);
+  const documentDigest = digestPublicSessionDocument(publicDocument);
   return {
     ok: true,
     replacement: Object.freeze({
       [replacementBrand]: true as const,
       observation,
       document,
+      documentDigest,
     }),
   };
 }

@@ -99,7 +99,18 @@ function sessionWithEntries(count: number): IndexedSession {
     createTestEntry({ ordinal, content: [] }),
   );
   return {
-    summary: { identity, freshness: "current", sourceState: "present" },
+    summary: {
+      identity,
+      freshness: "current",
+      sourceState: "present",
+      capturedAt: "2026-07-15T12:00:00.000Z",
+      sourceObservedAt: "2026-07-15T12:00:00.000Z",
+      adapterVersion: "synthetic-v1",
+      documentDigest: {
+        scheme: "sha256-sessions-document-jcs-v1",
+        digest: "0".repeat(64),
+      },
+    },
     document: { identity, lineageCoverage: "unknown", relations: [], entries },
   };
 }

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { SESSION_DOCUMENT_DIGEST_SCHEME } from "../../src/domain/public-session-document.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import type { Fts5SecurityCapability } from "../../src/infrastructure/sqlite/fts5-security.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
@@ -315,10 +316,11 @@ function seedReferencedContent(paths: IndexPaths, contentId: bigint, text: strin
       .run(sourceId).lastInsertRowid;
     database
       .prepare(
-        `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage)
-         VALUES (?, 'unknown')`,
+        `INSERT INTO sessions_canonical_sessions (
+           session_id, lineage_coverage, document_digest_scheme, document_digest
+         ) VALUES (?, 'unknown', ?, ?)`,
       )
-      .run(sessionId);
+      .run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(32));
     database
       .prepare(
         `INSERT INTO sessions_entries (session_id, ordinal, kind, actor, source_locator_uri)

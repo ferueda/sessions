@@ -1,4 +1,5 @@
 import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
+import type { SessionDocumentDigest } from "./public-session-document.ts";
 import { isSessionIdentity } from "./session-identity.ts";
 import type { Actor, ContentOrigin, OriginConfidence, SessionIdentity } from "./session.ts";
 import { splitUnicodeWhitespaceTerms } from "./unicode-whitespace.ts";
@@ -85,7 +86,10 @@ export interface SessionQuerySummary {
   readonly updatedAt?: string;
   readonly freshness: "current" | "stale";
   readonly sourceState: SessionSourceState;
-  readonly capturedAt?: string;
+  readonly capturedAt: string;
+  readonly sourceObservedAt: string;
+  readonly adapterVersion: string;
+  readonly documentDigest: SessionDocumentDigest;
 }
 
 export interface SessionListPage {

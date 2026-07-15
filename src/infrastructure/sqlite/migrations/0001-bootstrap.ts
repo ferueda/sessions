@@ -80,7 +80,11 @@ CREATE TABLE sessions_canonical_sessions (
   title TEXT,
   workspace TEXT,
   created_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  document_digest_scheme TEXT NOT NULL COLLATE BINARY
+    CHECK (document_digest_scheme = 'sha256-sessions-document-jcs-v1'),
+  document_digest BLOB NOT NULL
+    CHECK (typeof(document_digest) = 'blob' AND length(document_digest) = 32)
 ) STRICT;
 
 CREATE TABLE sessions_relations (

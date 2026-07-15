@@ -1,6 +1,12 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import { validateSessionDocument } from "../../domain/session-validation.ts";
+import {
+  digestPublicSessionDocument,
+  projectPublicSessionDocument,
+  sameSessionDocumentDigest,
+  type SessionDocumentDigest,
+} from "../../domain/public-session-document.ts";
 import { isCanonicalSourceType, isContentClass } from "../../domain/source-type.ts";
 import type {
   ContentSegment,
@@ -15,13 +21,19 @@ import {
   readSessionContentCandidates,
 } from "./sqlite-content-maintenance.ts";
 import { decodeSqliteContentDigest, encodeSqliteContentDigest } from "./sqlite-content-digest.ts";
+import {
+  decodeSqliteDocumentDigest,
+  encodeSqliteDocumentDigest,
+} from "./sqlite-document-digest.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
 export function replaceCanonicalDocument(
   database: DatabaseSync,
   sessionId: number,
   document: SessionDocument,
+  documentDigest: SessionDocumentDigest,
 ): void {
+  const storedDigest = encodeSqliteDocumentDigest(documentDigest);
   const obsoleteContentCandidates = readSessionContentCandidates(database, sessionId);
   // Replacement keeps its established fail-closed JS-safe canonical ID boundary;
   // storage maintenance uses the shared helper with full signed SQLite IDs.
@@ -35,8 +47,10 @@ export function replaceCanonicalDocument(
          title,
          workspace,
          created_at,
-         updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
+         updated_at,
+         document_digest_scheme,
+         document_digest
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       sessionId,
@@ -45,6 +59,8 @@ export function replaceCanonicalDocument(
       document.workspace ?? null,
       document.createdAt ?? null,
       document.updatedAt ?? null,
+      storedDigest.scheme,
+      storedDigest.bytes,
     );
 
   insertRelations(database, sessionId, document.relations);
@@ -57,9 +73,23 @@ export function readCanonicalDocument(
   identity: SessionIdentity,
   sessionId: number,
 ): SessionDocument | undefined {
+  return readCanonicalDocumentRecord(database, identity, sessionId)?.document;
+}
+
+export interface CanonicalDocumentRecord {
+  readonly document: SessionDocument;
+  readonly documentDigest: SessionDocumentDigest;
+}
+
+export function readCanonicalDocumentRecord(
+  database: DatabaseSync,
+  identity: SessionIdentity,
+  sessionId: number,
+): CanonicalDocumentRecord | undefined {
   const session = database
     .prepare(
-      `SELECT lineage_coverage, title, workspace, created_at, updated_at
+      `SELECT lineage_coverage, title, workspace, created_at, updated_at,
+              document_digest_scheme, document_digest
        FROM sessions_canonical_sessions
        WHERE session_id = ?`,
     )
@@ -80,7 +110,17 @@ export function readCanonicalDocument(
   };
   const validated = validateSessionDocument(candidate, { expectedIdentity: identity });
   if (!validated.ok) throw new SqliteSessionIndexError("corrupt-data");
-  return validated.document;
+  const storedDigest = decodeSqliteDocumentDigest(
+    session.document_digest_scheme,
+    session.document_digest,
+  );
+  const computedDigest = digestPublicSessionDocument(
+    projectPublicSessionDocument(validated.document),
+  );
+  if (!sameSessionDocumentDigest(storedDigest, computedDigest)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return { document: validated.document, documentDigest: storedDigest };
 }
 
 function insertRelations(
@@ -416,6 +456,8 @@ interface SessionRow {
   readonly workspace: string | null;
   readonly created_at: string | null;
   readonly updated_at: string | null;
+  readonly document_digest_scheme: unknown;
+  readonly document_digest: unknown;
 }
 
 function lineageCoverageAt(value: unknown): SessionDocument["lineageCoverage"] {

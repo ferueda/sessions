@@ -5,14 +5,16 @@ export interface SqliteQueryWhere {
   readonly parameters: readonly string[];
 }
 
-const SOURCE_STATE_SQL = `CASE
+export const EFFECTIVE_SOURCE_STATE_SQL = `CASE
   WHEN source.coverage_status = 'unknown' THEN 'unknown'
-  ELSE tracking.presence_status
+  WHEN source.coverage_status = 'complete' THEN tracking.presence_status
+  ELSE NULL
 END`;
 
-const OBSERVATION_TIME_SQL = `CASE
+export const EFFECTIVE_SOURCE_OBSERVED_AT_SQL = `CASE
   WHEN source.coverage_status = 'unknown' THEN source.coverage_observed_at
-  ELSE tracking.presence_observed_at
+  WHEN source.coverage_status = 'complete' THEN tracking.presence_observed_at
+  ELSE NULL
 END`;
 
 export function sessionWhere(filter: SessionFilter): SqliteQueryWhere {
@@ -46,12 +48,24 @@ function appendCommonFilters(
 ): void {
   appendExact(conditions, parameters, "source.kind", filter.source);
   appendExact(conditions, parameters, "source.instance_id", filter.instance);
-  appendExact(conditions, parameters, SOURCE_STATE_SQL, filter.sourceState);
+  appendExact(conditions, parameters, EFFECTIVE_SOURCE_STATE_SQL, filter.sourceState);
   appendExact(conditions, parameters, "canonical.workspace", filter.workspace);
   appendExclusiveBound(conditions, parameters, "tracking.captured_at", ">", filter.capturedAfter);
   appendExclusiveBound(conditions, parameters, "tracking.captured_at", "<", filter.capturedBefore);
-  appendExclusiveBound(conditions, parameters, OBSERVATION_TIME_SQL, ">", filter.observedAfter);
-  appendExclusiveBound(conditions, parameters, OBSERVATION_TIME_SQL, "<", filter.observedBefore);
+  appendExclusiveBound(
+    conditions,
+    parameters,
+    EFFECTIVE_SOURCE_OBSERVED_AT_SQL,
+    ">",
+    filter.observedAfter,
+  );
+  appendExclusiveBound(
+    conditions,
+    parameters,
+    EFFECTIVE_SOURCE_OBSERVED_AT_SQL,
+    "<",
+    filter.observedBefore,
+  );
   if (filter.session !== undefined) {
     appendExact(conditions, parameters, "source.kind", filter.session.source.kind);
     appendExact(conditions, parameters, "source.instance_id", filter.session.source.instanceId);

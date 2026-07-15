@@ -6,6 +6,7 @@ import {
   applyMigrations,
   readMigrationHistory,
 } from "../../src/infrastructure/sqlite/migrations.ts";
+import { SESSION_DOCUMENT_DIGEST_SCHEME } from "../../src/domain/public-session-document.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 
 const DIGEST = "a".repeat(64);
@@ -41,7 +42,16 @@ describe("canonical SQLite baseline", () => {
       expect(tableColumns(database, "sessions_entries")).toEqual(
         expect.arrayContaining(["tool_name", "tool_namespace"]),
       );
-      expect(tableColumns(database, "sessions_canonical_sessions")).toContain("lineage_coverage");
+      expect(tableColumns(database, "sessions_canonical_sessions")).toEqual([
+        "session_id",
+        "lineage_coverage",
+        "title",
+        "workspace",
+        "created_at",
+        "updated_at",
+        "document_digest_scheme",
+        "document_digest",
+      ]);
       expect(tableColumns(database, "sessions_content_values")).toEqual([
         "content_id",
         "digest",
@@ -291,6 +301,39 @@ describe("canonical SQLite baseline", () => {
     }
   });
 
+  test("requires the fixed document digest scheme and strict SHA-256 bytes", () => {
+    const database = migratedDatabase();
+    try {
+      const { sessionId } = insertTrackedSession(database);
+      database
+        .prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?")
+        .run(sessionId);
+      const insert = database.prepare(
+        `INSERT INTO sessions_canonical_sessions (
+           session_id, lineage_coverage, document_digest_scheme, document_digest
+         ) VALUES (?, 'unknown', ?, ?)`,
+      );
+
+      expect(() => insert.run(sessionId, "unknown-digest-v1", new Uint8Array(32))).toThrow(
+        /CHECK constraint failed/u,
+      );
+      expect(() => insert.run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, "0".repeat(64))).toThrow(
+        /cannot store TEXT value in BLOB column/u,
+      );
+      expect(() =>
+        insert.run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(31)),
+      ).toThrow(/CHECK constraint failed/u);
+      expect(() =>
+        insert.run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(33)),
+      ).toThrow(/CHECK constraint failed/u);
+      expect(() =>
+        insert.run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(32)),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   test("enforces current revisions, run-item outcomes, and the diagnostic-item cap", () => {
     const database = migratedDatabase();
     try {
@@ -459,10 +502,11 @@ function insertTrackedSession(database: DatabaseSync): { readonly sessionId: num
   const sessionId = Number(row.session_id);
   database
     .prepare(
-      `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage, title)
-       VALUES (?, 'complete', 'Proof')`,
+      `INSERT INTO sessions_canonical_sessions (
+         session_id, lineage_coverage, title, document_digest_scheme, document_digest
+       ) VALUES (?, 'complete', 'Proof', ?, ?)`,
     )
-    .run(sessionId);
+    .run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(32));
   return { sessionId };
 }
 
