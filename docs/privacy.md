@@ -1,6 +1,6 @@
 # Privacy contract
 
-- Status: M5 behavior implemented; later V1 behavior labeled
+- Status: M6 behavior implemented; later V1 behavior labeled
 - Last updated: 2026-07-14
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
@@ -16,15 +16,15 @@ not a best-effort feature.
 - A complete later scan can mark a retained session `missing`; unavailable,
   unreadable, malformed, changing, or incomplete discovery proves no absence.
   Neither case automatically deletes retained content.
-- List and show use only the Sessions library after indexing. They never reopen a
-  provider transcript.
+- List, search, and show use only the Sessions library after indexing. They never
+  reopen a provider transcript.
 - No TTL or automatic pruning exists. Only explicit `sessions forget` or
   `sessions data clear --yes` removes retained content.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
 
-Search, portable export, Cursor, library import/restore, and automatic analysis
-are not current commands.
+Portable export, Cursor, library import/restore, and automatic analysis are not
+current commands.
 
 ## Owned local state
 
@@ -59,8 +59,10 @@ and FTS5 secure-delete when supported.
 
 Canonical sessions and capture/source-observation state are durable user data.
 FTS and bounded operational diagnostics are rebuildable derived state even though
-they share the database. Repair or projection rebuild must preserve canonical
-evidence.
+they share the database. During an explicit leased index, FTS-only damage can be
+rebuilt from canonical content after canonical integrity succeeds. Doctor only
+reports the condition. Repair never rereads a provider or deletes canonical
+evidence, and there is no public repair command.
 
 ## Codex capture
 
@@ -98,10 +100,16 @@ source type, and provenance. Sessions does not separately open or fetch referenc
 media and does not persist media bytes, data URLs, remote URLs, local attachment
 paths, or serialized opaque objects in omission records.
 
-Human list/show output omits source locators, source metadata, and local workspace
-values. Transcript/title text itself is faithful evidence: it is terminal-control
-escaped and output-bounded, but it is not secret- or path-redacted. Review it
-before copying it elsewhere.
+Human list/search/show output omits source locators, source metadata, and local
+workspace values. Search snippets and context are bounded to 512 UTF-8 bytes per
+body and terminal-control escaped; limits reduce accidental disclosure but are
+not redaction. Transcript/title text itself remains faithful evidence and is not
+secret- or path-redacted. Review it before copying it elsewhere.
+
+Opaque list/search cursors contain query-binding, library-instance, generation,
+and offset data rather than transcript text. They are continuation tokens, not
+secrets or durable capabilities, and become stale after a later admitted writer
+or library recreation.
 
 ## Explicit deletion
 
@@ -131,10 +139,12 @@ manage backups according to their threat model.
 
 ## Later V1 boundaries
 
-Planned search and export will also read only the canonical library. Portable
-export must exclude diagnostic locators, provider roots, source metadata, local
-workspace paths, and attachment paths by default; frame all prior instructions
-as untrusted history; and never deliver content to another provider itself.
+Planned portable export will also read only the canonical library. It must
+exclude diagnostic locators, provider roots, source metadata, local workspace
+paths, and attachment paths by default; frame all prior instructions as untrusted
+history; and never deliver content to another provider itself. M7 owns those
+Markdown/JSON/JSONL artifacts and versioned transcript-bearing list/search/show
+DTOs; M6 query output remains human-facing.
 
 No project, skill, provider configuration, or source transcript is automatically
 edited from analysis output.

@@ -17,6 +17,7 @@ import { readWriterLeaseHealth } from "./writer-lease.ts";
 import { readCanonicalDocument } from "./sqlite-session-document.ts";
 import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
+import { ftsProjectionContentIsValid, ftsProjectionStructureIsValid } from "./fts-projection.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
@@ -58,8 +59,8 @@ function inspectDatabaseHealth(
 ): ReadyIndexHealth {
   const canonicalIntegrity = check(() => canonicalIntegrityIsValid(database));
   const foreignKeys = check(() => foreignKeysAreValid(database));
-  const ftsStructure = check(() => ftsStructureIsValid(database));
-  const ftsContent = check(() => ftsContentRowsAreConsistent(database));
+  const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
+  const ftsContent = check(() => ftsProjectionContentIsValid(database));
   const ftsSecureDelete = inspectFtsSecureDelete(database, fts5SecureDeleteRequired);
   const ftsRemediation =
     ftsStructure === "ok" && ftsContent === "ok" && ftsSecureDelete.healthy
@@ -93,8 +94,24 @@ function inspectDatabaseHealth(
   });
 }
 
-function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
-  return sourceInstancesAreValid(database) && sessionTrackingIsValid(database);
+export function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
+  return (
+    libraryIdentityIsValid(database) &&
+    sourceInstancesAreValid(database) &&
+    sessionTrackingIsValid(database)
+  );
+}
+
+function libraryIdentityIsValid(database: DatabaseSync): boolean {
+  const rows = database
+    .prepare("SELECT singleton, instance_id FROM sessions_library ORDER BY singleton")
+    .all() as readonly Record<string, unknown>[];
+  return (
+    rows.length === 1 &&
+    rows[0]?.singleton === 1 &&
+    typeof rows[0].instance_id === "string" &&
+    /^[a-f0-9]{32}$/u.test(rows[0].instance_id)
+  );
 }
 
 function sourceInstancesAreValid(database: DatabaseSync): boolean {
@@ -183,114 +200,8 @@ function optionalCanonicalTimestampIsValid(value: unknown): boolean {
   );
 }
 
-function foreignKeysAreValid(database: DatabaseSync): boolean {
+export function foreignKeysAreValid(database: DatabaseSync): boolean {
   return database.prepare("PRAGMA foreign_key_check").get() === undefined;
-}
-
-const EXPECTED_FTS_OBJECTS = [
-  ["sessions_content_fts", "table"],
-  ["sessions_content_fts_config", "table"],
-  ["sessions_content_fts_data", "table"],
-  ["sessions_content_fts_docsize", "table"],
-  ["sessions_content_fts_idx", "table"],
-] as const;
-
-const EXPECTED_FTS_TRIGGERS = [
-  [
-    "sessions_content_values_ai",
-    `CREATE TRIGGER sessions_content_values_ai
-AFTER INSERT ON sessions_content_values
-BEGIN
-  INSERT INTO sessions_content_fts(rowid, text)
-  VALUES (new.content_id, new.text);
-END`,
-  ],
-  [
-    "sessions_content_values_bd",
-    `CREATE TRIGGER sessions_content_values_bd
-BEFORE DELETE ON sessions_content_values
-BEGIN
-  INSERT INTO sessions_content_fts(sessions_content_fts, rowid, text)
-  VALUES ('delete', old.content_id, old.text);
-END`,
-  ],
-  [
-    "sessions_content_values_bu",
-    `CREATE TRIGGER sessions_content_values_bu
-BEFORE UPDATE ON sessions_content_values
-BEGIN
-  SELECT RAISE(ABORT, 'sessions content values are immutable');
-END`,
-  ],
-] as const;
-
-function ftsStructureIsValid(database: DatabaseSync): boolean {
-  const rows = database
-    .prepare(
-      `SELECT name, type
-       FROM sqlite_schema
-       WHERE name = 'sessions_content_fts'
-          OR name LIKE 'sessions_content_fts\\_%' ESCAPE '\\'
-       ORDER BY name COLLATE BINARY`,
-    )
-    .all() as readonly Record<string, unknown>[];
-  if (
-    rows.length !== EXPECTED_FTS_OBJECTS.length ||
-    rows.some(
-      (row, index) =>
-        row.name !== EXPECTED_FTS_OBJECTS[index]?.[0] ||
-        row.type !== EXPECTED_FTS_OBJECTS[index]?.[1],
-    )
-  ) {
-    return false;
-  }
-
-  // Reading each structural shadow table detects missing or unreadable FTS state
-  // without executing FTS5's write-shaped integrity command.
-  database.prepare("SELECT 1 FROM sessions_content_fts_data LIMIT 1").get();
-  database.prepare("SELECT 1 FROM sessions_content_fts_idx LIMIT 1").get();
-
-  const triggers = database
-    .prepare(
-      `SELECT name, sql
-       FROM sqlite_schema
-       WHERE type = 'trigger'
-         AND name IN (
-           'sessions_content_values_ai',
-           'sessions_content_values_bd',
-           'sessions_content_values_bu'
-         )
-       ORDER BY name COLLATE BINARY`,
-    )
-    .all() as readonly Record<string, unknown>[];
-  return (
-    triggers.length === EXPECTED_FTS_TRIGGERS.length &&
-    triggers.every(
-      (row, index) =>
-        row.name === EXPECTED_FTS_TRIGGERS[index]?.[0] &&
-        row.sql === EXPECTED_FTS_TRIGGERS[index]?.[1],
-    )
-  );
-}
-
-function ftsContentRowsAreConsistent(database: DatabaseSync): boolean {
-  const mismatch = database
-    .prepare(
-      `SELECT 1 AS mismatch
-       FROM sessions_content_values AS content
-       LEFT JOIN sessions_content_fts_docsize AS indexed
-         ON indexed.id = content.content_id
-       WHERE indexed.id IS NULL
-       UNION ALL
-       SELECT 1 AS mismatch
-       FROM sessions_content_fts_docsize AS indexed
-       LEFT JOIN sessions_content_values AS content
-         ON content.content_id = indexed.id
-       WHERE content.content_id IS NULL
-       LIMIT 1`,
-    )
-    .get();
-  return mismatch === undefined;
 }
 
 function inspectFtsSecureDelete(

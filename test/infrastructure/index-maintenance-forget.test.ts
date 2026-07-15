@@ -232,7 +232,10 @@ function seedRetainedEvidence(database: DatabaseSync): void {
   const targetId = insertTracking(database, sourceId, target.nativeId);
   const retainedId = insertTracking(database, sourceId, "retained");
   database
-    .prepare("INSERT INTO sessions_canonical_sessions (session_id) VALUES (?), (?)")
+    .prepare(
+      `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage)
+       VALUES (?, 'unknown'), (?, 'unknown')`,
+    )
     .run(targetId, retainedId);
   insertEntry(database, targetId, "memory://target");
   insertEntry(database, retainedId, "memory://retained");

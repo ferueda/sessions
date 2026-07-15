@@ -157,59 +157,6 @@ export function readSessionSummary(
   return summaryFromRow(identity, row, freshness.status);
 }
 
-export function listSessionSummaries(
-  database: DatabaseSync,
-  limit: number,
-): readonly IndexedSessionSummary[] {
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("Invalid summary limit");
-  const rows = database
-    .prepare(
-      `SELECT source.kind,
-              source.instance_id,
-              tracking.native_id,
-              canonical.title,
-              canonical.workspace,
-              canonical.created_at,
-              canonical.updated_at,
-              tracking.captured_at,
-              tracking.presence_status,
-              source.coverage_status
-       FROM sessions_canonical_sessions AS canonical
-       JOIN sessions_session_tracking AS tracking
-         ON tracking.session_id = canonical.session_id
-       JOIN sessions_source_instances AS source
-         ON source.source_instance_id = tracking.source_instance_id
-       ORDER BY
-         CASE WHEN COALESCE(canonical.updated_at, canonical.created_at) IS NULL THEN 1 ELSE 0 END,
-         COALESCE(canonical.updated_at, canonical.created_at) DESC,
-         source.kind COLLATE BINARY,
-         source.instance_id COLLATE BINARY,
-         tracking.native_id COLLATE BINARY
-       LIMIT ?`,
-    )
-    .all(limit) as unknown as readonly ListSummaryRow[];
-  return Object.freeze(
-    rows.map((row) => {
-      if (
-        typeof row.kind !== "string" ||
-        typeof row.instance_id !== "string" ||
-        typeof row.native_id !== "string"
-      ) {
-        throw new SqliteSessionIndexError("corrupt-data");
-      }
-      const identity: SessionIdentity = {
-        source: { kind: row.kind, instanceId: row.instance_id },
-        nativeId: row.native_id,
-      };
-      const freshness = readSessionFreshness(database, identity);
-      if (freshness.status !== "current" && freshness.status !== "stale") {
-        throw new SqliteSessionIndexError("corrupt-data");
-      }
-      return Object.freeze(summaryFromRow(identity, row, freshness.status));
-    }),
-  );
-}
-
 function summaryFromRow(
   identity: SessionIdentity,
   row: SummaryRow,
@@ -311,12 +258,6 @@ interface SummaryRow {
   readonly captured_at: string | null;
   readonly presence_status: unknown;
   readonly coverage_status: unknown;
-}
-
-interface ListSummaryRow extends SummaryRow {
-  readonly kind: unknown;
-  readonly instance_id: unknown;
-  readonly native_id: unknown;
 }
 
 function effectiveSourceState(

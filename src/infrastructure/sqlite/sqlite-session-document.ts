@@ -22,14 +22,16 @@ export function replaceCanonicalDocument(
     .prepare(
       `INSERT INTO sessions_canonical_sessions (
          session_id,
+         lineage_coverage,
          title,
          workspace,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(
       sessionId,
+      document.lineageCoverage,
       document.title ?? null,
       document.workspace ?? null,
       document.createdAt ?? null,
@@ -48,7 +50,7 @@ export function readCanonicalDocument(
 ): SessionDocument | undefined {
   const session = database
     .prepare(
-      `SELECT title, workspace, created_at, updated_at
+      `SELECT lineage_coverage, title, workspace, created_at, updated_at
        FROM sessions_canonical_sessions
        WHERE session_id = ?`,
     )
@@ -59,6 +61,7 @@ export function readCanonicalDocument(
   const entries = readEntries(database, sessionId);
   const candidate: SessionDocument = {
     identity: copyIdentity(identity),
+    lineageCoverage: lineageCoverageAt(session.lineage_coverage),
     ...optional("title", session.title),
     ...optional("workspace", session.workspace),
     ...optional("createdAt", session.created_at),
@@ -398,10 +401,16 @@ function integerAt(value: unknown): number {
 }
 
 interface SessionRow {
+  readonly lineage_coverage: unknown;
   readonly title: string | null;
   readonly workspace: string | null;
   readonly created_at: string | null;
   readonly updated_at: string | null;
+}
+
+function lineageCoverageAt(value: unknown): SessionDocument["lineageCoverage"] {
+  if (value === "complete" || value === "unknown") return value;
+  throw new SqliteSessionIndexError("corrupt-data");
 }
 
 interface RelationRow {

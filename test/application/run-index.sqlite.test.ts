@@ -314,5 +314,5 @@ function sessionIdentity(
 }
 
 function document(identity: SessionIdentity, title: string): SessionDocument {
-  return { identity, title, relations: [], entries: [] };
+  return { identity, title, lineageCoverage: "unknown", relations: [], entries: [] };
 }

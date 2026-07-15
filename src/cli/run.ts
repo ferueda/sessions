@@ -1,5 +1,6 @@
 import { CommanderError } from "commander";
 
+import { SessionQueryUsageError } from "../application/session-query-error.ts";
 import { createProgram, OperationalExit, type ProgramOptions } from "./program.ts";
 
 export type CliOptions = ProgramOptions;
@@ -13,6 +14,10 @@ export async function runCli(argv: readonly string[], options: CliOptions): Prom
   } catch (error) {
     if (error instanceof OperationalExit) return 1;
     if (error instanceof CommanderError) return error.exitCode === 0 ? 0 : 2;
+    if (error instanceof SessionQueryUsageError) {
+      options.output.writeErr(`sessions: ${error.message}\n`);
+      return 2;
+    }
 
     options.output.writeErr(`sessions: ${describeError(error)}\n`);
     return 1;

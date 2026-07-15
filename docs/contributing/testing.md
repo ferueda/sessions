@@ -37,20 +37,21 @@ link here. [`package.json`](../../package.json) owns executable commands, and
 All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 `src/**/*.test.ts`. Smokes live in `scripts/`, outside default discovery.
 
-| Layer                | Current placement                                                       | Proves                                                                                               |
-| -------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Domain/module        | `test/domain/**`, focused pure application tests                        | Canonical validation, hashes, identity, parsing, bounds, deterministic values                        |
-| Application workflow | `test/application/**` with injected ports/fakes                         | Discovery, indexing/reconciliation, retention, reports, list/show/forget, failures                   |
-| Adapter/conformance  | `test/adapters/codex/**`, `test/contracts/**`, `test/fixtures/codex/**` | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation         |
-| SQLite/filesystem    | `test/infrastructure/**`, application `*.sqlite.test.ts`                | Migrations, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows                     |
-| CLI/process          | `test/cli*.test.ts`, focused root process tests                         | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
-| Repository contract  | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`            | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
-| Distribution smoke   | `scripts/smoke-dist.ts`, `scripts/smoke-m5-workflow.ts`                 | Compiled binary plus one synthetic Codex index/list/show/forget/clear journey                        |
-| Package smoke        | `scripts/smoke-package.ts` plus the M5 workflow                         | Tarball allowlist, offline install, installed binary independence and wiring                         |
+| Layer                 | Current placement                                                               | Proves                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, query values, hashes, identity, parsing, bounds                                |
+| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/forget, failures                        |
+| Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation         |
+| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows                     |
+| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                            |
+| CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
+| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
+| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus one synthetic Codex index/search/next-cursor/show journey                       |
+| Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | Tarball allowlist, offline install, installed binary independence and wiring                         |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
-or authenticated live command today. Search/export, Cursor, and the packaged
-Agent Skill remain planned rather than current coverage.
+or authenticated live command today. Export, Cursor, and the packaged Agent
+Skill remain planned rather than current coverage.
 
 ## Choosing proof
 
@@ -60,6 +61,7 @@ Agent Skill remain planned rather than current coverage.
 | Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                  | `pnpm check`                                              |
 | Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`               | `pnpm check`                                              |
 | Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`               | `pnpm check`                                              |
+| Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | `pnpm test test/application/search-sessions.test.ts`         | `pnpm check`                                              |
 | CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                 | `pnpm check`                                              |
 | Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                            | `pnpm check`                                              |
 | Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                            | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
@@ -105,6 +107,7 @@ Iterate with one focused path:
 
 ```bash
 pnpm test test/application/run-index.test.ts
+pnpm test test/application/search-sessions.test.ts
 pnpm test test/adapters/codex/source.test.ts
 pnpm test test/application/codex-vertical-slice.sqlite.test.ts
 pnpm test test/cli.test.ts

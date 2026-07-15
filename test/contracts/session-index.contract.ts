@@ -218,7 +218,7 @@ export function admittedReplacement(
 }
 
 export function minimalDocument(sessionIdentity: SessionIdentity): SessionDocument {
-  return { identity: sessionIdentity, relations: [], entries: [] };
+  return { identity: sessionIdentity, lineageCoverage: "unknown", relations: [], entries: [] };
 }
 
 export function completeDocument(sessionIdentity: SessionIdentity): SessionDocument {
@@ -230,6 +230,7 @@ export function completeDocument(sessionIdentity: SessionIdentity): SessionDocum
     workspace: "/workspace/one",
     createdAt: "2026-07-13T12:00:00.000Z",
     updatedAt: "2026-07-13T12:01:00.000Z",
+    lineageCoverage: "complete",
     relations: [
       {
         kind: "parent",

@@ -16,7 +16,6 @@ import {
   findSessionTracking,
   hasCanonicalDocument,
   lastGoodRevision,
-  listSessionSummaries,
   readSessionFreshness,
   readSessionSummary,
   sameRevision,
@@ -70,10 +69,6 @@ export function createSqliteSessionIndexReader(database: DatabaseSync): SessionI
       const summary = readSessionSummary(database, identity);
       if (document === undefined || summary === undefined) return undefined;
       return { summary, document };
-    },
-
-    async listSummaries(options) {
-      return listSessionSummaries(database, options.limit);
     },
   };
 }

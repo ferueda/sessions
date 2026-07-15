@@ -1,6 +1,6 @@
 # Current architecture
 
-Status: M5 Codex durable vertical slice.
+Status: M6 Codex retained-library query vertical slice complete.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -22,9 +22,10 @@ index
   -> writer-leased SourceDiscoveryWorkspace
   -> src/infrastructure/sqlite/sqlite-session-index.ts
 
-list / show
-  -> src/application/{list-sessions,show-session}.ts
+list / search / show
+  -> src/application/{list-sessions,search-sessions,show-session}.ts
   -> immutable library reader (no adapter)
+  -> src/infrastructure/sqlite/sqlite-session-query.ts (list/search only)
 
 forget / data clear
   -> src/application/{forget-session,clear-index}.ts
@@ -32,38 +33,39 @@ forget / data clear
 ```
 
 The composition root is the only production module that imports both a concrete
-adapter and infrastructure. It resolves Codex lazily: help, version, list, show,
-forget, and data clear do not resolve provider configuration. Index, paths, and
-doctor intentionally resolve or probe the registered source.
+adapter and infrastructure. It resolves Codex lazily: help, version, list,
+search, show, forget, and data clear do not resolve provider configuration.
+Index, paths, and doctor intentionally resolve or probe the registered source.
 
 ## Ownership
 
-| Path                                      | Owner                                                                                  |
-| ----------------------------------------- | -------------------------------------------------------------------------------------- |
-| `src/domain/`                             | Canonical session, identity, hash, source-type, provenance, and validation values      |
-| `src/application/ports/`                  | Source, library, lifecycle, maintenance, health, and diagnostic contracts              |
-| `src/application/source-*.ts`             | Complete input fingerprints and typed source failures                                  |
-| `src/application/validate-session.ts`     | Immutable adapter-read admission                                                       |
-| `src/application/discover-sessions.ts`    | Complete discovery admission, duplicate policy, and deterministic ordering             |
-| `src/application/run-index.ts`            | Provider-neutral incremental capture and source-presence reconciliation                |
-| `src/application/{list,show}-sessions.ts` | Provider-free retained-library reads and bounds                                        |
-| `src/application/*report.ts`              | Versioned provider-neutral operational reports                                         |
-| `src/adapters/codex/`                     | Codex path/state/rollout discovery and canonical normalization                         |
-| `src/infrastructure/state/`               | Application-data paths, state inspection, and leased ephemeral discovery workspace     |
-| `src/infrastructure/sqlite/`              | Schema, lifecycle, canonical repository, lease, health, forget, and all-data deletion  |
-| `src/cli/`                                | Command grammar, terminal-safe rendering, streams, and exit behavior                   |
-| `src/bin/`                                | Sole concrete composition root                                                         |
-| `scripts/`                                | Build and delivery smoke helpers; not published runtime                                |
-| `test/`                                   | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
+| Path                                             | Owner                                                                                  |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `src/domain/`                                    | Canonical session/query/lineage values, identity, provenance, and validation           |
+| `src/application/ports/`                         | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts       |
+| `src/application/source-*.ts`                    | Complete input fingerprints and typed source failures                                  |
+| `src/application/validate-session.ts`            | Immutable adapter-read admission                                                       |
+| `src/application/discover-sessions.ts`           | Complete discovery admission, duplicate policy, and deterministic ordering             |
+| `src/application/run-index.ts`                   | Provider-neutral incremental capture and source-presence reconciliation                |
+| `src/application/{list,search,show}-sessions.ts` | Provider-free retained-library reads, query admission, and bounds                      |
+| `src/application/*report.ts`                     | Versioned provider-neutral operational reports                                         |
+| `src/adapters/codex/`                            | Codex path/state/rollout discovery and canonical normalization                         |
+| `src/infrastructure/state/`                      | Application-data paths, state inspection, and leased ephemeral discovery workspace     |
+| `src/infrastructure/sqlite/`                     | Schema, canonical/query repositories, cursors, FTS repair, leases, and maintenance     |
+| `src/cli/`                                       | Command grammar, terminal-safe rendering, streams, and exit behavior                   |
+| `src/bin/`                                       | Sole concrete composition root                                                         |
+| `scripts/`                                       | Build and delivery smoke helpers; not published runtime                                |
+| `test/`                                          | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
-Search, portable export, Cursor, packaged Agent Skills, and a public adapter ABI
-do not exist yet.
+Portable export, Cursor, packaged Agent Skills, and a public adapter ABI do not
+exist yet. M7 owns transcript-bearing JSON/JSONL and portable export; M6
+list/search/show output is human-facing.
 
-M5 intentionally adds only `smol-toml` at runtime. Provider and canonical input
-use focused handwritten bounded validators; Zod is deferred until a concrete
-public-schema benefit justifies its runtime/package cost. M7 owns the versioned
-public transcript DTOs, deterministic document digest, JSON/JSONL, and portable
-export rather than freezing partial equivalents in M5.
+The current runtime intentionally adds only `smol-toml`. Provider and canonical
+input use focused handwritten bounded validators; Zod is deferred until a
+concrete public-schema benefit justifies its runtime/package cost. M7 owns the
+versioned public transcript DTOs, deterministic document digest, JSON/JSONL, and
+portable export rather than freezing partial equivalents in M6.
 
 ## Dependency direction
 
@@ -102,11 +104,12 @@ sidecars, and the exact ephemeral `.scratch` child. The pre-public cache path an
 legacy Harness JSONL cache are never reused, migrated, or deleted.
 
 The current baseline creates canonical text/omitted segments, exact tool identity
-and linkage, source instances, latest successful fingerprints/documents, capture
-timestamps, source presence/coverage, bounded run evidence, derived
-external-content FTS, and writer coordination directly. Only text enters
-interning and FTS. Omitted content stores class, source type, ordinal, and
-provenance—never media bytes or references.
+and linkage, complete/unknown lineage coverage, source instances, latest
+successful fingerprints/documents, capture timestamps, source presence/coverage,
+bounded run evidence, a random library identity, derived external-content FTS,
+and writer coordination directly. Only text enters interning and FTS. Omitted
+content stores class, source type, ordinal, and provenance—never media bytes or
+references.
 
 One renewable generation lease serializes `index`, `forget`, and `clear`. Every
 mutation asserts ownership inside its transaction. Expired takeover fences stale
@@ -125,10 +128,29 @@ and incoming relations owned by other sessions. `data clear --yes` removes only
 the validated Sessions database/WAL/SHM paths and exact scratch subtree. Neither
 operation touches a provider.
 
-Immutable readers reconstruct list summaries and complete canonical documents
-only from the library. List/show never resolve or reopen Codex, so retained
-content remains usable after provider disappearance. Ready-library doctor checks
-canonical integrity separately from rebuildable FTS health.
+Immutable readers expose separate `sessions` reconstruction and provider-neutral
+`query` ports. List/search use one SQLite snapshot for complete pages, context,
+and support; show reconstructs the exact canonical document. None resolve or
+reopen Codex, so retained content remains usable after provider disappearance.
+Query cursors bind the query plus library identity/writer generation. An explicit
+leased index writer can rebuild FTS-only damage from canonical content; doctor
+stays read-only and reports canonical integrity separately from projection
+health.
+
+## Query boundary
+
+`src/domain/session-query.ts` owns validated immutable filters, limits, context,
+cursors, pages, hits, and support values. `src/domain/session-lineage.ts` owns the
+iterative provider-neutral root policy. `src/application/ports/session-query.ts`
+defines the minimal list/search repository; services own defaults and
+fresh-library behavior.
+
+SQLite owns literal FTS translation, parameterized filter SQL, deterministic
+rank/order, bounded context assembly, query-wide counts, and cursor encoding.
+`fts-projection.ts` is the shared bootstrap/repair definition. These modules do
+not import adapters. Codex supplies canonical lineage coverage/relations and
+observed tool evidence only; it cannot decide roots, counts, filters, ranking, or
+presentation.
 
 ## Build
 

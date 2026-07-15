@@ -75,9 +75,11 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-M5 implements the first complete vertical slice: one Codex adapter, current
-baseline durable canonical evidence, non-destructive source-presence reconciliation,
-index/list/show, scoped forget, all-data clear, and source-aware diagnostics. The
+M6 extends the first Codex vertical slice with provider-neutral filtered list,
+lexical search, pagination, bounded context, lineage resolution, support counts,
+and canonical-only FTS projection repair. The baseline also includes durable
+canonical evidence, non-destructive source-presence reconciliation,
+index/list/search/show, scoped forget, all-data clear, and source-aware diagnostics. The
 maintained file-by-file map is the
 [current architecture guide](contributing/architecture.md); this memo remains the
 stable target design.
@@ -90,9 +92,10 @@ application/domain, never concrete infrastructure or adapters. The binary alone
 may import all layers to wire them.
 
 The current baseline persists exact text and privacy-safe omissions, tool
-identity/linkage, capture/source-observation state, rebuildable FTS, and writer
-coordination directly. Complete-scan absence marks a retained snapshot missing
-instead of deleting it. One generation lease fences index, forget, and clear.
+identity/linkage, complete/unknown lineage coverage, capture/source-observation
+state, rebuildable FTS, a random library identity, and writer coordination
+directly. Complete-scan absence marks a retained snapshot missing instead of
+deleting it. One generation lease fences index, forget, clear, and query cursors.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -122,6 +125,7 @@ A session contains:
 - optional title and workspace;
 - created/updated timestamps normalized to canonical UTC when observed;
 - optional provider-neutral lineage relations;
+- explicit `complete` or `unknown` immediate rootward lineage coverage;
 - the complete-input fingerprint and adapter format version used to build it;
 - ordered canonical entries.
 
@@ -209,10 +213,17 @@ content and known lineage allow the query layer to report three different suppor
 measures:
 
 - **occurrence count:** every appearance;
-- **unique-content count:** distinct canonical content hashes;
+- **unique-content count:** distinct collision-safe canonical content values;
 - **unique-root count:** distinct known session roots.
 
 No count is silently substituted for another. Unknown lineage remains unknown. This prevents copied prompts, forks, injected instructions, or delegated work from masquerading as independent repeated user intent.
+
+Root resolution uses retained evidence only. High-confidence parent, fork, and
+continuation targets are rootward; child targets are outward. Complete coverage
+with no rootward relation proves self-root. Unknown coverage/kind,
+non-high-confidence ancestry, a missing target, a cycle, or diverging ancestry
+stays unknown; multiple paths that converge on one root remain known. Equal
+content and inferred inverse relations never create ancestry.
 
 ## Source adapter contract
 
@@ -243,7 +254,7 @@ Contract rules:
   an immutable row/edge generation, and removes staging before yielding. Reads
   use frozen state and verify only the live rollout. Provider SQLite/SHM is never
   opened by Sessions.
-- M5's internal `IndexWriter` owns that capability and `runIndex` passes it only
+- The internal `IndexWriter` owns that capability and `runIndex` passes it only
   to discovery after writer acquisition. The callback asserts lease ownership
   before allocation and after `finally` cleanup, returns results only while still
   owned, aggregates operation/cleanup/lease errors, and exposes
@@ -295,26 +306,51 @@ Probe/discovery/read failures are sanitized per-source outcomes and do not preve
 
 ## Storage and search
 
-SQLite is the durable canonical local library. FTS5 supplies lexical search. One database initially contains two explicit lifecycles: retained canonical sessions/capture state and rebuildable FTS/query projections plus bounded operational diagnostics. The schema separates source instances, sessions, source observations, relations, entries, content values, occurrences, index runs, migration metadata, and writer coordination. Application query translation, ranking, and tokenizer tuning remain planned.
+SQLite is the durable canonical local library. FTS5 supplies lexical search. One
+database contains two explicit lifecycles: retained canonical sessions/capture
+state and rebuildable FTS/query projections plus bounded operational diagnostics.
+The schema separates source instances, sessions, source observations, relations,
+entries, content values, occurrences, index runs, migration metadata, library
+identity, and writer coordination.
 
-Planned application query values—not raw FTS syntax—define search:
+The application exposes immutable provider-neutral list/search query values and
+one query repository beside canonical reconstruction on each read snapshot.
+Shared filters cover exact source/instance, effective source state, workspace,
+exclusive capture/source-observation bounds, and canonical identity. Search adds
+exclusive entry-time bounds, actor, content origin, exact entry kind, exact
+source-observed tool name/namespace, bounded context, and literal text. The
+effective observation time is the source coverage observation while coverage is
+unknown and the session presence observation otherwise; it never falls back to
+last-seen or provider activity time.
 
-- text;
-- source/source-instance;
-- workspace;
-- time bounds;
-- actor and origin;
-- exact entry kind, exact source-observed tool name, and exact tool namespace;
-- result limit and continuation cursor;
-- optional exact session identity.
+Search splits on Unicode whitespace, quotes every term as FTS data, and combines
+terms with AND. Raw FTS syntax is not public. One primary hit represents one
+session entry regardless of matching-segment count. Its best content-level BM25
+value ranks the entry; ties use session activity descending/null-last, binary
+source/instance/native identity, then entry ordinal. The best segment and lowest
+segment ordinal supply the bounded snippet. Occurrence frequency never improves
+relevance.
 
-The query repository translates those values to SQL/FTS. Ranking details remain storage implementation, tested through provider-neutral query contracts. Show and export reconstruct canonical sessions from the durable library only, including when their latest source state is missing or unknown.
+Search can add bounded neighboring entries plus direct, non-recursive observed
+tool-call/result partners in either direction. It excludes every other relation
+kind, retains exact ordinals/linkage/tool evidence, and never copies call identity
+onto results. Query-wide support counts matching segments, distinct exact
+canonical content, distinct resolved roots, and distinct matching sessions with
+unknown lineage before page slicing.
 
-Exact tool-name and tool-namespace filters select canonical tool-call entries
-only and can be combined without concatenating identity fields. Bounded related
-context can include directly linked tool-result entries even when they are
-non-adjacent; those results retain the relation without receiving an invented
-copy of the call's tool identity.
+List and search continuation cursors bind the complete query/order contract,
+command, random library instance ID, current writer generation, and next offset.
+Malformed/query-mismatched cursors are usage failures; recreated-library or
+later-generation cursors are stale operational failures. Every admitted writer
+may conservatively stale cursors.
+
+FTS structure and rebuild logic are shared by bootstrap and repair. An explicit
+leased index-writer open first distinguishes canonical corruption from FTS-only
+damage, then rebuilds only the projection from canonical content values. Doctor
+remains immutable and reports that repair is required. No public repair command
+exists. Show reconstructs canonical sessions directly rather than routing
+through search; planned export will do the same, including for retained sessions
+whose latest source state is missing or unknown.
 
 Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
 earlier development builds are unsupported and fail closed without migration or
@@ -372,7 +408,8 @@ sessions
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
-sessions list [--limit N]
+sessions list [filters] [--limit N] [--cursor TOKEN]
+sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
 sessions data clear --yes [--format human|json]
@@ -381,7 +418,6 @@ sessions data clear --yes [--format human|json]
 Remaining planned V1 surface:
 
 ```text
-sessions search <text> [filters]
 sessions export <source-instance:id> --format md|json|jsonl [--full]
 sessions index --source cursor
 ```
@@ -393,12 +429,14 @@ Behavioral rules:
 - Stdout carries requested results; stderr carries warnings, progress, and errors.
 - Exit `0` means successful execution, including no matches; `1` means operational failure; `2` means invalid usage.
 - A fresh uninitialized library lists as a successful empty result without
-  creating storage or probing a provider; show of an absent identity remains an
-  operational not-found result.
+  creating storage or probing a provider. Cursor-free search behaves the same;
+  show of an absent identity remains an operational not-found result.
 - Unknown flags and invalid values fail; they are not ignored.
 - Potentially large output is bounded by default. `--full` is explicit.
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
+- M6 list/search/show output is human-facing; M7 owns their versioned
+  JSON/JSONL DTOs and portable export.
 - `index` durably retains the latest successful normalized snapshot. A complete
   later scan can change its source state to missing but cannot delete it.
 - Destructive deletion is explicit and distinct from rebuilding derived search
@@ -665,7 +703,8 @@ Do not transplant:
 ## Roadmap
 
 The phase scopes below remain accepted. Phases 0 through 2 are implemented;
-Phase 3 is next. Codex is the first vertical slice because
+Phase 3 is in progress. M6 supplies its completed provider-neutral query/evidence half and
+M7 is the current structured-output/export half. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query and export engine is completed
 over Codex before Cursor becomes the second-adapter proof. The
@@ -687,9 +726,12 @@ Implement Codex behind `probe`/`discover`/`read`, using the source survey and ne
 synthetic fixtures rather than porting the Harness parser. Complete
 index/list/show for the first vertical slice.
 
-### Phase 3 — Query and export
+### Phase 3 — Query and export (in progress)
 
-Provider-neutral lexical search, filters, bounded context, occurrence/dedup reporting, versioned JSON/JSONL, framed portable Markdown/JSON/JSONL context export, and CLI compatibility tests.
+M6 implements the completed provider-neutral lexical search, filtered/cursored list, bounded
+adjacent and linked context, lineage-aware support reporting, and FTS repair.
+M7 adds versioned JSON/JSONL, framed portable Markdown/JSON/JSONL context export,
+and final CLI compatibility schemas.
 
 ### Phase 4 — Equivalent second adapter
 
@@ -743,7 +785,5 @@ requires a separate intent and privacy review.
 
 - Confirm ownership and public publishing rights for the intended npm scope.
 - Configure the GitHub release environment and npm trusted publisher before adding publish automation.
-- Set ranking weights and default result limits from corpus-based tests, not intuition.
-- Define provider-specific lineage confidence only from evidence each format can supply.
 
 These do not block the repository foundation or internal V1 architecture.

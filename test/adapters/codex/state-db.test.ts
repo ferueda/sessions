@@ -30,6 +30,7 @@ describe("Codex state schema gateway", () => {
           ["updated", "absent", null, null],
         ]);
         expect(generation.threads[0]?.edgeTuple).toEqual(["codex-parent-edge-v1", "table-absent"]);
+        expect(generation.threads[0]?.spawnEdgeCoverage).toBe("unknown");
         expect(Object.isFrozen(generation)).toBe(true);
         expect(Object.isFrozen(generation.threads)).toBe(true);
       },
@@ -82,10 +83,12 @@ describe("Codex state schema gateway", () => {
           "row-absent",
           "status-present",
         ]);
+        expect(materializeCodexState(database).threads[0]?.spawnEdgeCoverage).toBe("complete");
 
         database.exec(`INSERT INTO thread_spawn_edges VALUES ('parent', 'child', NULL)`);
         expect(materializeCodexState(database).threads[0]).toMatchObject({
           parentId: "parent",
+          spawnEdgeCoverage: "complete",
           edgeTuple: ["codex-parent-edge-v1", "row", "parent", "child", "status-present", null],
         });
       },
@@ -103,6 +106,7 @@ describe("Codex state schema gateway", () => {
           "row-absent",
           "status-absent",
         ]);
+        expect(materializeCodexState(database).threads[0]?.spawnEdgeCoverage).toBe("complete");
       },
     );
   });
