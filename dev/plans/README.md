@@ -9,4 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. Resume M7 as the next roadmap work.
+Active executor plan:
+
+- [Compact collision-safe canonical content storage](260714-compact-content-storage.md)
+
+Land the baseline-schema plan before compaction or orphan-maintenance plans that
+extend the same schema or writer-lease contracts. Resume M7 after the accepted
+storage-hardening sequence.
