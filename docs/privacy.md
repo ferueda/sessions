@@ -1,6 +1,6 @@
 # Privacy contract
 
-- Status: M6 behavior implemented; later V1 behavior labeled
+- Status: M7 canonical export foundation implemented; later delivery labeled
 - Last updated: 2026-07-15
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
@@ -12,7 +12,9 @@ not a best-effort feature.
 - Codex histories are read-only inputs. Sessions performs no provider writes,
   network requests, telemetry, or uploads.
 - A successful index stores an independent durable normalized copy of the latest
-  successfully captured session in Sessions-owned application data.
+  successfully captured session in Sessions-owned application data. It also
+  stores a digest of the closed public document projection in the same
+  transaction.
 - A complete later scan can mark a retained session `missing`; unavailable,
   unreadable, malformed, changing, or incomplete discovery proves no absence.
   Neither case automatically deletes retained content.
@@ -26,8 +28,8 @@ not a best-effort feature.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
 
-Portable export, Cursor, library import/restore, and automatic analysis are not
-current commands.
+Portable export, transcript-bearing JSON/JSONL, Cursor, library import/restore,
+and automatic analysis are not current commands.
 
 ## Owned local state
 
@@ -71,6 +73,13 @@ canonical evidence and has no public command. `sessions data repair-orphans` is
 a separate public canonical-deletion operation for content that no retained
 occurrence reaches. It never rebuilds FTS or resolves a provider.
 
+The persisted public-document digest is canonical state, not a rebuildable FTS
+projection. A missing, malformed, unknown-scheme, or mismatching digest makes the
+canonical library unhealthy and fails full document reads. FTS rebuild and
+orphan maintenance cannot repair it. The schema addition changes the one current
+pre-launch checksum, so an earlier development database follows the fresh data
+directory/manual Sessions-owned-directory reset path above.
+
 ## Codex capture
 
 Codex defaults to `~/.codex`; `CODEX_HOME` can select another home. Its effective
@@ -106,6 +115,27 @@ non-text content stores only its ordered omission class, canonical structural
 source type, and provenance. Sessions does not separately open or fetch referenced
 media and does not persist media bytes, data URLs, remote URLs, local attachment
 paths, or serialized opaque objects in omission records.
+
+The implemented public document projection is a field-by-field allowlist. It
+includes title, provider timestamps, lineage coverage/relations, safe ordered
+entry and tool-linkage evidence, exact text/content hashes, segment provenance,
+and admitted omission class/source type. It excludes root session identity,
+workspace, source/input locators, source metadata, provider roots, capture/source
+observations, freshness, adapter version, and the digest itself. Relation target
+identity remains included as canonical lineage evidence.
+
+The `sha256-sessions-document-jcs-v1` digest covers the complete, unbounded,
+versioned projection using exact well-formed Unicode without normalization. It is
+stable across root identity and later source-state observations. It is not
+redaction, encryption, a signature, proof of authenticity, a safety assessment,
+or a replacement for session identity/lineage. Equal digests do not prove that
+two sessions are the same or that copied content is safe.
+
+Retained query attribution now requires successful capture time, effective
+source-observation time, last-good adapter version, source state/freshness, and
+the stored digest. Show reads attribution and the document under one immutable
+library snapshot and verifies the digest before returning canonical content.
+List/search read the stored digest directly and do not reopen providers.
 
 Human list/search/show output omits source locators, source metadata, and local
 workspace values. Search snippets and context are bounded to 512 UTF-8 bytes per
@@ -166,12 +196,13 @@ manage backups according to their threat model.
 
 ## Later V1 boundaries
 
-Planned portable export will also read only the canonical library. It must
+Planned JSON/JSONL portable export will also read only the canonical library. It must
 exclude diagnostic locators, provider roots, source metadata, local workspace
 paths, and attachment paths by default; frame all prior instructions as untrusted
-history; and never deliver content to another provider itself. M7 owns those
-Markdown/JSON/JSONL artifacts and versioned transcript-bearing list/search/show
-DTOs; M6 query output remains human-facing.
+history; and never deliver content to another provider itself. Versioned
+transcript-bearing list/search/show DTOs and JSON/JSONL export are the next M7
+work. Markdown presentation is deferred until after M8 and before M9/V1 over the
+same projection; current query output remains human-facing.
 
 No project, skill, provider configuration, or source transcript is automatically
 edited from analysis output.

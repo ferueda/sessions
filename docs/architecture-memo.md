@@ -137,8 +137,9 @@ A session contains:
 The canonical library records the latest successful normalized snapshot per
 session identity in V1. Storage-owned capture state includes the capture time,
 last successful source observation, complete-input fingerprint, adapter format
-version, and a deterministic digest over a versioned canonical document
-serialization. Source presence and snapshot freshness remain independent:
+version, and the persisted `sha256-sessions-document-jcs-v1` digest over the
+closed public document projection. Source presence and snapshot freshness remain
+independent:
 
 - a complete successful scan marks discovered sessions present and previously
   captured but unseen sessions missing;
@@ -157,6 +158,39 @@ populates library capture or source-observation facts.
 V1 does not keep every intermediate provider revision. A later successful read
 atomically replaces the latest snapshot; explicit portable export can preserve a
 chosen point in time outside the live library.
+
+### Public document projection and digest
+
+The implemented public projection is one field-by-field allowlist shared by
+digest verification and later renderers. It contains a fixed document-schema
+tag, title and provider timestamps when present, lineage coverage and ordered
+relations, ordered entries with safe tool/linkage evidence, ordered segment
+provenance, exact text/content hashes, and admitted non-text omission class/source
+type. Relation target identity remains canonical lineage evidence.
+
+The projection excludes the root session identity, workspace, entry source
+locators, segment source metadata, provider/input locators, capture and source
+observations, freshness, adapter version, and the digest itself. Optional fields
+are absent rather than `null`. Arrays preserve canonical order. Relation and
+content ordinals are their array positions; entries retain admitted ordinals.
+
+`sha256-sessions-document-jcs-v1` is SHA-256 over the UTF-8 RFC 8785/JCS form of
+the complete, unbounded, versioned projection. Object keys use UTF-16 code-unit
+order, arrays retain order, exact well-formed Unicode is not normalized, and the
+serializer feeds fragments into the hash rather than building a second complete
+transcript string. The digest is independent from root identity and later source
+state. It is not a signature, an authenticity result, a safety signal, or a
+replacement for canonical identity or lineage.
+
+Admission constructs and hashes the immutable projection only after canonical
+validation; adapters cannot supply a digest. The fixed scheme and 32 digest bytes
+are replaced atomically with the canonical document. Retained summaries require
+successful capture time, effective source-observation time, last-good adapter
+version, source state/freshness, and the stored digest. Show reads summary and
+document under one immutable SQLite snapshot and requires their stored digests to
+agree. Full document reads and semantic health reconstruct the projection and
+verify the digest; list/search read it directly without reconstructing every
+document.
 
 ### Entry
 
@@ -376,9 +410,19 @@ reconstructs canonical sessions directly rather than routing through search;
 planned export will do the same, including for retained sessions whose latest
 source state is missing or unknown.
 
+A missing, malformed, unknown-scheme, or mismatching public-document digest is
+canonical corruption. It fails full document reads and the semantic health walk;
+FTS rebuild and orphan maintenance cannot recreate or repair it. Document and
+digest replacement share the existing leased immediate transaction, so any later
+write failure rolls both back to the last-good pair.
+
 Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
 earlier development builds are unsupported and fail closed without migration or
 deletion; users can select a fresh Sessions data directory and index again.
+The persisted document digest changes that schema-1 baseline checksum. Current
+`data clear` does not claim an incompatible earlier database; the pre-launch
+reset is a fresh `SESSIONS_DATA_DIR` or manual removal of only the exact obsolete
+Sessions-owned directory followed by reindexing.
 Compatibility begins with the first published release. From that point, SQLite
 migrations are ordered, checksummed, transactional, and forward-only; they must
 preserve canonical evidence, arbitrate writer ownership before schema mutation,
@@ -456,12 +500,15 @@ sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-Remaining planned V1 surface:
+Next planned M7 surface:
 
 ```text
-sessions export <source-instance:id> --format md|json|jsonl [--full]
-sessions index --source cursor
+sessions export <source-instance:id> --format json|jsonl [--full]
 ```
+
+Deferred presentation work after M8 and before M9/V1 adds `--format md` over the
+same projection. It does not change eligible evidence or digest semantics.
+M8 separately adds `sessions index --source cursor`.
 
 Behavioral rules:
 
@@ -476,8 +523,8 @@ Behavioral rules:
 - Potentially large output is bounded by default. `--full` is explicit.
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
-- M6 list/search/show output is human-facing; M7 owns their versioned
-  JSON/JSONL DTOs and portable export.
+- Current list/search/show output is human-facing. Their versioned JSON/JSONL
+  DTOs and portable JSON/JSONL export are the next M7 change.
 - `index` durably retains the latest successful normalized snapshot. A complete
   later scan can change its source state to missing but cannot delete it.
 - Destructive deletion is explicit and distinct from rebuilding derived search
@@ -488,21 +535,21 @@ The exact current surface is generated help; stable semantics live in
 
 ## Portable context export
 
-`sessions export` emits one retained canonical snapshot from Sessions-owned
-storage and never reopens provider histories. Markdown is the human/agent-facing
-attachment or paste artifact. JSON is one versioned bundle; JSONL is the
-equivalent provider-neutral projection as independently attributable ordered
-records. Sessions performs extraction only: it does not import the artifact,
-call provider APIs, use a clipboard or application UI, create a destination
-conversation, or manage a target provider's context limits.
+Planned `sessions export` will emit one retained canonical snapshot from
+Sessions-owned storage and never reopen provider histories. JSON will be one
+versioned bundle; JSONL will carry equivalent provider-neutral evidence as
+independently attributable ordered records. Markdown remains later presentation
+work after M8 and before M9/V1. Sessions performs extraction only: it does not
+import the artifact, call provider APIs, use a clipboard or application UI,
+create a destination conversation, or manage a target provider's context limits.
 
-Every format identifies the canonical session, capture time, latest source state
-and observation time, adapter version, document-digest scheme/value, and explicit
-truncation or omission state. The digest covers a versioned export-eligible
-canonical projection and remains stable across output formats and later
-source-state observations. It excludes capture metadata, diagnostic locators,
-adapter input locators, source metadata, provider roots, and local workspace
-paths.
+Every planned format identifies the canonical session, capture time, effective
+source state and observation time, last-good adapter version,
+document-digest scheme/value, and explicit truncation or omission state. The
+implemented digest covers the complete versioned public projection and remains
+stable across output formats and later source-state observations. It excludes
+identity/attribution, diagnostic locators, adapter input locators, source
+metadata, provider roots, and local workspace paths.
 
 A full export contains every ordered export-eligible entry and segment in that
 retained normalized snapshot, including explicit omission markers. `--full`
@@ -511,8 +558,9 @@ reasoning, raw payloads, media bytes or references, related-session bodies, or
 evidence the adapter never observed. Known relations are metadata and are not
 recursively exported.
 
-Markdown structurally frames actor-labeled transcript content as untrusted
-historical data. JSON and JSONL carry the same disposition explicitly. Source
+Later Markdown will structurally frame actor-labeled transcript content as
+untrusted historical data. JSON and JSONL will carry the same disposition
+explicitly. Source
 locators and local paths are never emitted as metadata by default, but secrets or
 paths written inside faithful transcript text are not automatically redacted.
 Users control whether an artifact leaves the local privacy boundary. Equal text,
@@ -772,10 +820,12 @@ index/list/show for the first vertical slice.
 
 ### Phase 3 — Query and export (in progress)
 
-M6 implements the completed provider-neutral lexical search, filtered/cursored list, bounded
-adjacent and linked context, lineage-aware support reporting, and FTS repair.
-M7 adds versioned JSON/JSONL, framed portable Markdown/JSON/JSONL context export,
-and final CLI compatibility schemas.
+M6 implements the completed provider-neutral lexical search, filtered/cursored
+list, bounded adjacent and linked context, lineage-aware support reporting, and
+FTS repair. The M7 canonical public projection, JCS digest, atomic persistence,
+verification, and same-snapshot attribution are complete. Versioned JSON/JSONL
+and portable JSON/JSONL export are next. Framed Markdown follows after M8 and
+before M9/V1 over the same projection.
 
 ### Phase 4 — Equivalent second adapter
 

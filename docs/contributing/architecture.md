@@ -1,6 +1,6 @@
 # Current architecture
 
-Status: M6 Codex retained-library query vertical slice complete.
+Status: M7 canonical export foundation complete; JSON/JSONL delivery planned.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -42,7 +42,7 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 
 | Path                                             | Owner                                                                                  |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| `src/domain/`                                    | Canonical session/query/lineage values, identity, provenance, and validation           |
+| `src/domain/`                                    | Canonical values, public projection/JCS digest, identity, provenance, and validation   |
 | `src/application/ports/`                         | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts       |
 | `src/application/source-*.ts`                    | Complete input fingerprints and typed source failures                                  |
 | `src/application/validate-session.ts`            | Immutable adapter-read admission                                                       |
@@ -58,15 +58,16 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `scripts/`                                       | Build and delivery smoke helpers; not published runtime                                |
 | `test/`                                          | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
-Portable export, Cursor, packaged Agent Skills, and a public adapter ABI do not
-exist yet. M7 owns transcript-bearing JSON/JSONL and portable export; M6
-list/search/show output is human-facing.
+Portable export, transcript-bearing JSON/JSONL, Cursor, packaged Agent Skills,
+and a public adapter ABI do not exist yet. The M7 foundation now owns one closed
+public document projection, its deterministic digest, and retained attribution;
+the current list/search/show output remains human-facing.
 
-The current runtime intentionally adds only `smol-toml`. Provider and canonical
-input use focused handwritten bounded validators; Zod is deferred until a
-concrete public-schema benefit justifies its runtime/package cost. M7 owns the
-versioned public transcript DTOs, deterministic document digest, JSON/JSONL, and
-portable export rather than freezing partial equivalents in M6.
+The current runtime dependencies remain `commander` and `smol-toml`. Provider and
+canonical input use focused handwritten bounded validators; Zod is deferred until
+a concrete public-schema benefit justifies its runtime/package cost. Focused
+domain code now owns the public projection and digest without another dependency.
+Versioned JSON/JSONL DTOs and portable export remain the next M7 change.
 
 ## Dependency direction
 
@@ -108,7 +109,9 @@ The current baseline creates canonical text/omitted segments, exact tool identit
 and linkage, complete/unknown lineage coverage, source instances, latest
 successful fingerprints/documents, capture timestamps, source presence/coverage,
 bounded run evidence, a random library identity, derived external-content FTS,
-and writer coordination directly. Only text enters interning and FTS. Canonical
+writer coordination, and the fixed public-document digest directly. The digest
+scheme and exact 32-byte value are stored on the canonical session row in the
+same replacement transaction as the document. Only text enters interning and FTS. Canonical
 text keeps a stable integer content ID, stores the fixed SHA-256 digest as a
 32-byte BLOB, and narrows interning through a non-unique digest index before
 requiring exact binary text equality. A canonical insert guard rejects duplicate
@@ -131,6 +134,10 @@ time crosses expiry, because SQLite prevents a competing takeover while that
 transaction is held. Rollback or process failure discards both the transactional
 renewal and partial work. Unsupported development databases fail closed; no
 pre-release schema cutover or lease carry-forward exists.
+The persisted document digest changed the single schema-1 baseline checksum.
+Earlier development libraries are not migrated or cleared automatically; use a
+fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
+directory, then index again.
 
 A complete scan marks unseen retained sessions `missing`; unavailable or
 incomplete discovery leaves effective source state `unknown`. Neither deletes
@@ -169,12 +176,28 @@ derived FTS from healthy canonical content.
 
 Immutable readers expose separate `sessions` reconstruction and provider-neutral
 `query` ports. List/search use one SQLite snapshot for complete pages, context,
-and support; show reconstructs the exact canonical document. None resolve or
+and support; show reconstructs the exact canonical document. Retained summaries
+include successful capture time, effective source-observation time, last-good
+adapter version, and the stored document digest. Show reads its summary and body
+from one immutable snapshot and requires their stored digests to agree. Full
+document reads reconstruct the closed public projection and verify the persisted
+digest; a mismatch is canonical corruption, not FTS damage. List/search read the
+stored digest directly and do not reconstruct every document. None resolve or
 reopen Codex, so retained content remains usable after provider disappearance.
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content; doctor
 stays read-only and reports canonical integrity, content reachability, and
 projection health separately.
+
+The public document projection is a field-by-field allowlist. It includes title,
+provider timestamps, lineage coverage and ordered relations, ordered entries,
+safe tool/linkage evidence, exact text/content hashes, and admitted non-text
+omission facts. It excludes the root identity, workspace, locators, source
+metadata, capture/source observations, freshness, adapter version, and the digest
+itself. `sha256-sessions-document-jcs-v1` hashes the complete versioned projection
+with fragment-fed RFC 8785/JCS serialization and no Unicode normalization. The
+digest is document evidence only: it is not session identity, a signature, an
+authenticity result, or a safety signal.
 
 ## Query boundary
 

@@ -47,6 +47,9 @@ The repository now includes:
 - one current storage baseline with durable canonical evidence, exact text,
   privacy-safe omissions, incremental whole-page reclamation, generic tool
   identity/linkage, capture time, and source-presence state;
+- one closed public session-document projection, fragment-fed RFC 8785/JCS
+  digest, atomic digest/body persistence, canonical verification, and required
+  same-snapshot retained attribution;
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
@@ -71,8 +74,9 @@ The repository now includes:
 
 It does not yet have portable export or transcript-bearing JSON/JSONL DTOs, the
 Cursor adapter, the packaged Agent Skill, release automation, or the pinned
-Harness integration. M7 builds export/stable machine schemas over
-the same retained evidence without changing adapter responsibilities.
+Harness integration. The remaining M7 delivery builds stable machine schemas and
+export over the implemented public projection without changing adapter
+responsibilities.
 
 ## Execution rules
 
@@ -378,8 +382,9 @@ Required behavior:
   `unknown`), adapter version/source revision, canonical evidence, FTS, run
   diagnostics, and writer coordination directly. Earlier development databases
   are unsupported and fail closed without migration or deletion. Snapshot
-  freshness and source presence remain independent. M7 owns the exact export
-  projection and document-digest scheme/backfill.
+  freshness and source presence remain independent. The completed M7 foundation
+  adds the exact public projection and document-digest scheme directly to the
+  single current baseline; there is no pre-launch backfill.
 - Use one application-owned observation instant per selected-source run for its
   coverage, presence, last-seen, and successful-capture facts. Capture time means
   the scan that produced the successfully persisted normalized snapshot. SQLite
@@ -680,17 +685,36 @@ Outcome: the entire planned V1 command surface is scriptable and bounded, and on
 retained session can be extracted as portable provider-neutral context without
 Sessions delivering it.
 
-Execution is split into two independently reviewable plans, followed by deferred
-Markdown presentation work:
+Execution is split into one completed foundation, one active delivery plan, and
+deferred Markdown presentation work:
 
-1. build the canonical public projection, persisted document digest, and
-   same-snapshot attribution;
-2. deliver bounded JSON/JSONL for list, search, show, and export;
-3. add Markdown over the same projection after M8 and before M9/V1.
+1. **Complete:** build the canonical public projection, persisted document digest,
+   and same-snapshot attribution;
+2. **Next:** deliver bounded JSON/JSONL for list, search, show, and export;
+3. **Deferred:** add Markdown over the same projection after M8 and before M9/V1.
 
 The first two steps complete the provider-neutral export engine required to begin
 M8. Deferring Markdown changes sequencing, not V1 scope; it remains a pre-M9 gate
 unless the product contract is explicitly revised.
+
+The completed foundation field-by-field projects only export-eligible canonical
+evidence, excluding root identity, workspace, locators, source metadata, capture
+and source observations, freshness, adapter version, and the digest itself. It
+hashes the complete unbounded versioned projection as
+`sha256-sessions-document-jcs-v1` through fragment-fed RFC 8785/JCS with exact,
+non-normalized Unicode. The fixed scheme/32-byte digest is stored atomically with
+each successful canonical replacement. Full reads and health recompute it;
+list/search read the stored value directly. Retained summaries require capture
+time, effective source-observation time, last-good adapter version, source
+state/freshness, and digest. Show reads summary/document in one immutable
+snapshot. Digest mismatch is canonical corruption, never FTS damage; the digest
+is not identity, authentication, or a safety signal.
+
+This foundation changed the single pre-launch schema-1 checksum. Earlier
+development libraries fail closed without migration or automatic deletion. Use a
+fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
+directory before reindexing; current `data clear` does not accept that
+incompatible baseline.
 
 Primary change areas:
 
@@ -721,10 +745,10 @@ Required behavior:
   attachment path, or private media reference is exported as metadata. Transcript
   text itself is not automatically secret- or path-redacted. Changing field
   meaning requires a new version.
-- Make Markdown the structurally framed human/agent context artifact, JSON one
-  versioned bundle, and JSONL its equivalent independently attributable streaming
-  projection. Known relations are metadata only; export never traverses related
-  session bodies.
+- Make JSON one versioned bundle and JSONL its equivalent independently
+  attributable streaming projection. Known relations are metadata only; export
+  never traverses related session bodies. Add structurally framed Markdown later
+  without changing the projection or digest.
 - Keep requested data on stdout and diagnostics/progress on stderr. Empty success
   exits `0`, operational failure `1`, and invalid usage `2`.
 - Reject unknown flags/values, honor `NO_COLOR`, and require explicit `--full` for
@@ -747,12 +771,13 @@ Exit gate:
   execution evidence, same-name calls in different namespaces, omitted tool
   identity, text hashes, non-text omission/provenance, and a non-adjacent result
   that does not inherit the call's tool identity.
-- Export fixtures prove equivalent eligible evidence and one digest across all
-  formats, present/missing/unknown source states without provider access, bounded
+- Export fixtures prove equivalent eligible evidence and one digest across JSON
+  and JSONL, present/missing/unknown source states without provider access, bounded
   versus `--full` behavior, independently attributable JSONL, non-recursive
   lineage, and absence of every private diagnostic/path field.
-- Adversarial Markdown/terminal fixtures cannot escape the historical-data frame;
-  export or later equal text creates no lineage.
+- Adversarial terminal fixtures cannot turn transcript data into terminal control;
+  export or later equal text creates no lineage. The deferred Markdown change
+  separately proves its historical-data frame before M9/V1.
 - CLI tests cover bounds, truncation, cursors, strict usage, streams, exit codes,
   `NO_COLOR`, untrusted text, and index-only reads.
 - Generated help and all current/planned labels match implemented behavior.

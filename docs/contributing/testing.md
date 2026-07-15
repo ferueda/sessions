@@ -39,10 +39,10 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 
 | Layer                 | Current placement                                                               | Proves                                                                                               |
 | --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, query values, hashes, identity, parsing, bounds                                |
+| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds         |
 | Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/forget/repair, failures                 |
 | Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation         |
-| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows                     |
+| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows   |
 | Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                            |
 | CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
 | Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
@@ -50,14 +50,14 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | The same workflow through an offline-installed tarball, plus allowlist and independence checks       |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
-or authenticated live command today. Export, Cursor, and the packaged Agent
-Skill remain planned rather than current coverage.
+or authenticated live command today. JSON/JSONL delivery, export, Cursor, and the
+packaged Agent Skill remain planned rather than current coverage.
 
 ## Choosing proof
 
 | Change                                    | Preferred proof                                                            | Focused command                                              | Handoff                                                   |
 | ----------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| Domain value, validator, hash, identity   | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                       | `pnpm check`                                              |
+| Domain value, validator, projection/hash  | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                       | `pnpm check`                                              |
 | Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                  | `pnpm check`                                              |
 | Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`               | `pnpm check`                                              |
 | Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`               | `pnpm check`                                              |
@@ -68,6 +68,15 @@ Skill remain planned rather than current coverage.
 | Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package` | `pnpm check`                                              |
 
 Do not repeat one acceptance criterion at every layer.
+
+The current document-digest proof stays at its stable owners: domain tests cover
+the closed projection, relevant RFC 8785/JCS vectors, Unicode/order sensitivity,
+private-field exclusion, and fragment-fed large-document hashing; application
+tests cover immutable post-validation admission; SQLite tests cover the strict
+32-byte codec, atomic body/digest replacement and rollback, same-snapshot
+attribution, direct summary reads, checksum refusal, and canonical read/health
+failure on mismatch. Digest corruption is not tested as FTS repair because it is
+canonical corruption.
 
 ## Authoring
 
