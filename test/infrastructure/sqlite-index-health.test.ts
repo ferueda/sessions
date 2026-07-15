@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 
 const temporaryDirectories: string[] = [];
@@ -37,10 +38,28 @@ describe("SQLite ready-index health", () => {
       ftsContent: "ok",
       ftsSecureDelete: "enabled",
       ftsRemediation: "not-needed",
+      pageReclamation: "incremental",
       runRecords: "ok",
       writerLease: "free",
       activeRuns: 0,
       interruptedRuns: 0,
+    });
+
+    expect(await persistenceSnapshot(paths)).toEqual(before);
+  });
+
+  test("reports a recognized wrong page mode as typed unhealthy state without mutation", async () => {
+    const paths = await currentSchemaPathsWithoutIncrementalReclamation();
+    const before = await persistenceSnapshot(paths);
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: false,
+      canonicalIntegrity: "ok",
+      foreignKeys: "ok",
+      ftsStructure: "ok",
+      ftsContent: "ok",
+      pageReclamation: "invalid",
+      writerLease: "free",
     });
 
     expect(await persistenceSnapshot(paths)).toEqual(before);
@@ -345,6 +364,28 @@ async function initializedPaths(lifecycle = createSqliteIndexLifecycle()): Promi
   const writer = await lifecycle.openWriter(paths);
   await writer.close();
   return paths;
+}
+
+async function currentSchemaPathsWithoutIncrementalReclamation(): Promise<IndexPaths> {
+  const root = await mkdtemp(path.join(tmpdir(), "sessions-health-invalid-mode-"));
+  temporaryDirectories.push(root);
+  const directory = path.join(root, "sessions");
+  await mkdir(directory, { mode: 0o700 });
+  const databaseFile = path.join(directory, "sessions.sqlite3");
+  const database = new DatabaseSync(databaseFile);
+  try {
+    applyMigrations(database);
+  } finally {
+    database.close();
+  }
+  await chmod(databaseFile, 0o600);
+  return {
+    directory,
+    scratch: path.join(directory, ".scratch"),
+    database: databaseFile,
+    wal: `${databaseFile}-wal`,
+    shm: `${databaseFile}-shm`,
+  };
 }
 
 interface PersistenceSnapshot {

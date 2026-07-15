@@ -25,6 +25,7 @@ describe("clearData", () => {
         walRemoved: false,
         shmRemoved: false,
       }),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
@@ -49,6 +50,7 @@ describe("clearData", () => {
         walRemoved: true,
         shmRemoved: false,
       }),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
@@ -67,6 +69,7 @@ describe("clearData", () => {
     const failure = new Error("maintenance failed");
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(failure),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 
@@ -77,6 +80,7 @@ describe("clearData", () => {
     const busy = new IndexMaintenanceError("library-busy");
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(busy),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
     };
 

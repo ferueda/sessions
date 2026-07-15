@@ -14,6 +14,7 @@ import {
   validateMigrationCatalog,
 } from "./migrations.ts";
 import { inspectIndexPathSafety } from "./permissions.ts";
+import { assertSqlitePageReclamation } from "./sqlite-page-reclamation.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
@@ -23,6 +24,7 @@ export interface SqliteReadSnapshot {
 }
 
 export interface SqliteReadSnapshotOptions {
+  readonly enforcePageReclamation?: boolean;
   readonly migrations?: readonly SqliteMigration[];
   readonly platform?: NodeJS.Platform;
   readonly supportedSchemaVersion?: number;
@@ -58,6 +60,7 @@ export function createSqliteReadSnapshot(
           platform,
           supportedSchemaVersion,
           timeoutMs,
+          enforcePageReclamation: options.enforcePageReclamation ?? true,
         });
       } finally {
         activeOperations -= 1;
@@ -76,6 +79,7 @@ export function createSqliteReadSnapshot(
 }
 
 interface ResolvedReadOptions {
+  readonly enforcePageReclamation: boolean;
   readonly migrations: readonly SqliteMigration[];
   readonly platform: NodeJS.Platform;
   readonly supportedSchemaVersion: number;
@@ -95,7 +99,23 @@ async function runSnapshotOperation<T>(
 
   try {
     database = openImmutableDatabase(paths.database, options.timeoutMs);
-    assertReadyHistory(database, options);
+    const schemaVersion = assertReadyHistory(database, options);
+    if (options.enforcePageReclamation) {
+      try {
+        assertSqlitePageReclamation(database);
+      } catch (error) {
+        throw new SqliteIndexLifecycleError(
+          {
+            status: "incompatible",
+            initialized: true,
+            schemaVersion,
+            supportedSchemaVersion: options.supportedSchemaVersion,
+            reason: "page-reclamation-mode-mismatch",
+          },
+          { cause: error },
+        );
+      }
+    }
     result = await operation(database);
   } catch (error) {
     operationFailure.caught = true;
@@ -215,7 +235,7 @@ function openImmutableDatabase(file: string, timeoutMs: number): DatabaseSync {
   });
 }
 
-function assertReadyHistory(database: DatabaseSync, options: ResolvedReadOptions): void {
+function assertReadyHistory(database: DatabaseSync, options: ResolvedReadOptions): number {
   let history;
   try {
     history = readMigrationHistory(database, options.migrations);
@@ -233,6 +253,7 @@ function assertReadyHistory(database: DatabaseSync, options: ResolvedReadOptions
       supportedSchemaVersion: options.supportedSchemaVersion,
     });
   }
+  return history.currentVersion;
 }
 
 function migrationErrorState(error: unknown, supportedSchemaVersion: number): IndexState {

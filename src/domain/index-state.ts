@@ -2,6 +2,7 @@ export type IndexIncompatibilityReason =
   | "concurrent-change"
   | "invalid-migration-history"
   | "migration-checksum-mismatch"
+  | "page-reclamation-mode-mismatch"
   | "unreadable-database"
   | "unrecognized-database";
 

@@ -33,6 +33,10 @@ export interface IndexPermissionOptions {
   readonly platform?: NodeJS.Platform;
 }
 
+export interface PreparedIndexPaths {
+  readonly databaseCreated: boolean;
+}
+
 export class IndexPathSecurityError extends Error {
   readonly issue: IndexPathSecurityIssue;
 
@@ -102,7 +106,7 @@ export async function inspectIndexPathSafety(
 export async function prepareIndexPathsForWriter(
   paths: IndexPaths,
   options: IndexPermissionOptions = {},
-): Promise<void> {
+): Promise<PreparedIndexPaths> {
   assertCanonicalIndexPaths(paths);
   const platform = options.platform ?? process.platform;
 
@@ -120,8 +124,10 @@ export async function prepareIndexPathsForWriter(
   await secureExistingPath(paths.directory, "directory", true, platform);
 
   let handle: FileHandle | undefined;
+  let databaseCreated = false;
   try {
     handle = await open(paths.database, "wx", FILE_MODE);
+    databaseCreated = true;
   } catch (error) {
     if (!isErrno(error, "EEXIST")) {
       throw new IndexPathSecurityError({
@@ -137,6 +143,7 @@ export async function prepareIndexPathsForWriter(
   await secureExistingPath(paths.database, "database", false, platform);
   await secureOptionalPath(paths.wal, "wal", platform);
   await secureOptionalPath(paths.shm, "shm", platform);
+  return { databaseCreated };
 }
 
 export async function secureIndexFiles(

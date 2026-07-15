@@ -1,6 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
+import { configureSqlitePageReclamation } from "./sqlite-page-reclamation.ts";
+
 export function openSqliteWriterDatabase(file: string, busyTimeoutMs: number): DatabaseSync {
   return new DatabaseSync(file, writerOptions(busyTimeoutMs));
 }
@@ -29,9 +31,15 @@ function writerOptions(
   };
 }
 
-export function configureSqliteWriterDatabase(database: DatabaseSync, busyTimeoutMs: number): void {
+export function configureSqliteWriterDatabase(
+  database: DatabaseSync,
+  busyTimeoutMs: number,
+  options: { readonly initializePageReclamation?: boolean } = {},
+): void {
   database.enableDefensive(true);
   database.enableLoadExtension(false);
+  // This persistent file-header choice must precede WAL and all schema writes.
+  configureSqlitePageReclamation(database, options.initializePageReclamation ?? false);
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA trusted_schema = OFF");
   database.exec("PRAGMA secure_delete = ON");

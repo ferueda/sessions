@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import type { ShowSessionResult } from "../src/application/show-session.ts";
-import { renderList, renderPaths, renderSearch, renderShow } from "../src/cli/render.ts";
+import {
+  renderDataCompact,
+  renderList,
+  renderPaths,
+  renderSearch,
+  renderShow,
+} from "../src/cli/render.ts";
 
 const identity = {
   source: { kind: "synthetic", instanceId: "one" },
@@ -9,6 +15,29 @@ const identity = {
 } as const;
 
 describe("human CLI rendering", () => {
+  test.each([
+    ["absent", 0, 0, 0],
+    ["unchanged", 4096, 4096, 0],
+    ["compacted", 8192, 4096, 4096],
+  ] as const)(
+    "renders exact aggregate bytes for %s compaction",
+    (outcome, before, after, reclaimed) => {
+      const report = {
+        schemaVersion: 1,
+        command: "data-compact",
+        outcome,
+        databaseBytesBefore: before,
+        databaseBytesAfter: after,
+        reclaimedDatabaseBytes: reclaimed,
+      } as const;
+
+      expect(renderDataCompact(report, "human")).toBe(
+        `Compaction outcome: ${outcome}. Database bytes before: ${String(before)}; after: ${String(after)}; reclaimed: ${String(reclaimed)}.\n`,
+      );
+      expect(renderDataCompact(report, "json")).toBe(`${JSON.stringify(report, null, 2)}\n`);
+    },
+  );
+
   test("escapes controls in reported local paths", () => {
     const output = renderPaths(
       {

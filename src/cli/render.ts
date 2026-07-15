@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import type { DataClearReport } from "../application/clear-index.ts";
+import type { DataCompactReport } from "../application/compact-index.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
@@ -76,6 +77,12 @@ export function renderDataClear(report: DataClearReport, format: OutputFormat): 
   return format === "json"
     ? renderJson(report)
     : `${report.outcome === "cleared" ? "Sessions data cleared." : "No Sessions data found."}\n`;
+}
+
+export function renderDataCompact(report: DataCompactReport, format: OutputFormat): string {
+  return format === "json"
+    ? renderJson(report)
+    : `Compaction outcome: ${report.outcome}. Database bytes before: ${String(report.databaseBytesBefore)}; after: ${String(report.databaseBytesAfter)}; reclaimed: ${String(report.reclaimedDatabaseBytes)}.\n`;
 }
 
 export function renderList(result: ListSessionsResult): string {

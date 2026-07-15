@@ -2,8 +2,10 @@ import type { IndexPaths } from "./index-lifecycle.ts";
 
 export type IndexHealthCheck = "failed" | "ok";
 export type IndexFtsSecureDeleteHealth = "enabled" | "missing" | "unsupported";
+export type IndexPageReclamationHealth = "incremental" | "invalid";
 export type IndexWriterLeaseHealth =
   | "clear-live"
+  | "compact-live"
   | "expired"
   | "forget-live"
   | "free"
@@ -18,6 +20,7 @@ export interface ReadyIndexHealth {
   readonly ftsContent: IndexHealthCheck;
   readonly ftsSecureDelete: IndexFtsSecureDeleteHealth;
   readonly ftsRemediation: "not-needed" | "rebuild-required";
+  readonly pageReclamation: IndexPageReclamationHealth;
   readonly runRecords: IndexHealthCheck;
   readonly writerLease: IndexWriterLeaseHealth;
   readonly activeRuns: number;
