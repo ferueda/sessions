@@ -1,6 +1,7 @@
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
 
 import type { DataClearReport } from "../application/clear-index.ts";
+import type { DataCompactReport } from "../application/compact-index.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
@@ -22,6 +23,7 @@ import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts
 import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import {
   renderDataClear,
+  renderDataCompact,
   renderDoctor,
   renderForget,
   renderIndex,
@@ -63,6 +65,7 @@ export interface ProgramOptions {
   }) => Promise<ShowSessionResult>;
   readonly forget: (identity: SessionIdentity) => Promise<ForgetSessionReport>;
   readonly clearData: () => Promise<DataClearReport>;
+  readonly compactData: () => Promise<DataCompactReport>;
 }
 
 export class OperationalExit extends Error {
@@ -210,6 +213,13 @@ export function createProgram(options: ProgramOptions): Command {
     });
 
   const data = program.command("data").description("Manage Sessions-owned local data");
+  data
+    .command("compact")
+    .description("Reclaim reusable whole pages from Sessions-owned local data")
+    .addOption(formatOption())
+    .action(async ({ format }: { format: OutputFormat }) => {
+      options.output.writeOut(renderDataCompact(await options.compactData(), format));
+    });
   data
     .command("clear")
     .description("Delete all Sessions-owned local data")

@@ -361,6 +361,32 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
     assertCommand(repeatedForget, 0, "repeat forget");
     assert.equal(parseJson(repeatedForget.stdout).outcome, "absent");
 
+    const compact = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "data",
+      "compact",
+      "--format",
+      "json",
+    ]);
+    assertCommand(compact, 0, "data compact");
+    const compactReport = parseJson(compact.stdout);
+    assert.equal(compactReport.schemaVersion, 1);
+    assert.equal(compactReport.command, "data-compact");
+    assert.ok(compactReport.outcome === "unchanged" || compactReport.outcome === "compacted");
+    const compactBefore = readNonNegativeSafeInteger(
+      compactReport.databaseBytesBefore,
+      "compact databaseBytesBefore",
+    );
+    const compactAfter = readNonNegativeSafeInteger(
+      compactReport.databaseBytesAfter,
+      "compact databaseBytesAfter",
+    );
+    const compactReclaimed = readNonNegativeSafeInteger(
+      compactReport.reclaimedDatabaseBytes,
+      "compact reclaimedDatabaseBytes",
+    );
+    assert.equal(compactBefore - compactAfter, compactReclaimed);
+    assert.equal(compactReport.outcome === "compacted", compactReclaimed > 0);
+
     const recapture = await stableProviderCommand(options, fixture.codexHome, environment, [
       "index",
       "--format",
@@ -511,6 +537,11 @@ function readArray(value: Record<string, unknown>, key: string): readonly unknow
   const array = value[key];
   assert.ok(Array.isArray(array), `${key} is not an array`);
   return array;
+}
+
+function readNonNegativeSafeInteger(value: unknown, label: string): number {
+  assert.ok(Number.isSafeInteger(value) && Number(value) >= 0, `${label} is not a safe integer`);
+  return Number(value);
 }
 
 function escapePattern(value: string): string {

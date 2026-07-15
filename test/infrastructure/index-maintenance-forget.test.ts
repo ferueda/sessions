@@ -221,6 +221,7 @@ async function seededCurrentPaths(): Promise<IndexPaths> {
   const paths = await fixturePaths();
   const database = new DatabaseSync(paths.database);
   try {
+    database.exec("PRAGMA auto_vacuum = INCREMENTAL");
     applyMigrations(database);
     seedRetainedEvidence(database);
   } finally {

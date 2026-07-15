@@ -23,6 +23,7 @@ import {
   openSqliteWriterDatabase,
 } from "./sqlite-writer-database.ts";
 import { forgetSqliteSession } from "./sqlite-index-forget.ts";
+import { compactSqliteIndex, type SqliteCompactObserver } from "./sqlite-index-compact.ts";
 import {
   acquireWriterLeaseInTransaction,
   assertWriterLease,
@@ -40,6 +41,8 @@ const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 export interface SqliteIndexMaintenanceOptions {
   readonly beforeFileRemoval?: (paths: IndexPaths) => Promise<void>;
   readonly busyTimeoutMs?: number;
+  readonly compactBatchPageBudgetBytes?: number;
+  readonly compactObserver?: SqliteCompactObserver;
   readonly migrations?: readonly SqliteMigration[];
   readonly now?: () => Date;
   readonly platform?: NodeJS.Platform;
@@ -78,6 +81,23 @@ export function createSqliteIndexMaintenance(
           : { beforeFileRemoval: options.beforeFileRemoval }),
         ...(options.token === undefined ? {} : { token: options.token }),
         ...(options.unlinkFile === undefined ? {} : { unlinkFile: options.unlinkFile }),
+        ...(options.writerScheduler === undefined
+          ? {}
+          : { writerScheduler: options.writerScheduler }),
+      });
+    },
+    async compact(paths) {
+      return compactSqliteIndex(paths, {
+        busyTimeoutMs,
+        migrations,
+        now,
+        platform,
+        supportedSchemaVersion,
+        ...(options.compactBatchPageBudgetBytes === undefined
+          ? {}
+          : { batchPageBudgetBytes: options.compactBatchPageBudgetBytes }),
+        ...(options.compactObserver === undefined ? {} : { observer: options.compactObserver }),
+        ...(options.token === undefined ? {} : { token: options.token }),
         ...(options.writerScheduler === undefined
           ? {}
           : { writerScheduler: options.writerScheduler }),
@@ -211,7 +231,9 @@ async function clearCoordinatedIndex(
 
   try {
     database = openSqliteWriterDatabase(paths.database, options.busyTimeoutMs);
-    configureSqliteWriterDatabase(database, options.busyTimeoutMs);
+    configureSqliteWriterDatabase(database, options.busyTimeoutMs, {
+      initializePageReclamation: false,
+    });
     lease = acquireClearLease(database, options);
     heartbeat = startWriterLeaseHeartbeat(database, lease, {
       now: options.now,

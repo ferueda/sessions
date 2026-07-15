@@ -88,7 +88,9 @@ export async function forgetSqliteSession(
       throw new MigrationHistoryError("invalid-history", 0);
     }
     assertDatabaseSnapshot(preflight.snapshot, await snapshotDatabase(paths.database));
-    configureSqliteWriterDatabase(database, options.busyTimeoutMs);
+    configureSqliteWriterDatabase(database, options.busyTimeoutMs, {
+      initializePageReclamation: false,
+    });
     const acquired = acquireWriterSchema(database, "forget", options.migrations, {
       now: options.now,
       ...(options.token === undefined ? {} : { token: options.token }),

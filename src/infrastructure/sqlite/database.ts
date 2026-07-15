@@ -47,6 +47,7 @@ import {
   configureSqliteWriterDatabase,
   openSqliteWriterDatabase,
 } from "./sqlite-writer-database.ts";
+import { SqlitePageReclamationModeError } from "./sqlite-page-reclamation.ts";
 import {
   applyWriterMigrations,
   acquireWriterSchema,
@@ -158,8 +159,9 @@ export function createSqliteIndexLifecycle(
     async openWriter(paths) {
       const fts5Security = fts5Probe();
       await refuseSidecarOnlyWriterState(paths, platform, supportedSchemaVersion);
+      let databaseCreated = false;
       try {
-        await prepareIndexPathsForWriter(paths, { platform });
+        databaseCreated = (await prepareIndexPathsForWriter(paths, { platform })).databaseCreated;
       } catch (error) {
         if (error instanceof IndexPathSecurityError) {
           throw new SqliteIndexLifecycleError({
@@ -192,7 +194,9 @@ export function createSqliteIndexLifecycle(
       let lease: WriterLeaseIdentity | undefined;
       let workspace: SourceDiscoveryWorkspaceLifecycle | undefined;
       try {
-        configureSqliteWriterDatabase(database, busyTimeoutMs);
+        configureSqliteWriterDatabase(database, busyTimeoutMs, {
+          initializePageReclamation: databaseCreated,
+        });
         const acquired = acquireWriterSchema(database, "index", migrations, {
           now,
           ...(options.writerToken === undefined ? {} : { token: options.writerToken }),
@@ -245,7 +249,20 @@ export function createSqliteIndexLifecycle(
           now,
         );
       } catch (error) {
-        return throwAfterWriterSetupCleanup(error, {
+        const operationError =
+          error instanceof SqlitePageReclamationModeError
+            ? new SqliteIndexLifecycleError(
+                {
+                  status: "incompatible",
+                  initialized: true,
+                  schemaVersion: state.schemaVersion,
+                  supportedSchemaVersion,
+                  reason: "page-reclamation-mode-mismatch",
+                },
+                { cause: error },
+              )
+            : error;
+        return throwAfterWriterSetupCleanup(operationError, {
           database,
           heartbeat,
           lease,

@@ -27,14 +27,15 @@ list / search / show
   -> immutable library reader (no adapter)
   -> src/infrastructure/sqlite/sqlite-session-query.ts (list/search only)
 
-forget / data clear
-  -> src/application/{forget-session,clear-index}.ts
+forget / data compact / data clear
+  -> src/application/{forget-session,compact-index,clear-index}.ts
   -> src/infrastructure/sqlite/index-maintenance.ts
 ```
 
 The composition root is the only production module that imports both a concrete
 adapter and infrastructure. It resolves Codex lazily: help, version, list,
-search, show, forget, and data clear do not resolve provider configuration.
+search, show, forget, data compact, and data clear do not resolve provider
+configuration.
 Index, paths, and doctor intentionally resolve or probe the registered source.
 
 ## Ownership
@@ -120,8 +121,9 @@ the same transaction. Replacement is not a whole-library orphan-repair path; a
 legitimate producer of unrelated orphans would require explicit writer
 maintenance outside the per-session hot path.
 
-One renewable generation lease serializes `index`, `forget`, and `clear`. Every
-mutation asserts ownership inside its transaction. Expired takeover fences stale
+One renewable generation lease serializes `index`, `forget`, `compact`, and
+`clear`. Every mutation asserts ownership inside its transaction. Expired
+takeover fences stale
 writers between transactions and interrupts abandoned active index runs. An
 immediate transaction that has already serialized the writer may renew its
 unchanged exact generation, purpose, and token at entry and exit even if wall
@@ -141,6 +143,15 @@ canonical evidence while preserving aggregate redacted run history, shared text,
 and incoming relations owned by other sessions. `data clear --yes` removes only
 the validated Sessions database/WAL/SHM paths and exact scratch subtree. Neither
 operation touches a provider.
+
+The current baseline selects SQLite `auto_vacuum=INCREMENTAL` only while creating
+a genuinely new owned database, before WAL or schema writes. Existing files in
+another mode fail closed; readers enforce the mode and doctor reports it
+separately. `data compact` acquires a dedicated lease, checkpoints WAL, and runs
+bounded incremental-vacuum transactions until no whole free page remains. Every
+committed batch is durable and rerunnable. The operation reports observed main
+database file lengths only; it does not run full `VACUUM`, repack partial pages,
+delete canonical rows, or claim forensic erasure.
 
 Immutable readers expose separate `sessions` reconstruction and provider-neutral
 `query` ports. List/search use one SQLite snapshot for complete pages, context,

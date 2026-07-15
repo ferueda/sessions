@@ -121,6 +121,39 @@ describe("SQLite reader lifecycle", () => {
     database.close();
   });
 
+  test("refuses a current schema with the wrong page mode before running a read", async () => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    const database = new DatabaseSync(paths.database);
+    try {
+      applyMigrations(database);
+      expect(database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 0 });
+    } finally {
+      database.close();
+    }
+    await chmod(paths.database, 0o600);
+    const beforeBytes = await readFile(paths.database);
+    const beforeEntries = await readdir(paths.directory);
+    const snapshot = createSqliteReadSnapshot(paths);
+    let operationRan = false;
+
+    await expect(
+      snapshot.run(() => {
+        operationRan = true;
+      }),
+    ).rejects.toMatchObject({
+      state: {
+        status: "incompatible",
+        reason: "page-reclamation-mode-mismatch",
+      },
+    });
+    await snapshot.close();
+
+    expect(operationRan).toBe(false);
+    expect(await readFile(paths.database)).toEqual(beforeBytes);
+    expect(await readdir(paths.directory)).toEqual(beforeEntries);
+  });
+
   test("discards a read result when the main database changes during the operation", async () => {
     const paths = await fixturePaths();
     const writer = await createSqliteIndexLifecycle().openWriter(paths);
@@ -220,6 +253,7 @@ async function createBaselineIndex(paths: IndexPaths): Promise<void> {
   await mkdir(paths.directory, { mode: 0o700 });
   const database = new DatabaseSync(paths.database);
   try {
+    database.exec("PRAGMA auto_vacuum = INCREMENTAL");
     applyMigrations(database, [sqliteMigrations[0]!]);
   } finally {
     database.close();

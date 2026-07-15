@@ -31,14 +31,20 @@ import {
   probeFts5Security,
 } from "../../src/infrastructure/sqlite/fts5-security.ts";
 import {
+  applyMigrations,
   CURRENT_INDEX_SCHEMA_VERSION,
   migrationChecksum,
   sqliteMigrations,
   type SqliteMigration,
 } from "../../src/infrastructure/sqlite/migrations.ts";
+import { prepareIndexPathsForWriter } from "../../src/infrastructure/sqlite/permissions.ts";
+import {
+  configureSqliteWriterDatabase,
+  openSqliteWriterDatabase,
+} from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
 
-const LEGACY_BOOTSTRAP_CHECKSUM =
-  "sha256-utf8-v1:be63645c8bcb17699fba78674153d9fa04603e0915497f6f9b6c194fdd58593c";
+const PRIOR_COMPACT_CONTENT_BOOTSTRAP_CHECKSUM =
+  "sha256-utf8-v1:512e19690e3a12774372c06c23feb61d6a261309732428e320f998129cdd852b";
 
 const temporaryDirectories: string[] = [];
 
@@ -51,6 +57,35 @@ afterEach(async () => {
 });
 
 describe("SQLite index lifecycle", () => {
+  test("selects incremental page reclamation before bootstrapping a new database", async () => {
+    const paths = await fixturePaths();
+    const prepared = await prepareIndexPathsForWriter(paths);
+    expect(prepared).toEqual({ databaseCreated: true });
+    const database = openSqliteWriterDatabase(paths.database, 5_000);
+    try {
+      configureSqliteWriterDatabase(database, 5_000, {
+        initializePageReclamation: prepared.databaseCreated,
+      });
+      expect(database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+      expect(
+        database
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'sessions_schema_migrations'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      database.close();
+    }
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    expect(writer.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+    expect(
+      writer.database.prepare("SELECT COUNT(*) AS count FROM sessions_schema_migrations").get(),
+    ).toEqual({ count: 1 });
+    await writer.close();
+  });
+
   test("initializes a fresh index once and reopens it without changing history", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
@@ -63,6 +98,7 @@ describe("SQLite index lifecycle", () => {
     });
 
     const firstWriter = await lifecycle.openWriter(paths);
+    expect(firstWriter.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
     const firstHistory = firstWriter.database
       .prepare(
         `SELECT version, name, checksum, applied_at
@@ -81,6 +117,7 @@ describe("SQLite index lifecycle", () => {
     await firstWriter.close();
 
     const secondWriter = await lifecycle.openWriter(paths);
+    expect(secondWriter.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
     expect(
       secondWriter.database
         .prepare("SELECT version, name, checksum, applied_at FROM sessions_schema_migrations")
@@ -202,7 +239,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     mutateDatabase(checksumPaths.database, (database) => {
       database
         .prepare("UPDATE sessions_schema_migrations SET checksum = ? WHERE version = 1")
-        .run(LEGACY_BOOTSTRAP_CHECKSUM);
+        .run(PRIOR_COMPACT_CONTENT_BOOTSTRAP_CHECKSUM);
     });
     const obsoleteBytes = await readFile(checksumPaths.database);
     await expect(lifecycle.inspect(checksumPaths)).resolves.toMatchObject({
@@ -347,7 +384,7 @@ process.exit(0);`,
     await expect(lifecycle.inspect(paths)).resolves.toMatchObject({ status: "ready" });
   });
 
-  test("treats a protected empty database as a recoverable pending schema", async () => {
+  test("rejects a preexisting empty database without changing its page mode", async () => {
     const paths = await fixturePaths();
     await mkdir(paths.directory, { mode: 0o700 });
     await writeFile(paths.database, "", { mode: 0o600 });
@@ -358,9 +395,48 @@ process.exit(0);`,
       initialized: true,
       schemaVersion: 0,
     });
-    const writer = await lifecycle.openWriter(paths);
-    expect(writer.state.schemaVersion).toBe(CURRENT_INDEX_SCHEMA_VERSION);
-    await writer.close();
+    const before = await readFile(paths.database);
+    await expect(lifecycle.openWriter(paths)).rejects.toMatchObject({
+      state: {
+        status: "incompatible",
+        reason: "page-reclamation-mode-mismatch",
+      },
+    });
+    expect(await readFile(paths.database)).toEqual(before);
+  });
+
+  test.each([
+    { label: "none", mode: 0 },
+    { label: "full", mode: 1 },
+  ])("rejects an existing current-schema $label database without changing it", async ({ mode }) => {
+    const paths = await fixturePaths();
+    await mkdir(paths.directory, { mode: 0o700 });
+    const database = new DatabaseSync(paths.database);
+    try {
+      if (mode === 1) database.exec("PRAGMA auto_vacuum = FULL");
+      applyMigrations(database);
+      expect(database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: mode });
+    } finally {
+      database.close();
+    }
+    await chmod(paths.database, 0o600);
+    const before = await readFile(paths.database);
+
+    await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+      state: {
+        status: "incompatible",
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+        reason: "page-reclamation-mode-mismatch",
+      },
+    });
+
+    expect(await readFile(paths.database)).toEqual(before);
+    const readOnly = openReadOnly(paths.database);
+    try {
+      expect(readOnly.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: mode });
+    } finally {
+      readOnly.close();
+    }
   });
 
   test("rejects an existing empty migration table as invalid history", async () => {
@@ -469,9 +545,7 @@ process.exit(0);`,
     async () => {
       const paths = await fixturePaths();
       await mkdir(paths.directory, { mode: 0o755 });
-      await writeFile(paths.database, "", { mode: 0o644 });
       await chmod(paths.directory, 0o755);
-      await chmod(paths.database, 0o644);
 
       const writer = await createSqliteIndexLifecycle().openWriter(paths);
       expect((await stat(paths.directory)).mode & 0o777).toBe(0o700);

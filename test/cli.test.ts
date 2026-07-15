@@ -1,10 +1,12 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type { DataClearReport } from "../src/application/clear-index.ts";
+import type { DataCompactReport } from "../src/application/compact-index.ts";
 import type { ForgetSessionReport } from "../src/application/forget-session.ts";
 import type { PathsReport } from "../src/application/get-paths.ts";
 import type { IndexReport } from "../src/application/index-report.ts";
 import type { DoctorReport } from "../src/application/run-doctor.ts";
+import { SessionLibraryError } from "../src/application/library-error.ts";
 import {
   SessionQueryOperationalError,
   SessionQueryUsageError,
@@ -296,6 +298,68 @@ describe("sessions CLI", () => {
     expect(JSON.parse(confirmed.stdout)).toEqual(clearReport());
   });
 
+  test("lists compact beside clear in data help", async () => {
+    const invocation = await invoke(["data", "--help"]);
+
+    expect(invocation.exitCode).toBe(0);
+    expect(invocation.stdout).toContain("compact");
+    expect(invocation.stdout).toContain("clear");
+    expect(invocation.stderr).toBe("");
+  });
+
+  test("compacts without confirmation and emits the exact JSON report", async () => {
+    const report: DataCompactReport = {
+      schemaVersion: 1,
+      command: "data-compact",
+      outcome: "compacted",
+      databaseBytesBefore: 8192,
+      databaseBytesAfter: 4096,
+      reclaimedDatabaseBytes: 4096,
+    };
+    const compactData = vi.fn<ProgramOptions["compactData"]>(async () => report);
+
+    const invocation = await invoke(["data", "compact", "--format", "json"], {
+      compactData,
+    });
+
+    expect(invocation).toEqual({
+      exitCode: 0,
+      stdout: `${JSON.stringify(report, null, 2)}\n`,
+      stderr: "",
+    });
+    expect(compactData).toHaveBeenCalledOnce();
+  });
+
+  test("rejects unsupported compact options before calling the handler", async () => {
+    const compactData = vi.fn<ProgramOptions["compactData"]>();
+
+    const confirmation = await invoke(["data", "compact", "--yes"], { compactData });
+    const invalidFormat = await invoke(["data", "compact", "--format", "yaml"], {
+      compactData,
+    });
+
+    expect(confirmation.exitCode).toBe(2);
+    expect(invalidFormat.exitCode).toBe(2);
+    expect(compactData).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    new SessionLibraryError("library-busy"),
+    new Error("Session library maintenance failed: compact-failed"),
+  ])("reports compact operational failures on stderr only", async (failure) => {
+    const invocation = await invoke(["data", "compact"], {
+      compactData: async () => {
+        throw failure;
+      },
+    });
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: `sessions: ${failure.message}\n`,
+    });
+  });
+
   test("maps unexpected operational failures to stderr", async () => {
     const invocation = await invoke(["doctor"], {
       doctor: async () => {
@@ -329,6 +393,7 @@ async function invoke(
     },
     forget: async () => forgetReport(),
     clearData: async () => clearReport(),
+    compactData: async () => compactReport(),
   };
   const exitCode = await runCli(argv, {
     version: "1.2.3",
@@ -421,5 +486,16 @@ function clearReport(): DataClearReport {
     databaseRemoved: false,
     walRemoved: false,
     shmRemoved: false,
+  };
+}
+
+function compactReport(): DataCompactReport {
+  return {
+    schemaVersion: 1,
+    command: "data-compact",
+    outcome: "absent",
+    databaseBytesBefore: 0,
+    databaseBytesAfter: 0,
+    reclaimedDatabaseBytes: 0,
   };
 }

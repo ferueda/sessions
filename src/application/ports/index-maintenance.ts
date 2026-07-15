@@ -11,13 +11,24 @@ export interface ClearIndexResult {
   readonly shmRemoved: boolean;
 }
 
+export type CompactIndexOutcome = "absent" | "unchanged" | "compacted";
+
+export interface CompactIndexResult {
+  readonly outcome: CompactIndexOutcome;
+  readonly databaseBytesBefore: number;
+  readonly databaseBytesAfter: number;
+  readonly reclaimedDatabaseBytes: number;
+}
+
 export interface IndexMaintenance {
   clear(paths: IndexPaths): Promise<ClearIndexResult>;
+  compact(paths: IndexPaths): Promise<CompactIndexResult>;
   forget(paths: IndexPaths, identity: SessionIdentity): Promise<"forgotten" | "absent">;
 }
 
 export type IndexMaintenanceErrorCode =
   | "clear-failed"
+  | "compact-failed"
   | "concurrent-change"
   | "corrupt-data"
   | "forget-failed"

@@ -51,6 +51,7 @@ function healthDetails(health: ReadyIndexHealth): Readonly<Record<string, string
     ftsContent: health.ftsContent,
     ftsSecureDelete: health.ftsSecureDelete,
     ftsRemediation: health.ftsRemediation,
+    pageReclamation: health.pageReclamation,
     runRecords: health.runRecords,
     writerLease: health.writerLease,
     activeRuns: String(health.activeRuns),

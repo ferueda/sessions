@@ -35,13 +35,15 @@ sessions search <text> [--source SOURCE] [--instance INSTANCE]
                        [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
+sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
 The bare command prints help. `index` is the only ordinary command that reads
 rollout content or initializes the durable library. `forget` mutates only a
-current initialized library. `doctor` and `paths` inspect runtime, library, and
-registered-source readiness without indexing or creating state.
+current initialized library. `data compact` operates only on an existing current
+library and never resolves a source. `doctor` and `paths` inspect runtime,
+library, and registered-source readiness without indexing or creating state.
 
 `index` selects all registered sources when `--source` is omitted. The only
 current source is `codex`; an unknown source is invalid usage before writer open.
@@ -72,8 +74,9 @@ freshness/source-state/capture evidence, omit diagnostic locators and workspace
 from output, and escape/bound untrusted terminal content.
 
 `forget` idempotently deletes one retained Sessions copy and returns `forgotten`
-or `absent`. `data clear` requires `--yes` and deletes all known Sessions-owned
-state. Both leave provider data untouched.
+or `absent`. `data compact` requires no confirmation and reclaims reusable whole
+SQLite pages without deleting retained rows. `data clear` requires `--yes` and
+deletes all known Sessions-owned state. All leave provider data untouched.
 
 ### Doctor JSON
 
@@ -109,14 +112,16 @@ unavailable or unreadable Codex fails without reading rollout content.
 
 For `ready`, the library check uses an immutable snapshot and adds
 `canonicalIntegrity`, `foreignKeys`, `ftsStructure`, `ftsContent`,
-`ftsSecureDelete`, `ftsRemediation`, `runRecords`, `writerLease`, `activeRuns`,
-and `interruptedRuns` to `details`. Checks are `ok | failed`; FTS secure delete is
+`ftsSecureDelete`, `ftsRemediation`, `pageReclamation`, `runRecords`,
+`writerLease`, `activeRuns`, and `interruptedRuns` to `details`. Checks are
+`ok | failed`; page reclamation is `incremental | invalid`; FTS secure delete is
 `enabled | missing | unsupported`; remediation is
 `not-needed | rebuild-required`; writer lease is `free | index-live |
-forget-live | clear-live | expired | invalid`; counts are non-negative decimal
-strings. Canonical/foreign-key/run corruption fails. FTS-only damage reports
-rebuild-required without describing canonical loss. An active run is healthy only
-with an index-live lease. Doctor never opens a writer or applies migrations.
+forget-live | compact-live | clear-live | expired | invalid`; counts are
+non-negative decimal strings. Canonical/foreign-key/run corruption fails.
+FTS-only damage reports rebuild-required without describing canonical loss. An
+active run is healthy only with an index-live lease. Doctor never opens a writer
+or applies migrations.
 
 All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
 
@@ -182,6 +187,14 @@ explicit leased `index` writer verifies the canonical library first and repairs
 FTS-only structure/content damage from canonical content. Doctor remains
 read-only and reports `rebuild-required`; canonical corruption fails closed
 instead of invoking projection repair.
+
+Forget is logical deletion: freed whole pages become reusable, but the command
+does not promise that the main database file shrinks. `sessions data compact`
+is the separate physical maintenance route. It checkpoints WAL and runs bounded
+incremental-vacuum transactions until the current freelist is empty. Every
+committed batch is durable; a later failure emits no success report and rerunning
+is safe. It reclaims whole free pages only, never repacks partially used pages,
+and reports observed main-database file lengths rather than guaranteed savings.
 
 On a fresh uninitialized library, `sessions list` and a cursor-free
 `sessions search` exit `0`, write their exact empty messages to stdout, and leave
@@ -282,7 +295,8 @@ of `source-unavailable`, `source-unreadable`, `probe-failed`, `discovery-failed`
 `interrupted`, or `repository-write`. Source reports sort by raw source tuple;
 items retain persisted run-item order. Top counts and omissions are safe sums.
 
-Forget and all-data deletion emit these exact schema-1 shapes:
+Forget, physical compaction, and all-data deletion emit these exact schema-1
+shapes:
 
 ```json
 {
@@ -298,6 +312,23 @@ Forget and all-data deletion emit these exact schema-1 shapes:
 ```
 
 `outcome` is `forgotten | absent`.
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "data-compact",
+  "outcome": "compacted",
+  "databaseBytesBefore": 8192,
+  "databaseBytesAfter": 4096,
+  "reclaimedDatabaseBytes": 4096
+}
+```
+
+`outcome` is `absent | unchanged | compacted`. Absent reports three zeroes;
+unchanged reports equal before/after values and zero reclaimed bytes. The values
+are exact non-negative safe-integer main-database file lengths observed after
+required checkpoints. They are not page estimates, filesystem block allocation,
+or a guaranteed amount. Human output reports the same aggregates without paths.
 
 ```json
 {
@@ -365,13 +396,13 @@ Doctor schema 1 uses `{ schemaVersion, command: "doctor", ok, checks }` and each
 `sqlite-fts5`, `library-state`, `source-codex`. The ready `library-state` string
 details are exactly `state`, `initialized`, `schemaVersion`,
 `supportedSchemaVersion`, `canonicalIntegrity`, `foreignKeys`, `ftsStructure`,
-`ftsContent`, `ftsSecureDelete`, `ftsRemediation`, `runRecords`, `writerLease`,
-`activeRuns`, and `interruptedRuns`; non-ready states retain the first four and
-add only applicable `reason`/`target`. `canonicalIntegrity`, foreign-key, FTS
-structure/content, and run-record values are `ok | failed`; FTS secure-delete is
+`ftsContent`, `ftsSecureDelete`, `ftsRemediation`, `pageReclamation`, `runRecords`,
+`writerLease`, `activeRuns`, and `interruptedRuns`; non-ready states retain the
+first four and add only applicable `reason`/`target`. `canonicalIntegrity`,
+foreign-key, FTS structure/content, and run-record values are `ok | failed`; FTS secure-delete is
 `enabled | missing | unsupported`; FTS remediation is
 `not-needed | rebuild-required`; writer-lease values are `free`, `index-live`,
-`forget-live`, `clear-live`, `expired`, or `invalid`.
+`forget-live`, `compact-live`, `clear-live`, `expired`, or `invalid`.
 
 An admitted `source-codex` check has only `probeStatus` with value
 `ready | unavailable | unreadable`. Ready passes; unavailable/unreadable fails. A
@@ -503,7 +534,7 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 - Exit `2`: invalid command, flag, value, or required argument.
 
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
-Concurrent index/forget/clear ownership is a sanitized
+Concurrent index/forget/compact/clear ownership is a sanitized
 `Session library is busy` operational failure; lease tokens, owners, and timing
 details are never rendered.
 
@@ -511,10 +542,10 @@ details are never rendered.
 
 Every JSON/JSONL command includes a numeric `schemaVersion`. Additive fields may appear within one schema version; removing or changing a field's meaning requires a new version. JSONL starts each record with enough command/type/version information to parse independently.
 
-M6 structured output covers the operational doctor, paths, index, forget, and
-data-clear reports documented above. M7 owns versioned list/search/show DTOs,
-document digests, and transcript-bearing JSON/JSONL; M6 does not expose a partial
-machine schema for those commands.
+M6 structured output covers the operational doctor, paths, index, forget,
+data-compact, and data-clear reports documented above. M7 owns versioned
+list/search/show DTOs, document digests, and transcript-bearing JSON/JSONL; M6
+does not expose a partial machine schema for those commands.
 
 Planned entry-bearing structured records preserve canonical entry ordinal and
 kind plus available exact tool name, exact tool namespace, provider call ID, and

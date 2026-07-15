@@ -14,6 +14,7 @@ import {
   type SqliteMigration,
 } from "./migrations.ts";
 import { readWriterLeaseHealth } from "./writer-lease.ts";
+import { inspectSqlitePageReclamation } from "./sqlite-page-reclamation.ts";
 import { readCanonicalDocument } from "./sqlite-session-document.ts";
 import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
@@ -37,6 +38,7 @@ export async function inspectSqliteReadyIndexHealth(
   const migrations = options.migrations ?? sqliteMigrations;
   const supportedSchemaVersion = options.supportedSchemaVersion ?? CURRENT_INDEX_SCHEMA_VERSION;
   const snapshot = createSqliteReadSnapshot(paths, {
+    enforcePageReclamation: false,
     migrations,
     supportedSchemaVersion,
     timeoutMs: options.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS,
@@ -62,6 +64,7 @@ function inspectDatabaseHealth(
   const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
   const ftsContent = check(() => ftsProjectionContentIsValid(database));
   const ftsSecureDelete = inspectFtsSecureDelete(database, fts5SecureDeleteRequired);
+  const pageReclamation = inspectSqlitePageReclamation(database);
   const ftsRemediation =
     ftsStructure === "ok" && ftsContent === "ok" && ftsSecureDelete.healthy
       ? "not-needed"
@@ -75,6 +78,7 @@ function inspectDatabaseHealth(
     ftsStructure === "ok" &&
     ftsContent === "ok" &&
     ftsSecureDelete.healthy &&
+    pageReclamation === "incremental" &&
     runs.health === "ok" &&
     writerLease !== "invalid" &&
     activeRunHasLiveIndexLease;
@@ -87,6 +91,7 @@ function inspectDatabaseHealth(
     ftsContent,
     ftsSecureDelete: ftsSecureDelete.status,
     ftsRemediation,
+    pageReclamation,
     runRecords: runs.health,
     writerLease,
     activeRuns: runs.active,
@@ -273,6 +278,7 @@ function readLeaseHealth(database: DatabaseSync, clock: () => Date): IndexWriter
     if (health.status === "expired") return "expired";
     if (health.purpose === "index") return "index-live";
     if (health.purpose === "forget") return "forget-live";
+    if (health.purpose === "compact") return "compact-live";
     return "clear-live";
   } catch {
     return "invalid";

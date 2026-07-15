@@ -24,6 +24,7 @@ describe("forgetSession", () => {
   test.each(["forgotten", "absent"] as const)("returns the exact %s report", async (outcome) => {
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>(),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockResolvedValue(outcome),
     };
 
@@ -44,6 +45,7 @@ describe("forgetSession", () => {
     const failure = new Error("maintenance failed");
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>(),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockRejectedValue(failure),
     };
 
@@ -54,6 +56,7 @@ describe("forgetSession", () => {
     const busy = new IndexMaintenanceError("library-busy");
     const maintenance: IndexMaintenance = {
       clear: vi.fn<IndexMaintenance["clear"]>(),
+      compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockRejectedValue(busy),
     };
 

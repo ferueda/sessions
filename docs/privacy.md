@@ -20,6 +20,8 @@ not a best-effort feature.
   reopen a provider transcript.
 - No TTL or automatic pruning exists. Only explicit `sessions forget` or
   `sessions data clear --yes` removes retained content.
+- `sessions data compact` changes only physical allocation in the Sessions
+  database. It never removes canonical rows or reads a provider.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
 
@@ -54,8 +56,10 @@ transcript content.
 On POSIX, writer-created directories are constrained to `0700` and database,
 sidecar, and scratch files to `0600` where applicable. On Windows, state remains
 inside the current user's local profile and relies on platform ACLs. The writer
-enables foreign keys, WAL, a bounded busy timeout, SQLite core `secure_delete`,
-and FTS5 secure-delete when supported.
+enables foreign keys, WAL, incremental whole-page reclamation, a bounded busy
+timeout, SQLite core `secure_delete`, and FTS5 secure-delete when supported. A
+recognized database with another page-reclamation mode fails closed; Sessions
+does not silently rewrite it.
 
 Canonical sessions and capture/source-observation state are durable user data.
 FTS and bounded operational diagnostics are rebuildable derived state even though
@@ -120,6 +124,15 @@ counts. Shared text and incoming relations owned by other retained sessions can
 remain. If the provider still exposes the session, a later index can capture it
 again.
 
+Logical deletion makes whole freed pages reusable inside SQLite but does not
+promise immediate main-file shrink. `sessions data compact` is the explicit
+physical reclamation route. It checkpoints WAL and returns reusable whole pages
+in bounded committed batches; it does not delete retained rows or repack
+partially filled pages. A failed command may leave prior batches durably
+reclaimed, and rerunning is safe. Reported before/after/reclaimed byte values are
+observed main-database file lengths, not filesystem allocation or guaranteed
+savings. Checkpoint contention can cause a sanitized operational failure.
+
 `sessions data clear --yes` is the whole-library deletion route. It removes only
 the validated Sessions database/WAL/SHM paths and exact scratch subtree. It never
 recursively deletes provider roots. Missing state is success; unsafe,
@@ -133,7 +146,8 @@ Sessions-owned library.
 
 SQLite secure-delete settings reduce recoverable deleted content inside database
 pages. They are not encryption, guaranteed physical overwrite, or forensic secure
-erasure. Filesystems, backups, snapshots, swap, and storage hardware can retain
+erasure. Compaction does not strengthen that guarantee. Filesystems, backups,
+snapshots, swap, and storage hardware can retain
 copies. Users requiring stronger protection should use full-disk encryption and
 manage backups according to their threat model.
 

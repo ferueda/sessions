@@ -60,6 +60,7 @@ describe("createIndexStateDiagnostic", () => {
         ftsContent: "ok",
         ftsSecureDelete: "enabled",
         ftsRemediation: "not-needed",
+        pageReclamation: "incremental",
         runRecords: "ok",
         writerLease: "free",
         activeRuns: "0",
@@ -101,11 +102,47 @@ describe("createIndexStateDiagnostic", () => {
         ftsContent: "failed",
         ftsSecureDelete: "enabled",
         ftsRemediation: "rebuild-required",
+        pageReclamation: "incremental",
         runRecords: "ok",
         writerLease: "expired",
         activeRuns: "1",
         interruptedRuns: "2",
       },
+    });
+  });
+
+  test("reports invalid page reclamation as a typed health detail", async () => {
+    const outcome = await diagnosticFor(
+      {
+        status: "ready",
+        initialized: true,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
+      },
+      { ...healthyIndex, ok: false, pageReclamation: "invalid" },
+    ).run();
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      summary: "Index schema 1 failed health checks",
+      details: { pageReclamation: "invalid" },
+    });
+  });
+
+  test("reports compact lease ownership without exposing its token", async () => {
+    const outcome = await diagnosticFor(
+      {
+        status: "ready",
+        initialized: true,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
+      },
+      { ...healthyIndex, writerLease: "compact-live" },
+    ).run();
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      details: { writerLease: "compact-live" },
     });
   });
 
@@ -205,6 +242,7 @@ const healthyIndex: ReadyIndexHealth = {
   ftsContent: "ok",
   ftsSecureDelete: "enabled",
   ftsRemediation: "not-needed",
+  pageReclamation: "incremental",
   runRecords: "ok",
   writerLease: "free",
   activeRuns: 0,
