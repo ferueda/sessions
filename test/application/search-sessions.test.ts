@@ -8,6 +8,7 @@ import { searchSessions } from "../../src/application/search-sessions.ts";
 import {
   createSessionQueryCursor,
   type SessionSearchPage,
+  type SessionQuerySummary,
 } from "../../src/domain/session-query.ts";
 
 const paths: IndexPaths = {
@@ -54,7 +55,8 @@ describe("searchSessions", () => {
       },
     });
 
-    expect(result).toBe(page);
+    expect(result).not.toBe(page);
+    expect(Object.isFrozen(result.hits)).toBe(true);
     const reader = await lifecycle.openReader.mock.results[0]!.value;
     expect(reader.query.search).toHaveBeenCalledWith({
       text: "quoted Terms",
@@ -69,6 +71,46 @@ describe("searchSessions", () => {
       context: 0,
     });
     expect(reader.close).toHaveBeenCalledOnce();
+  });
+
+  test("selects the session title without changing search evidence", async () => {
+    const hit = {
+      session: { ...summary(), title: "😀".repeat(2_049), workspace: "/private/workspace" },
+      entry: { ordinal: 3, kind: "message", actor: "model" as const },
+      snippet: {
+        segmentOrdinal: 1,
+        origin: "model" as const,
+        originConfidence: "high" as const,
+        contentHash: { scheme: "sha256-utf8-v1" as const, digest: "1".repeat(64) },
+        text: "matched excerpt",
+        truncated: false,
+        additionalMatchingSegments: 0,
+      },
+      context: [],
+      linkedContextTruncated: false,
+    };
+    const lifecycle = lifecycleWith({
+      hits: [hit],
+      support: {
+        occurrences: 1,
+        uniqueContent: 1,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 0,
+      },
+    });
+
+    const result = await searchSessions({ paths, lifecycle, text: "needle" });
+
+    expect(result.hits[0]!.session.title).toEqual({
+      text: "😀".repeat(2_048),
+      truncated: true,
+      originalUtf8Bytes: 8_196,
+      emittedUtf8Bytes: 8_192,
+    });
+    expect(result.hits[0]!.session).not.toHaveProperty("workspace");
+    expect(result.hits[0]!.snippet).toEqual(hit.snippet);
+    expect(result.hits[0]!.snippet).not.toBe(hit.snippet);
+    expect(Object.isFrozen(result.hits[0]!.snippet.contentHash)).toBe(true);
   });
 
   test("rejects invalid input before inspecting the library", async () => {
@@ -137,6 +179,24 @@ function emptyPage(): SessionSearchPage {
       uniqueContent: 0,
       uniqueKnownRoots: 0,
       unknownLineageSessions: 0,
+    },
+  };
+}
+
+function summary(): SessionQuerySummary {
+  return {
+    identity: {
+      source: { kind: "synthetic", instanceId: "one" },
+      nativeId: "session",
+    },
+    freshness: "current",
+    sourceState: "present",
+    capturedAt: "2026-07-15T12:00:00.000Z",
+    sourceObservedAt: "2026-07-15T12:00:00.000Z",
+    adapterVersion: "synthetic-v1",
+    documentDigest: {
+      scheme: "sha256-sessions-document-jcs-v1",
+      digest: "0".repeat(64),
     },
   };
 }

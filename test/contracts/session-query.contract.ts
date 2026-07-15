@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import type { SessionQueryRepository } from "../../src/application/ports/session-query.ts";
 import { SessionQueryOperationalError } from "../../src/application/session-query-error.ts";
 import { DEFAULT_SEARCH_LIMIT } from "../../src/application/search-sessions.ts";
+import { hashContent } from "../../src/domain/content-hash.ts";
 import {
   createSessionListQuery,
   createSessionSearchQuery,
@@ -81,6 +82,9 @@ export function runSessionQueryContract(
       expect(literal.hits).toHaveLength(1);
       expect(literal.hits[0]?.session.identity).toEqual(corpus.present.identity);
       expect(literal.hits[0]?.entry.ordinal).toBe(0);
+      expect(literal.hits[0]?.snippet.contentHash).toEqual(
+        hashContent('filterable unicode naïve "quoted phrase" opaque abc:123@v1'),
+      );
 
       const filtered = await fixture.query.search(
         createSessionSearchQuery({

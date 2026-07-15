@@ -10,6 +10,7 @@ import {
   createSessionListQuery,
   createSessionSearchQuery,
 } from "../../src/domain/session-query.ts";
+import { hashContent } from "../../src/domain/content-hash.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import {
   createCoordinatedSqliteSessionIndex,
@@ -45,6 +46,9 @@ describe("SQLite session query", () => {
         toolNamespace: "functions",
       });
       expect(special.hits[0]?.snippet.text).toContain("/tmp/Project/File.ts");
+      expect(special.hits[0]?.snippet.contentHash).toEqual(
+        hashContent("invoke recurrence OR /tmp/Project/File.ts"),
+      );
 
       const unicodeWhitespace = await repository.search(
         createSessionSearchQuery({ text: "alpha\u0085beta", limit: 20, context: 0 }),
@@ -249,6 +253,33 @@ describe("SQLite session query", () => {
       expect(searched.hits[0]?.session.documentDigest.digest).toBe("0".repeat(64));
       await expect(
         createSqliteSessionIndexReader(fixture.database).getDocument(identity),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test("rejects a search hit whose stored content digest does not match its text", async () => {
+    const fixture = await seededQueryFixture();
+    try {
+      fixture.database.exec("DROP TRIGGER sessions_content_values_bu");
+      fixture.database
+        .prepare(
+          `UPDATE sessions_content_values
+           SET digest = zeroblob(32)
+           WHERE text = ?`,
+        )
+        .run("invoke recurrence OR /tmp/Project/File.ts");
+      const repository = createSqliteSessionQuery(fixture.database);
+
+      await expect(
+        repository.search(
+          createSessionSearchQuery({
+            text: "/tmp/Project/File.ts",
+            limit: 20,
+            context: 0,
+          }),
+        ),
       ).rejects.toMatchObject({ code: "corrupt-data" });
     } finally {
       fixture.database.close();

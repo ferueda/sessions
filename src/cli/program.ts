@@ -3,6 +3,7 @@ import { Command, CommanderError, InvalidArgumentError, Option } from "commander
 import type { DataClearReport } from "../application/clear-index.ts";
 import type { DataCompactReport } from "../application/compact-index.ts";
 import type { DataRepairOrphansReport } from "../application/repair-orphaned-content.ts";
+import type { ExportSessionResult } from "../application/export-session.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
@@ -22,6 +23,16 @@ import type {
 } from "../domain/session-query.ts";
 import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts";
 import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
+import { encodeStructuredJson } from "./encode-json-output.ts";
+import { encodeStructuredJsonl } from "./encode-jsonl-output.ts";
+import {
+  buildListJsonV1,
+  buildListJsonlV1,
+  buildSearchJsonV1,
+  buildSearchJsonlV1,
+  buildSnapshotJsonV1,
+  buildSnapshotJsonlV1,
+} from "./structured-output.ts";
 import {
   renderDataClear,
   renderDataCompact,
@@ -33,7 +44,9 @@ import {
   renderPaths,
   renderSearch,
   renderShow,
-  type OutputFormat,
+  type ExportOutputFormat,
+  type OperationalOutputFormat,
+  type RetainedQueryOutputFormat,
 } from "./render.ts";
 
 export interface CliOutput {
@@ -65,6 +78,10 @@ export interface ProgramOptions {
     readonly entry?: number;
     readonly context?: number;
   }) => Promise<ShowSessionResult>;
+  readonly export: (input: {
+    readonly identity: SessionIdentity;
+    readonly full?: boolean;
+  }) => Promise<ExportSessionResult>;
   readonly forget: (identity: SessionIdentity) => Promise<ForgetSessionReport>;
   readonly clearData: () => Promise<DataClearReport>;
   readonly compactData: () => Promise<DataCompactReport>;
@@ -78,8 +95,16 @@ export class OperationalExit extends Error {
   }
 }
 
-const formatOption = () =>
+const operationalFormatOption = () =>
   new Option("--format <format>", "output format").choices(["human", "json"]).default("human");
+
+const retainedQueryFormatOption = () =>
+  new Option("--format <format>", "output format")
+    .choices(["human", "json", "jsonl"])
+    .default("human");
+
+const exportFormatOption = () =>
+  new Option("--format <format>", "output format").choices(["json", "jsonl"]).makeOptionMandatory();
 
 export function createProgram(options: ProgramOptions): Command {
   const program = new Command();
@@ -99,8 +124,8 @@ export function createProgram(options: ProgramOptions): Command {
   program
     .command("doctor")
     .description("Check local runtime and source capabilities without indexing")
-    .addOption(formatOption())
-    .action(async ({ format }: { format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ format }: { format: OperationalOutputFormat }) => {
       const report = await options.doctor();
       options.output.writeOut(renderDoctor(report, format));
       if (!report.ok) throw new OperationalExit("doctor reported failed checks");
@@ -109,8 +134,8 @@ export function createProgram(options: ProgramOptions): Command {
   program
     .command("paths")
     .description("Show Sessions-owned paths and source status without creating state")
-    .addOption(formatOption())
-    .action(async ({ format }: { format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ format }: { format: OperationalOutputFormat }) => {
       options.output.writeOut(renderPaths(await options.paths(), format));
     });
 
@@ -120,8 +145,8 @@ export function createProgram(options: ProgramOptions): Command {
     .addOption(
       new Option("--source <source>", "source to index").choices([...options.indexSources]),
     )
-    .addOption(formatOption())
-    .action(async ({ source, format }: { source?: string; format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ source, format }: { source?: string; format: OperationalOutputFormat }) => {
       const report = await options.index(source);
       options.output.writeOut(renderIndex(report, format));
       if (report.incompleteSources > 0) throw new OperationalExit();
@@ -129,27 +154,26 @@ export function createProgram(options: ProgramOptions): Command {
 
   const list = program.command("list").description("List retained sessions");
   addSessionFilterOptions(list)
+    .addOption(retainedQueryFormatOption())
     .addOption(
       new Option("--limit <number>", "maximum sessions").argParser((value) =>
         parseInteger(value, { minimum: 1, maximum: MAX_LIST_LIMIT }),
       ),
     )
     .option("--cursor <cursor>", "continue a previous list query")
-    .action(async (values: SessionOptionValues & { limit?: number; cursor?: string }) => {
+    .action(async (values: ListOptionValues) => {
       const filter = sessionFilter(values);
-      options.output.writeOut(
-        renderList(
-          await options.list({
-            ...(filter === undefined ? {} : { filter }),
-            ...(values.limit === undefined ? {} : { limit: values.limit }),
-            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
-          }),
-        ),
-      );
+      const result = await options.list({
+        ...(filter === undefined ? {} : { filter }),
+        ...(values.limit === undefined ? {} : { limit: values.limit }),
+        ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+      });
+      options.output.writeOut(renderListOutput(result, values.format));
     });
 
   const search = program.command("search <text>").description("Search retained session evidence");
   addSessionFilterOptions(search)
+    .addOption(retainedQueryFormatOption())
     .option("--entry-after <timestamp>", "exclude entries at or before this time", parseTimestamp)
     .option("--entry-before <timestamp>", "exclude entries at or after this time", parseTimestamp)
     .addOption(new Option("--actor <actor>", "exact entry actor").choices(ACTORS))
@@ -173,22 +197,20 @@ export function createProgram(options: ProgramOptions): Command {
         usage("search text must not be blank");
       }
       const filter = searchFilter(values);
-      options.output.writeOut(
-        renderSearch(
-          await options.search({
-            text,
-            ...(filter === undefined ? {} : { filter }),
-            ...(values.limit === undefined ? {} : { limit: values.limit }),
-            ...(values.context === undefined ? {} : { context: values.context }),
-            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
-          }),
-        ),
-      );
+      const result = await options.search({
+        text,
+        ...(filter === undefined ? {} : { filter }),
+        ...(values.limit === undefined ? {} : { limit: values.limit }),
+        ...(values.context === undefined ? {} : { context: values.context }),
+        ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+      });
+      options.output.writeOut(renderSearchOutput(result, values.format));
     });
 
   program
     .command("show <canonical-id>")
     .description("Show a retained session transcript")
+    .addOption(retainedQueryFormatOption())
     .addOption(
       new Option("--entry <number>", "focus entry ordinal").argParser((value) =>
         parseInteger(value, { minimum: 0 }),
@@ -199,18 +221,39 @@ export function createProgram(options: ProgramOptions): Command {
         parseInteger(value, { minimum: 0, maximum: MAX_SHOW_CONTEXT }),
       ),
     )
-    .action(async (canonicalId: string, values: { entry?: number; context?: number }) => {
+    .action(async (canonicalId: string, values: ShowOptionValues) => {
       if (values.context !== undefined && values.entry === undefined)
         usage("--context requires --entry");
       const identity = parseIdentity(canonicalId);
-      options.output.writeOut(renderShow(await options.show({ identity, ...values })));
+      const result = await options.show({
+        identity,
+        ...(values.entry === undefined ? {} : { entry: values.entry }),
+        ...(values.context === undefined ? {} : { context: values.context }),
+      });
+      options.output.writeOut(renderSnapshotOutput("show", result, values.format, false));
+    });
+
+  program
+    .command("export <canonical-id>")
+    .description("Export one retained session as portable structured context")
+    .addOption(exportFormatOption())
+    .option("--full", "include every export-eligible field without presentation bounds")
+    .action(async (canonicalId: string, values: ExportOptionValues) => {
+      const identity = parseIdentity(canonicalId);
+      const result = await options.export({
+        identity,
+        ...(values.full === true ? { full: true } : {}),
+      });
+      options.output.writeOut(
+        renderSnapshotOutput("export", result, values.format, values.full === true),
+      );
     });
 
   program
     .command("forget <canonical-id>")
     .description("Delete one retained Sessions-owned copy")
-    .addOption(formatOption())
-    .action(async (canonicalId: string, { format }: { format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async (canonicalId: string, { format }: { format: OperationalOutputFormat }) => {
       const identity = parseIdentity(canonicalId);
       options.output.writeOut(renderForget(await options.forget(identity), format));
     });
@@ -219,23 +262,23 @@ export function createProgram(options: ProgramOptions): Command {
   data
     .command("repair-orphans")
     .description("Delete unreachable canonical content from Sessions-owned local data")
-    .addOption(formatOption())
-    .action(async ({ format }: { format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ format }: { format: OperationalOutputFormat }) => {
       options.output.writeOut(renderDataRepairOrphans(await options.repairOrphanedData(), format));
     });
   data
     .command("compact")
     .description("Reclaim reusable whole pages from Sessions-owned local data")
-    .addOption(formatOption())
-    .action(async ({ format }: { format: OutputFormat }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ format }: { format: OperationalOutputFormat }) => {
       options.output.writeOut(renderDataCompact(await options.compactData(), format));
     });
   data
     .command("clear")
     .description("Delete all Sessions-owned local data")
     .requiredOption("--yes", "confirm destructive deletion")
-    .addOption(formatOption())
-    .action(async ({ format }: { format: OutputFormat; yes: true }) => {
+    .addOption(operationalFormatOption())
+    .action(async ({ format }: { format: OperationalOutputFormat; yes: true }) => {
       options.output.writeOut(renderDataClear(await options.clearData(), format));
     });
 
@@ -267,7 +310,14 @@ interface SessionOptionValues {
   readonly session?: SessionIdentity;
 }
 
+interface ListOptionValues extends SessionOptionValues {
+  readonly format: RetainedQueryOutputFormat;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
 interface SearchOptionValues extends SessionOptionValues {
+  readonly format: RetainedQueryOutputFormat;
   readonly entryAfter?: string;
   readonly entryBefore?: string;
   readonly actor?: Actor;
@@ -278,6 +328,70 @@ interface SearchOptionValues extends SessionOptionValues {
   readonly limit?: number;
   readonly context?: number;
   readonly cursor?: string;
+}
+
+interface ShowOptionValues {
+  readonly format: RetainedQueryOutputFormat;
+  readonly entry?: number;
+  readonly context?: number;
+}
+
+interface ExportOptionValues {
+  readonly format: ExportOutputFormat;
+  readonly full?: boolean;
+}
+
+function renderListOutput(result: ListSessionsResult, format: RetainedQueryOutputFormat): string {
+  switch (format) {
+    case "human":
+      return renderList(result);
+    case "json":
+      return encodeStructuredJson(buildListJsonV1(result));
+    case "jsonl":
+      return encodeStructuredJsonl(buildListJsonlV1(result));
+  }
+}
+
+function renderSearchOutput(
+  result: SearchSessionsResult,
+  format: RetainedQueryOutputFormat,
+): string {
+  switch (format) {
+    case "human":
+      return renderSearch(result);
+    case "json":
+      return encodeStructuredJson(buildSearchJsonV1(result));
+    case "jsonl":
+      return encodeStructuredJsonl(buildSearchJsonlV1(result));
+  }
+}
+
+function renderSnapshotOutput(
+  command: "show" | "export",
+  result: ShowSessionResult | ExportSessionResult,
+  format: RetainedQueryOutputFormat,
+  full: boolean,
+): string {
+  if (format === "human") {
+    if (command !== "show") throw new TypeError("Export requires a machine output format");
+    return renderShow(result);
+  }
+
+  const encoding = full ? { exemptFromLimit: true } : {};
+  if (format === "json") {
+    return encodeStructuredJson(
+      command === "show"
+        ? buildSnapshotJsonV1("show", result)
+        : buildSnapshotJsonV1("export", result),
+      encoding,
+    );
+  }
+  return encodeStructuredJsonl(
+    command === "show"
+      ? buildSnapshotJsonlV1("show", result)
+      : buildSnapshotJsonlV1("export", result),
+    encoding,
+  );
 }
 
 function addSessionFilterOptions(command: Command): Command {

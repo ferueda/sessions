@@ -8,6 +8,7 @@ import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
 import type { SearchSessionsResult } from "../application/search-sessions.ts";
+import type { SelectedText } from "../application/session-presentation.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
@@ -16,7 +17,9 @@ import {
   MAX_SESSION_SEARCH_LINKED_CONTEXT,
 } from "../domain/session-query.ts";
 
-export type OutputFormat = "human" | "json";
+export type OperationalOutputFormat = "human" | "json";
+export type RetainedQueryOutputFormat = OperationalOutputFormat | "jsonl";
+export type ExportOutputFormat = Exclude<RetainedQueryOutputFormat, "human">;
 
 const MAX_SEGMENT_BYTES = 8 * 1024;
 const MAX_ENTRY_BODY_BYTES = 256 * 1024;
@@ -25,7 +28,7 @@ export function renderJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-export function renderDoctor(report: DoctorReport, format: OutputFormat): string {
+export function renderDoctor(report: DoctorReport, format: OperationalOutputFormat): string {
   if (format === "json") return renderJson(report);
   const lines = report.checks.map(
     (check) =>
@@ -35,7 +38,7 @@ export function renderDoctor(report: DoctorReport, format: OutputFormat): string
   return `${lines.join("\n")}\n`;
 }
 
-export function renderPaths(report: PathsReport, format: OutputFormat): string {
+export function renderPaths(report: PathsReport, format: OperationalOutputFormat): string {
   if (format === "json") return renderJson(report);
   const schema =
     report.library.schemaVersion === null ? "not available" : String(report.library.schemaVersion);
@@ -56,7 +59,7 @@ export function renderPaths(report: PathsReport, format: OutputFormat): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderIndex(report: IndexReport, format: OutputFormat): string {
+export function renderIndex(report: IndexReport, format: OperationalOutputFormat): string {
   if (format === "json") return renderJson(report);
   const lines = report.sources.map(
     (source) =>
@@ -68,19 +71,22 @@ export function renderIndex(report: IndexReport, format: OutputFormat): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderForget(report: ForgetSessionReport, format: OutputFormat): string {
+export function renderForget(report: ForgetSessionReport, format: OperationalOutputFormat): string {
   return format === "json"
     ? renderJson(report)
     : `${report.outcome === "forgotten" ? "Forgot" : "No retained session for"} ${renderScalar(report.identity.canonicalId)}.\n`;
 }
 
-export function renderDataClear(report: DataClearReport, format: OutputFormat): string {
+export function renderDataClear(report: DataClearReport, format: OperationalOutputFormat): string {
   return format === "json"
     ? renderJson(report)
     : `${report.outcome === "cleared" ? "Sessions data cleared." : "No Sessions data found."}\n`;
 }
 
-export function renderDataCompact(report: DataCompactReport, format: OutputFormat): string {
+export function renderDataCompact(
+  report: DataCompactReport,
+  format: OperationalOutputFormat,
+): string {
   return format === "json"
     ? renderJson(report)
     : `Compaction outcome: ${report.outcome}. Database bytes before: ${String(report.databaseBytesBefore)}; after: ${String(report.databaseBytesAfter)}; reclaimed: ${String(report.reclaimedDatabaseBytes)}.\n`;
@@ -88,7 +94,7 @@ export function renderDataCompact(report: DataCompactReport, format: OutputForma
 
 export function renderDataRepairOrphans(
   report: DataRepairOrphansReport,
-  format: OutputFormat,
+  format: OperationalOutputFormat,
 ): string {
   return format === "json"
     ? renderJson(report)
@@ -99,8 +105,8 @@ export function renderList(result: ListSessionsResult): string {
   if (result.sessions.length === 0) return "No sessions found.\n";
   const lines = result.sessions.map((session) => {
     const identity = renderScalar(formatSessionIdentity(session.identity));
-    const title = session.title === undefined ? "(untitled)" : renderScalar(session.title);
-    const capture = session.capturedAt === undefined ? "capture unknown" : session.capturedAt;
+    const title = session.title === undefined ? "(untitled)" : renderSelectedText(session.title);
+    const capture = session.capturedAt;
     return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]`;
   });
   if (result.nextCursor !== undefined) {
@@ -116,9 +122,9 @@ export function renderSearch(result: SearchSessionsResult): string {
   for (const [index, hit] of result.hits.entries()) {
     if (index > 0) lines.push("");
     const identity = renderScalar(formatSessionIdentity(hit.session.identity));
-    const title = hit.session.title === undefined ? "(untitled)" : renderScalar(hit.session.title);
-    const capture =
-      hit.session.capturedAt === undefined ? "capture unknown" : hit.session.capturedAt;
+    const title =
+      hit.session.title === undefined ? "(untitled)" : renderSelectedText(hit.session.title);
+    const capture = hit.session.capturedAt;
     lines.push(
       `${identity}  ${title}  [${hit.session.freshness}; ${hit.session.sourceState}; ${capture}]`,
       renderEntryHeading(hit.entry),
@@ -155,24 +161,25 @@ export function renderSearch(result: SearchSessionsResult): string {
 }
 
 export function renderShow(result: ShowSessionResult): string {
-  const capture =
-    result.summary.capturedAt === undefined ? "capture unknown" : result.summary.capturedAt;
+  const { snapshot } = result;
   const lines = [
-    `${renderScalar(formatSessionIdentity(result.summary.identity))}  [${result.summary.freshness}; ${result.summary.sourceState}; ${capture}]`,
-    result.summary.title === undefined ? "(untitled)" : renderScalar(result.summary.title),
+    `${renderScalar(formatSessionIdentity(snapshot.identity))}  [${snapshot.freshness}; ${snapshot.sourceState}; ${snapshot.capturedAt}]`,
+    snapshot.title === undefined ? "(untitled)" : renderSelectedText(snapshot.title),
     `Entries: ${rangeLabel(result)}`,
     "",
   ];
   for (const entry of result.entries) {
     const heading = renderEntryHeading(entry);
-    const body = entry.content
-      .map((segment) =>
-        segment.kind === "text"
-          ? renderScalar(segment.text)
-          : `<omitted ${segment.contentClass} ${renderScalar(segment.sourceType)}>`,
-      )
-      .join("\n");
-    const boundedBody = truncateUtf8(body, MAX_ENTRY_BODY_BYTES);
+    const bodyParts = entry.content.map((segment) =>
+      segment.kind === "text"
+        ? renderSelectedText(segment.text)
+        : `<omitted ${segment.contentClass} ${renderScalar(segment.sourceType)}>`,
+    );
+    if (entry.omittedSegmentCount > 0) {
+      bodyParts.push(`<${String(entry.omittedSegmentCount)} segment(s) omitted by output limits>`);
+    }
+    const body = bodyParts.join("\n");
+    const boundedBody = truncateUtf8(body, MAX_ENTRY_BODY_BYTES, false);
     lines.push(heading, boundedBody.length === 0 ? "(no content)" : boundedBody, "");
   }
   return `${lines.join("\n")}\n`;
@@ -192,7 +199,11 @@ export function escapeScalar(value: string): string {
 }
 
 function renderScalar(value: string): string {
-  return truncateUtf8(escapeScalar(value), MAX_SEGMENT_BYTES);
+  return truncateUtf8(escapeScalar(value), MAX_SEGMENT_BYTES, false);
+}
+
+function renderSelectedText(value: SelectedText): string {
+  return truncateUtf8(escapeScalar(value.text), MAX_SEGMENT_BYTES, value.truncated);
 }
 
 function renderEntryHeading(entry: {
@@ -218,18 +229,16 @@ function renderEntryHeading(entry: {
   if (entry.relatedEntryOrdinal !== undefined) {
     values.push(`related=#${String(entry.relatedEntryOrdinal)}`);
   }
-  return truncateUtf8(values.join(" "), MAX_SEGMENT_BYTES);
+  return truncateUtf8(values.join(" "), MAX_SEGMENT_BYTES, false);
 }
 
 function renderSearchBody(value: string, alreadyTruncated: boolean): string {
   const escaped = escapeScalar(value);
-  const bounded = truncateUtf8(escaped, MAX_SESSION_SEARCH_BODY_BYTES);
-  if (!alreadyTruncated || bounded.endsWith("… [truncated]")) return bounded;
-  return truncateUtf8(`${bounded} … [truncated]`, MAX_SESSION_SEARCH_BODY_BYTES);
+  return truncateUtf8(escaped, MAX_SESSION_SEARCH_BODY_BYTES, alreadyTruncated);
 }
 
-function truncateUtf8(value: string, maximum: number): string {
-  if (Buffer.byteLength(value, "utf8") <= maximum) return value;
+function truncateUtf8(value: string, maximum: number, alreadyTruncated: boolean): string {
+  if (!alreadyTruncated && Buffer.byteLength(value, "utf8") <= maximum) return value;
   const suffix = "… [truncated]";
   const budget = maximum - Buffer.byteLength(suffix, "utf8");
   let output = "";
@@ -244,7 +253,9 @@ function truncateUtf8(value: string, maximum: number): string {
 }
 
 function rangeLabel(result: ShowSessionResult): string {
-  if (result.firstEntry === null || result.lastEntry === null)
-    return `none of ${result.totalEntries}`;
-  return `${String(result.firstEntry)}–${String(result.lastEntry)} of ${String(result.totalEntries)}`;
+  const selection = result.snapshot.selection.entries;
+  if (selection.firstOrdinal === null || selection.lastOrdinal === null) {
+    return `none of ${String(selection.total)}`;
+  }
+  return `${String(selection.firstOrdinal)}–${String(selection.lastOrdinal)} of ${String(selection.total)}`;
 }

@@ -141,7 +141,7 @@ describe("Codex durable vertical slice", () => {
     expect(storedAdapterVersions(paths.database)).toEqual(["codex-v3"]);
     const initialTarget = await show(targetIdentity);
     expect(initialTarget.entries).toEqual(beforeAdapterUpgrade.entries);
-    const initialCapture = initialTarget.summary.capturedAt;
+    const initialCapture = initialTarget.snapshot.capturedAt;
 
     // A complete scan missing only the target retains its last-good document.
     fixture.writeState(providerThreads(false), providerEdges());
@@ -151,7 +151,7 @@ describe("Codex durable vertical slice", () => {
       sources: [{ status: "completed", coverage: { status: "complete" } }],
     });
     const retainedTarget = await show(targetIdentity);
-    expect(retainedTarget.summary).toMatchObject({
+    expect(retainedTarget.snapshot).toMatchObject({
       freshness: "current",
       sourceState: "missing",
       capturedAt: initialCapture,
@@ -174,7 +174,7 @@ describe("Codex durable vertical slice", () => {
     const restored = await index();
     expect(restored.counts).toMatchObject({ discovered: 2, unchanged: 2, updated: 0, missing: 0 });
     const restoredTarget = await show(targetIdentity);
-    expect(restoredTarget.summary).toMatchObject({
+    expect(restoredTarget.snapshot).toMatchObject({
       freshness: "current",
       sourceState: "present",
       capturedAt: initialCapture,
@@ -189,12 +189,12 @@ describe("Codex durable vertical slice", () => {
     const changed = await index();
     expect(changed.counts).toMatchObject({ discovered: 2, unchanged: 1, updated: 1, failed: 0 });
     const changedTarget = await show(targetIdentity);
-    expect(changedTarget.summary).toMatchObject({
-      title: "Target v2",
+    expect(changedTarget.snapshot).toMatchObject({
+      title: { text: "Target v2", truncated: false },
       freshness: "current",
       sourceState: "present",
     });
-    expect(changedTarget.summary.capturedAt).not.toBe(initialCapture);
+    expect(changedTarget.snapshot.capturedAt).not.toBe(initialCapture);
     expect(changedTarget.entries).not.toEqual(initialTarget.entries);
 
     // An unavailable source yields unknown coverage and cannot mark retained rows missing.
@@ -227,7 +227,7 @@ describe("Codex durable vertical slice", () => {
       sources: [{ status: "completed", coverage: { status: "complete" } }],
     });
     const staleTarget = await show(targetIdentity);
-    expect(staleTarget.summary).toMatchObject({ freshness: "stale", sourceState: "present" });
+    expect(staleTarget.snapshot).toMatchObject({ freshness: "stale", sourceState: "present" });
     expect(staleTarget.entries).toEqual(changedTarget.entries);
 
     await fixture.writeRollout(
@@ -237,7 +237,10 @@ describe("Codex durable vertical slice", () => {
     const recovered = await index();
     expect(recovered.counts).toMatchObject({ discovered: 2, unchanged: 1, updated: 1, failed: 0 });
     const recoveredTarget = await show(targetIdentity);
-    expect(recoveredTarget.summary).toMatchObject({ freshness: "current", sourceState: "present" });
+    expect(recoveredTarget.snapshot).toMatchObject({
+      freshness: "current",
+      sourceState: "present",
+    });
     expect(recoveredTarget.entries).not.toEqual(changedTarget.entries);
 
     const forgotten = await forget();

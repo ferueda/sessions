@@ -1,21 +1,16 @@
 import { SessionLibraryError } from "./library-error.ts";
 import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
-import type { IndexedSessionSummary } from "./ports/session-index.ts";
-import type { SessionEntry, SessionIdentity } from "../domain/session.ts";
+import { selectSessionTranscript, type SelectedSessionTranscript } from "./session-presentation.ts";
+import { projectPublicSessionDocument } from "../domain/public-session-document.ts";
+import type { SessionIdentity } from "../domain/session.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
 
 export const DEFAULT_SHOW_ENTRY_COUNT = 50;
 export const DEFAULT_SHOW_CONTEXT = 3;
 export const MAX_SHOW_CONTEXT = 100;
 
-export interface ShowSessionResult {
-  readonly summary: IndexedSessionSummary;
-  readonly entries: readonly SessionEntry[];
-  readonly firstEntry: number | null;
-  readonly lastEntry: number | null;
-  readonly totalEntries: number;
-}
+export type ShowSessionResult = SelectedSessionTranscript;
 
 export async function showSession(input: {
   readonly paths: IndexPaths;
@@ -42,13 +37,11 @@ export async function showSession(input: {
       start = Math.max(0, input.entry - context);
       end = Math.min(total, input.entry + context + 1);
     }
-    const entries = Object.freeze(indexed.document.entries.slice(start, end));
-    return Object.freeze({
+    return selectSessionTranscript({
       summary: indexed.summary,
-      entries,
-      firstEntry: entries.length === 0 ? null : start,
-      lastEntry: entries.length === 0 ? null : end - 1,
-      totalEntries: total,
+      document: projectPublicSessionDocument(indexed.document),
+      mode: "bounded",
+      entryWindow: { start, end },
     });
   });
 }

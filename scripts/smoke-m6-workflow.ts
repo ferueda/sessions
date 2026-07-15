@@ -26,8 +26,9 @@ const NAMESPACED_TOOL_NAME = "read_fixture";
 const TOOL_NAMESPACE = "synthetic";
 const TOOL_MENTION = `Ordinary text mentions ${TOOL_MARKER}, ${BARE_TOOL_NAME}, and ${TOOL_NAMESPACE}/${NAMESPACED_TOOL_NAME}.`;
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
+const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
 
-/** Exercise the complete M6 journey through a spawned CLI, never through application imports. */
+/** Exercise the complete distribution journey through a spawned CLI, never through imports. */
 export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promise<void> {
   const fixture = await createCodexSourceFixture();
   const dataDirectory = path.join(options.temporaryRoot, "sessions-data");
@@ -261,6 +262,94 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
     assertCommand(presentShow, 0, "show after index");
     assert.match(presentShow.stdout, new RegExp(escapePattern(MESSAGE), "u"));
     const retainedTranscript = transcriptBody(presentShow.stdout);
+
+    const structuredList = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "list",
+      "--limit",
+      "1",
+      "--format",
+      "json",
+    ]);
+    assertCommand(structuredList, 0, "structured list");
+    assertNoPrivateFixtureMarkers(structuredList.stdout, "structured list");
+    const structuredListReport = parseJson(structuredList.stdout);
+    assertStructuredHeader(structuredListReport, "list", "page");
+    const structuredListSummary = readObject(readArray(structuredListReport, "sessions")[0]);
+    const structuredSession = readObject(structuredListSummary.session);
+    const structuredDigest = readObject(structuredListSummary.documentDigest);
+    assert.equal(structuredSession.canonicalId, canonicalId);
+    assertDocumentDigest(structuredDigest);
+
+    const structuredSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "distribution smoke",
+      "--limit",
+      "1",
+      "--context",
+      "1",
+      "--format",
+      "json",
+    ]);
+    assertCommand(structuredSearch, 0, "structured search");
+    assertNoPrivateFixtureMarkers(structuredSearch.stdout, "structured search");
+    const structuredSearchReport = parseJson(structuredSearch.stdout);
+    assertStructuredHeader(structuredSearchReport, "search", "page");
+    const structuredSearchHit = readObject(readArray(structuredSearchReport, "hits")[0]);
+    const structuredSearchSummary = readObject(structuredSearchHit.session);
+    assertSameAttribution(
+      structuredSearchSummary,
+      structuredSession,
+      structuredDigest,
+      "structured search",
+    );
+
+    const structuredShow = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "show",
+      canonicalId,
+      "--format",
+      "json",
+    ]);
+    assertCommand(structuredShow, 0, "structured show");
+    assertNoPrivateFixtureMarkers(structuredShow.stdout, "structured show");
+    const structuredShowReport = parseJson(structuredShow.stdout);
+    assertStructuredHeader(structuredShowReport, "show", "snapshot");
+    const structuredSnapshot = readObject(structuredShowReport.snapshot);
+    assertSameAttribution(
+      structuredSnapshot,
+      structuredSession,
+      structuredDigest,
+      "structured show",
+    );
+
+    const structuredExport = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "export",
+      canonicalId,
+      "--format",
+      "jsonl",
+    ]);
+    assertCommand(structuredExport, 0, "structured export");
+    assertNoPrivateFixtureMarkers(structuredExport.stdout, "structured export");
+    const exportRecords = parseJsonLines(structuredExport.stdout);
+    assert.ok(exportRecords.length > 1, "structured export returned no evidence records");
+    assertStructuredHeader(exportRecords[0]!, "export", "session");
+    const exportSnapshot = readObject(exportRecords[0]!.snapshot);
+    assertSameAttribution(exportSnapshot, structuredSession, structuredDigest, "export session");
+    let sawEntry = false;
+    for (const record of exportRecords.slice(1)) {
+      const type = record.type;
+      assert.ok(
+        type === "relation" || type === "entry",
+        `unexpected export record: ${String(type)}`,
+      );
+      assertStructuredHeader(record, "export", type);
+      assertSameAttribution(record, structuredSession, structuredDigest, `export ${type}`);
+      if (type === "relation") readObject(record.relation);
+      if (type === "entry") {
+        readObject(record.entry);
+        sawEntry = true;
+      }
+    }
+    assert.equal(sawEntry, true, "structured export returned no entry record");
 
     // The fixture intentionally changes here; every CLI call remains surrounded by a stable tree.
     fixture.writeState([]);
@@ -540,6 +629,51 @@ function transcriptBody(output: string): string {
 
 function parseJson(output: string): Record<string, unknown> {
   return readObject(JSON.parse(output));
+}
+
+function parseJsonLines(output: string): readonly Record<string, unknown>[] {
+  assert.equal(output.endsWith("\n"), true, "JSONL output has no trailing newline");
+  const physicalLines = output.split("\n");
+  assert.equal(physicalLines.pop(), "");
+  assert.ok(physicalLines.length > 0, "JSONL output has no records");
+  return physicalLines.map((line, index) => {
+    assert.notEqual(line, "", `JSONL record ${String(index)} is empty`);
+    return readObject(JSON.parse(line));
+  });
+}
+
+function assertStructuredHeader(
+  record: Record<string, unknown>,
+  command: "list" | "search" | "show" | "export",
+  type: string,
+): void {
+  assert.equal(record.schemaVersion, 1);
+  assert.equal(record.command, command);
+  assert.equal(record.type, type);
+  assert.equal(record.disposition, "untrusted-history");
+}
+
+function assertSameAttribution(
+  owner: Record<string, unknown>,
+  expectedSession: Record<string, unknown>,
+  expectedDigest: Record<string, unknown>,
+  label: string,
+): void {
+  assert.deepEqual(readObject(owner.session), expectedSession, `${label} session attribution`);
+  assert.deepEqual(
+    readObject(owner.documentDigest),
+    expectedDigest,
+    `${label} document digest attribution`,
+  );
+}
+
+function assertDocumentDigest(digest: Record<string, unknown>): void {
+  assert.equal(digest.scheme, "sha256-sessions-document-jcs-v1");
+  assert.match(String(digest.digest), /^[a-f0-9]{64}$/u);
+}
+
+function assertNoPrivateFixtureMarkers(output: string, label: string): void {
+  assert.doesNotMatch(output, PRIVATE_FIXTURE_PATTERN, `${label} exposed fixture-private data`);
 }
 
 function readObject(value: unknown): Record<string, unknown> {
