@@ -12,7 +12,7 @@ export interface SmokeCommandResult {
   readonly stderr: string;
 }
 
-export interface M5SmokeWorkflowOptions {
+export interface M6SmokeWorkflowOptions {
   readonly temporaryRoot: string;
   readonly run: (args: readonly string[], environment: NodeJS.ProcessEnv) => SmokeCommandResult;
 }
@@ -22,8 +22,8 @@ const TITLE = "Distribution smoke task";
 const MESSAGE = "Synthetic distribution smoke message";
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
 
-/** Exercise the complete M5 journey through a spawned CLI, never through application imports. */
-export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promise<void> {
+/** Exercise the complete M6 journey through a spawned CLI, never through application imports. */
+export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promise<void> {
   const fixture = await createCodexSourceFixture();
   const dataDirectory = path.join(options.temporaryRoot, "sessions-data");
   const oldCacheDirectory = path.join(options.temporaryRoot, "old-sessions-cache");
@@ -38,12 +38,20 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
   };
 
   try {
-    await fixture.writeRollout(ROLLOUT_PATH, codexRolloutRecords(NATIVE_ID, MESSAGE));
+    await fixture.writeRollout(ROLLOUT_PATH, [
+      ...codexRolloutRecords(NATIVE_ID, MESSAGE),
+      {
+        timestamp: "2026-07-14T12:01:00.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: `${MESSAGE} follow-up` },
+      },
+    ]);
     fixture.writeState([
       {
         id: NATIVE_ID,
         rolloutPath: ROLLOUT_PATH,
         title: TITLE,
+        workspace: "/private/synthetic-smoke-workspace",
         createdAtMs: 1_752_499_200_000,
         updatedAtMs: 1_752_502_800_000,
       },
@@ -102,6 +110,38 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
       "json",
     ]);
     assertCompleteIndex(firstIndex, { updated: 1, unchanged: 0, missing: 0 });
+
+    const firstSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "distribution smoke",
+      "--limit",
+      "1",
+      "--context",
+      "1",
+    ]);
+    assertCommand(firstSearch, 0, "first search page");
+    assert.match(
+      firstSearch.stdout,
+      /Support: 2 occurrence\(s\); 2 unique content value\(s\); 1 known root\(s\); 0 unknown-lineage session\(s\)/u,
+    );
+    assert.doesNotMatch(firstSearch.stdout, /synthetic-smoke-workspace|sourceMetadata|rollout-/u);
+    const cursor = nextCursor(firstSearch.stdout);
+    const firstEntry = firstSearchEntry(firstSearch.stdout);
+
+    const secondSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "distribution smoke",
+      "--limit",
+      "1",
+      "--context",
+      "1",
+      "--cursor",
+      cursor,
+    ]);
+    assertCommand(secondSearch, 0, "second search page");
+    assert.notEqual(firstSearchEntry(secondSearch.stdout), firstEntry);
+    assert.doesNotMatch(secondSearch.stdout, /^Next cursor:/mu);
+    assert.match(secondSearch.stdout, /Support: 2 occurrence\(s\)/u);
 
     const presentList = await stableProviderCommand(options, fixture.codexHome, environment, [
       "list",
@@ -183,6 +223,7 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
         id: NATIVE_ID,
         rolloutPath: ROLLOUT_PATH,
         title: TITLE,
+        workspace: "/private/synthetic-smoke-workspace",
         createdAtMs: 1_752_499_200_000,
         updatedAtMs: 1_752_502_800_000,
       },
@@ -267,7 +308,7 @@ export async function runM5SmokeWorkflow(options: M5SmokeWorkflowOptions): Promi
 }
 
 async function stableProviderCommand(
-  options: M5SmokeWorkflowOptions,
+  options: M6SmokeWorkflowOptions,
   providerRoot: string,
   environment: NodeJS.ProcessEnv,
   args: readonly string[],
@@ -277,6 +318,18 @@ async function stableProviderCommand(
   const after = await snapshotTree(providerRoot);
   assert.deepEqual(after, before, `provider tree changed while running sessions ${args.join(" ")}`);
   return result;
+}
+
+function nextCursor(output: string): string {
+  const cursor = /^Next cursor: ([A-Za-z0-9_-]+)$/mu.exec(output)?.[1];
+  if (cursor === undefined) assert.fail(`search returned no continuation cursor: ${output}`);
+  return cursor;
+}
+
+function firstSearchEntry(output: string): number {
+  const ordinal = /^#(\d+)\s/mu.exec(output)?.[1];
+  if (ordinal === undefined) assert.fail(`search returned no entry coordinate: ${output}`);
+  return Number(ordinal);
 }
 
 function assertCommand(result: SmokeCommandResult, status: number, label: string): void {

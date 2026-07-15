@@ -5,12 +5,21 @@ import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
+import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
 import { MAX_LIST_LIMIT } from "../application/list-sessions.ts";
+import { MAX_SEARCH_CONTEXT, MAX_SEARCH_LIMIT } from "../application/search-sessions.ts";
 import { MAX_SHOW_CONTEXT } from "../application/show-session.ts";
+import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
 import { parseSessionIdentity } from "../domain/session-identity.ts";
-import type { SessionIdentity } from "../domain/session.ts";
+import type {
+  SessionFilterInput,
+  SessionSearchFilterInput,
+  SessionSourceState,
+} from "../domain/session-query.ts";
+import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts";
+import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import {
   renderDataClear,
   renderDoctor,
@@ -18,6 +27,7 @@ import {
   renderIndex,
   renderList,
   renderPaths,
+  renderSearch,
   renderShow,
   type OutputFormat,
 } from "./render.ts";
@@ -34,7 +44,18 @@ export interface ProgramOptions {
   readonly paths: () => Promise<PathsReport>;
   readonly indexSources: readonly string[];
   readonly index: (source?: string) => Promise<IndexReport>;
-  readonly list: (limit?: number) => Promise<ListSessionsResult>;
+  readonly list: (input: {
+    readonly filter?: SessionFilterInput;
+    readonly limit?: number;
+    readonly cursor?: string;
+  }) => Promise<ListSessionsResult>;
+  readonly search: (input: {
+    readonly text: string;
+    readonly filter?: SessionSearchFilterInput;
+    readonly limit?: number;
+    readonly context?: number;
+    readonly cursor?: string;
+  }) => Promise<SearchSessionsResult>;
   readonly show: (input: {
     readonly identity: SessionIdentity;
     readonly entry?: number;
@@ -100,16 +121,63 @@ export function createProgram(options: ProgramOptions): Command {
       if (report.incompleteSources > 0) throw new OperationalExit();
     });
 
-  program
-    .command("list")
-    .description("List retained sessions")
+  const list = program.command("list").description("List retained sessions");
+  addSessionFilterOptions(list)
     .addOption(
       new Option("--limit <number>", "maximum sessions").argParser((value) =>
         parseInteger(value, { minimum: 1, maximum: MAX_LIST_LIMIT }),
       ),
     )
-    .action(async ({ limit }: { limit?: number }) => {
-      options.output.writeOut(renderList(await options.list(limit)));
+    .option("--cursor <cursor>", "continue a previous list query")
+    .action(async (values: SessionOptionValues & { limit?: number; cursor?: string }) => {
+      const filter = sessionFilter(values);
+      options.output.writeOut(
+        renderList(
+          await options.list({
+            ...(filter === undefined ? {} : { filter }),
+            ...(values.limit === undefined ? {} : { limit: values.limit }),
+            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+          }),
+        ),
+      );
+    });
+
+  const search = program.command("search <text>").description("Search retained session evidence");
+  addSessionFilterOptions(search)
+    .option("--entry-after <timestamp>", "exclude entries at or before this time", parseTimestamp)
+    .option("--entry-before <timestamp>", "exclude entries at or after this time", parseTimestamp)
+    .addOption(new Option("--actor <actor>", "exact entry actor").choices(ACTORS))
+    .addOption(new Option("--origin <origin>", "exact content origin").choices(ORIGINS))
+    .option("--kind <kind>", "exact entry kind")
+    .option("--tool-name <name>", "exact observed tool name")
+    .option("--tool-namespace <namespace>", "exact observed tool namespace")
+    .addOption(
+      new Option("--limit <number>", "maximum search hits").argParser((value) =>
+        parseInteger(value, { minimum: 1, maximum: MAX_SEARCH_LIMIT }),
+      ),
+    )
+    .addOption(
+      new Option("--context <number>", "adjacent entries on each side").argParser((value) =>
+        parseInteger(value, { minimum: 0, maximum: MAX_SEARCH_CONTEXT }),
+      ),
+    )
+    .option("--cursor <cursor>", "continue a previous search query")
+    .action(async (text: string, values: SearchOptionValues) => {
+      if (splitUnicodeWhitespaceTerms(text).length === 0) {
+        usage("search text must not be blank");
+      }
+      const filter = searchFilter(values);
+      options.output.writeOut(
+        renderSearch(
+          await options.search({
+            text,
+            ...(filter === undefined ? {} : { filter }),
+            ...(values.limit === undefined ? {} : { limit: values.limit }),
+            ...(values.context === undefined ? {} : { context: values.context }),
+            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+          }),
+        ),
+      );
     });
 
   program
@@ -152,6 +220,142 @@ export function createProgram(options: ProgramOptions): Command {
     });
 
   return program;
+}
+
+const ACTORS: readonly Actor[] = ["human", "model", "tool", "system", "unknown"];
+const ORIGINS: readonly ContentOrigin[] = [
+  "human",
+  "injected",
+  "delegated",
+  "replayed-copied",
+  "model",
+  "tool",
+  "system",
+  "unknown",
+];
+const SOURCE_STATES: readonly SessionSourceState[] = ["present", "missing", "unknown"];
+
+interface SessionOptionValues {
+  readonly source?: string;
+  readonly instance?: string;
+  readonly sourceState?: SessionSourceState;
+  readonly workspace?: string;
+  readonly capturedAfter?: string;
+  readonly capturedBefore?: string;
+  readonly observedAfter?: string;
+  readonly observedBefore?: string;
+  readonly session?: SessionIdentity;
+}
+
+interface SearchOptionValues extends SessionOptionValues {
+  readonly entryAfter?: string;
+  readonly entryBefore?: string;
+  readonly actor?: Actor;
+  readonly origin?: ContentOrigin;
+  readonly kind?: string;
+  readonly toolName?: string;
+  readonly toolNamespace?: string;
+  readonly limit?: number;
+  readonly context?: number;
+  readonly cursor?: string;
+}
+
+function addSessionFilterOptions(command: Command): Command {
+  return command
+    .option("--source <source>", "exact source kind", parseSource)
+    .option("--instance <instance>", "exact source instance", parseNonEmptyValue)
+    .addOption(
+      new Option("--source-state <state>", "effective source state").choices(SOURCE_STATES),
+    )
+    .option("--workspace <workspace>", "exact retained workspace")
+    .option(
+      "--captured-after <timestamp>",
+      "exclude captures at or before this time",
+      parseTimestamp,
+    )
+    .option(
+      "--captured-before <timestamp>",
+      "exclude captures at or after this time",
+      parseTimestamp,
+    )
+    .option(
+      "--observed-after <timestamp>",
+      "exclude source observations at or before this time",
+      parseTimestamp,
+    )
+    .option(
+      "--observed-before <timestamp>",
+      "exclude source observations at or after this time",
+      parseTimestamp,
+    )
+    .option("--session <canonical-id>", "exact canonical session", parseIdentity);
+}
+
+function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefined {
+  if (values.instance !== undefined && values.source === undefined) {
+    usage("--instance requires --source");
+  }
+  validateBounds(values.capturedAfter, values.capturedBefore, "capture");
+  validateBounds(values.observedAfter, values.observedBefore, "observation");
+  const filter: SessionFilterInput = {
+    ...(values.source === undefined ? {} : { source: values.source }),
+    ...(values.instance === undefined ? {} : { instance: values.instance }),
+    ...(values.sourceState === undefined ? {} : { sourceState: values.sourceState }),
+    ...(values.workspace === undefined ? {} : { workspace: values.workspace }),
+    ...(values.capturedAfter === undefined ? {} : { capturedAfter: values.capturedAfter }),
+    ...(values.capturedBefore === undefined ? {} : { capturedBefore: values.capturedBefore }),
+    ...(values.observedAfter === undefined ? {} : { observedAfter: values.observedAfter }),
+    ...(values.observedBefore === undefined ? {} : { observedBefore: values.observedBefore }),
+    ...(values.session === undefined ? {} : { session: values.session }),
+  };
+  return Object.keys(filter).length === 0 ? undefined : filter;
+}
+
+function searchFilter(values: SearchOptionValues): SessionSearchFilterInput | undefined {
+  validateBounds(values.entryAfter, values.entryBefore, "entry");
+  const common = sessionFilter(values);
+  const filter: SessionSearchFilterInput = {
+    ...common,
+    ...(values.entryAfter === undefined ? {} : { entryAfter: values.entryAfter }),
+    ...(values.entryBefore === undefined ? {} : { entryBefore: values.entryBefore }),
+    ...(values.actor === undefined ? {} : { actor: values.actor }),
+    ...(values.origin === undefined ? {} : { origin: values.origin }),
+    ...(values.kind === undefined ? {} : { entryKind: values.kind }),
+    ...(values.toolName === undefined ? {} : { toolName: values.toolName }),
+    ...(values.toolNamespace === undefined ? {} : { toolNamespace: values.toolNamespace }),
+  };
+  return Object.keys(filter).length === 0 ? undefined : filter;
+}
+
+function validateBounds(
+  after: string | undefined,
+  before: string | undefined,
+  label: string,
+): void {
+  if (after !== undefined && before !== undefined && after >= before) {
+    usage(`${label} bounds must be increasing and exclusive`);
+  }
+}
+
+function parseSource(value: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)) {
+    throw new InvalidArgumentError("expected a lowercase source kind");
+  }
+  return value;
+}
+
+function parseTimestamp(value: string): string {
+  if (!isCanonicalTimestamp(value)) {
+    throw new InvalidArgumentError("expected a canonical UTC timestamp");
+  }
+  return value;
+}
+
+function parseNonEmptyValue(value: string): string {
+  if (value.length === 0 || !value.isWellFormed()) {
+    throw new InvalidArgumentError("expected a non-empty value");
+  }
+  return value;
 }
 
 function parseInteger(

@@ -2,10 +2,14 @@ import { describe, expect, test, vi } from "vitest";
 
 import { listSessions } from "../../src/application/list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
-import type {
-  IndexedSessionSummary,
-  SessionIndexReader,
-} from "../../src/application/ports/session-index.ts";
+import type { SessionIndexReader } from "../../src/application/ports/session-index.ts";
+import type { SessionQueryRepository } from "../../src/application/ports/session-query.ts";
+import { SessionQueryOperationalError } from "../../src/application/session-query-error.ts";
+import {
+  createSessionQueryCursor,
+  type SessionListPage,
+  type SessionQuerySummary,
+} from "../../src/domain/session-query.ts";
 
 const paths: IndexPaths = {
   directory: "/data/sessions",
@@ -17,38 +21,48 @@ const paths: IndexPaths = {
 
 describe("listSessions", () => {
   test("returns an empty result without opening uninitialized state", async () => {
-    const lifecycle = lifecycleWith([], "uninitialized");
+    const lifecycle = lifecycleWith({ sessions: [] }, "uninitialized");
 
     await expect(listSessions({ paths, lifecycle })).resolves.toEqual({
       sessions: [],
-      truncated: false,
     });
     expect(lifecycle.openReader).not.toHaveBeenCalled();
   });
 
-  test("requests one sentinel and preserves repository order", async () => {
-    const summaries = [summary("z"), summary("a"), summary("sentinel")];
-    const lifecycle = lifecycleWith(summaries);
+  test("forwards one validated query and preserves the atomic repository page", async () => {
+    const page = {
+      sessions: [summary("z"), summary("a")],
+      nextCursor: createSessionQueryCursor("next-page"),
+    } satisfies SessionListPage;
+    const lifecycle = lifecycleWith(page);
 
-    const result = await listSessions({ paths, lifecycle, limit: 2 });
+    const result = await listSessions({
+      paths,
+      lifecycle,
+      filter: { source: "synthetic", instance: "Profile-One", workspace: "/Workspace" },
+      limit: 2,
+    });
 
     expect(result.sessions.map(({ identity }) => identity.nativeId)).toEqual(["z", "a"]);
-    expect(result.truncated).toBe(true);
+    expect(result.nextCursor).toBe("next-page");
     const reader = await lifecycle.openReader.mock.results[0]!.value;
-    expect(reader.sessions.listSummaries).toHaveBeenCalledWith({ limit: 3 });
+    expect(reader.query.list).toHaveBeenCalledWith({
+      filter: { source: "synthetic", instance: "Profile-One", workspace: "/Workspace" },
+      limit: 2,
+    });
     expect(reader.close).toHaveBeenCalledOnce();
   });
 
   test.each([0, 201, 1.5])("rejects invalid limit %s before inspection", async (limit) => {
-    const lifecycle = lifecycleWith([]);
+    const lifecycle = lifecycleWith({ sessions: [] });
     await expect(listSessions({ paths, lifecycle, limit })).rejects.toBeInstanceOf(TypeError);
     expect(lifecycle.inspect).not.toHaveBeenCalled();
   });
 
   test("preserves an undefined repository rejection as a failed read", async () => {
-    const lifecycle = lifecycleWith([]);
+    const lifecycle = lifecycleWith({ sessions: [] });
     const reader = await lifecycle.openReader(paths);
-    vi.mocked(reader.sessions.listSummaries).mockRejectedValueOnce(undefined);
+    vi.mocked(reader.query.list).mockRejectedValueOnce(undefined);
     lifecycle.openReader.mockClear();
 
     const outcome = await listSessions({ paths, lifecycle }).then(
@@ -59,15 +73,31 @@ describe("listSessions", () => {
     expect(outcome).toEqual({ status: "rejected", error: undefined });
     expect(reader.close).toHaveBeenCalledOnce();
   });
+
+  test("treats a cursor against an absent library as stale", async () => {
+    const lifecycle = lifecycleWith({ sessions: [] }, "uninitialized");
+
+    await expect(listSessions({ paths, lifecycle, cursor: "old-page" })).rejects.toBeInstanceOf(
+      SessionQueryOperationalError,
+    );
+    expect(lifecycle.openReader).not.toHaveBeenCalled();
+  });
 });
 
-function lifecycleWith(
-  summaries: readonly IndexedSessionSummary[],
-  state: "ready" | "uninitialized" = "ready",
-) {
-  const sessions = {
-    listSummaries: vi.fn<SessionIndexReader["listSummaries"]>(async () => summaries),
-  } as unknown as SessionIndexReader;
+function lifecycleWith(page: SessionListPage, state: "ready" | "uninitialized" = "ready") {
+  const sessions = {} as SessionIndexReader;
+  const query = {
+    list: vi.fn<SessionQueryRepository["list"]>(async () => page),
+    search: vi.fn<SessionQueryRepository["search"]>(async () => ({
+      hits: [],
+      support: {
+        occurrences: 0,
+        uniqueContent: 0,
+        uniqueKnownRoots: 0,
+        unknownLineageSessions: 0,
+      },
+    })),
+  } satisfies SessionQueryRepository;
   const reader = {
     state: {
       status: "ready" as const,
@@ -76,6 +106,7 @@ function lifecycleWith(
       supportedSchemaVersion: 1,
     },
     sessions,
+    query,
     close: vi.fn<() => Promise<void>>(async () => undefined),
   };
   return {
@@ -95,7 +126,7 @@ function lifecycleWith(
   } satisfies IndexLifecycle;
 }
 
-function summary(nativeId: string): IndexedSessionSummary {
+function summary(nativeId: string): SessionQuerySummary {
   return {
     identity: { source: { kind: "synthetic", instanceId: "one" }, nativeId },
     freshness: "current",

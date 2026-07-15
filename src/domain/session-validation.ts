@@ -1,3 +1,4 @@
+import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
 import { contentHashMatches, isContentHash } from "./content-hash.ts";
 import { snapshotArray, snapshotPlainRecord, type UnknownRecord } from "./data-snapshot.ts";
 import {
@@ -10,6 +11,7 @@ import type {
   Actor,
   ContentOrigin,
   ContentSegment,
+  LineageCoverage,
   OmittedContentSegment,
   OriginConfidence,
   SessionDocument,
@@ -73,8 +75,6 @@ interface IssueCollector {
   truncated: boolean;
 }
 
-const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-
 export function validateSessionDocument(
   value: unknown,
   options: SessionValidationOptions = {},
@@ -98,7 +98,7 @@ function validateSessionDocumentValue(
   const root = objectAt(value, "/", SESSION_DOCUMENT_KEYS, collector);
   if (root === undefined) return invalidResult(collector);
 
-  for (const key of ["identity", "relations", "entries"] as const) {
+  for (const key of ["identity", "lineageCoverage", "relations", "entries"] as const) {
     requireProperty(root, key, `/${key}`, collector);
   }
 
@@ -109,6 +109,9 @@ function validateSessionDocumentValue(
   const workspace = optionalStringAt(root, "workspace", "/workspace", collector);
   const createdAt = optionalTimestampAt(root, "createdAt", "/createdAt", collector);
   const updatedAt = optionalTimestampAt(root, "updatedAt", "/updatedAt", collector);
+  const lineageCoverage = Object.hasOwn(root, "lineageCoverage")
+    ? lineageCoverageAt(root.lineageCoverage, "/lineageCoverage", collector)
+    : undefined;
   const relations = Object.hasOwn(root, "relations")
     ? relationsAt(root.relations, identity, collector)
     : undefined;
@@ -125,6 +128,7 @@ function validateSessionDocumentValue(
   if (
     collector.issues.length > 0 ||
     identity === undefined ||
+    lineageCoverage === undefined ||
     relations === undefined ||
     entries === undefined
   ) {
@@ -137,6 +141,7 @@ function validateSessionDocumentValue(
     ...(workspace === undefined ? {} : { workspace }),
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
+    lineageCoverage,
     relations,
     entries,
   };
@@ -149,6 +154,7 @@ const SESSION_DOCUMENT_KEYS = new Set([
   "workspace",
   "createdAt",
   "updatedAt",
+  "lineageCoverage",
   "relations",
   "entries",
 ]);
@@ -179,6 +185,16 @@ const SEGMENT_KEYS = new Set([
   "originConfidence",
   "sourceMetadata",
 ]);
+
+function lineageCoverageAt(
+  value: unknown,
+  path: string,
+  collector: IssueCollector,
+): LineageCoverage | undefined {
+  if (value === "complete" || value === "unknown") return value;
+  addIssue(collector, "invalid-literal", path);
+  return undefined;
+}
 
 function identityAt(
   value: unknown,
@@ -539,12 +555,6 @@ function optionalTimestampAt(
     return undefined;
   }
   return timestamp;
-}
-
-function isCanonicalTimestamp(value: string): boolean {
-  if (!TIMESTAMP_PATTERN.test(value)) return false;
-  const milliseconds = Date.parse(value);
-  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
 }
 
 function ordinalAt(

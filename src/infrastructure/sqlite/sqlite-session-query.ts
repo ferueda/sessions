@@ -1,0 +1,466 @@
+import type { DatabaseSync } from "node:sqlite";
+
+import type { SessionQueryRepository } from "../../application/ports/session-query.ts";
+import {
+  SessionQueryOperationalError,
+  SessionQueryUsageError,
+} from "../../application/session-query-error.ts";
+import {
+  createSessionQueryCursor,
+  sessionQueryFingerprintMaterial,
+  type SessionListPage,
+  type SessionListQuery,
+  type SessionQuerySummary,
+  type SessionSearchHit,
+  type SessionSearchPage,
+  type SessionSearchQuery,
+  type SessionSearchSnippet,
+} from "../../domain/session-query.ts";
+import { isSessionIdentity } from "../../domain/session-identity.ts";
+import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
+import { literalFtsQuery } from "./literal-fts-query.ts";
+import {
+  decodeQueryCursor,
+  encodeQueryCursor,
+  fingerprintQuery,
+  readQueryRevision,
+  type QueryCommand,
+  type QueryRevision,
+} from "./query-cursor.ts";
+import { readSearchContext, entryAt, truncateUtf8Around } from "./sqlite-query-context.ts";
+import { searchWhere, sessionWhere, type SqliteQueryWhere } from "./sqlite-query-filters.ts";
+import { countRootSupport } from "./sqlite-query-lineage.ts";
+import { readSessionSummary } from "./sqlite-session-state.ts";
+import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+
+const ORIGINS = new Set<ContentOrigin>([
+  "human",
+  "injected",
+  "delegated",
+  "replayed-copied",
+  "model",
+  "tool",
+  "system",
+  "unknown",
+]);
+const CONFIDENCES = new Set<OriginConfidence>(["high", "medium", "low", "unknown"]);
+
+export function createSqliteSessionQuery(database: DatabaseSync): SessionQueryRepository {
+  return {
+    async list(query) {
+      return listSessions(database, query);
+    },
+    async search(query) {
+      return searchSessions(database, query);
+    },
+  };
+}
+
+function listSessions(database: DatabaseSync, query: SessionListQuery): SessionListPage {
+  const cursor = prepareCursor(database, "list", query);
+  const where = sessionWhere(query.filter);
+  const rows = database
+    .prepare(
+      `SELECT source.kind, source.instance_id, tracking.native_id
+       FROM sessions_canonical_sessions AS canonical
+       JOIN sessions_session_tracking AS tracking
+         ON tracking.session_id = canonical.session_id
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       WHERE 1 = 1${where.sql}
+       ORDER BY
+         CASE WHEN COALESCE(canonical.updated_at, canonical.created_at) IS NULL THEN 1 ELSE 0 END,
+         COALESCE(canonical.updated_at, canonical.created_at) DESC,
+         source.kind COLLATE BINARY,
+         source.instance_id COLLATE BINARY,
+         tracking.native_id COLLATE BINARY
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...where.parameters, query.limit + 1, cursor.offset) as unknown as readonly IdentityRow[];
+  const pageRows = rows.slice(0, query.limit);
+  const sessions = pageRows.map((row) => {
+    const identity = identityAt(row);
+    const summary = readSessionSummary(database, identity);
+    if (summary === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    return freezeSummary(summary);
+  });
+  const nextCursor =
+    rows.length > query.limit
+      ? nextQueryCursor("list", cursor, cursor.offset + query.limit)
+      : undefined;
+  return Object.freeze({
+    sessions: Object.freeze(sessions),
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  });
+}
+
+function searchSessions(database: DatabaseSync, query: SessionSearchQuery): SessionSearchPage {
+  const cursor = prepareCursor(database, "search", query);
+  const ftsQuery = literalFtsQuery(query.text);
+  if (ftsQuery === undefined) return emptySearchPage();
+  const where = searchWhere(query.filter);
+  const support = readSupport(database, ftsQuery, where);
+  const searchRows = readSearchRows(database, query, ftsQuery, where, cursor.offset);
+  const pageRows = searchRows.rows.slice(0, query.limit);
+  const summaryCache = new Map<number, SessionQuerySummary>();
+  const hits = pageRows.map((row) =>
+    searchHit(database, row, query.context, summaryCache, searchRows.markers),
+  );
+  const nextCursor =
+    searchRows.rows.length > query.limit
+      ? nextQueryCursor("search", cursor, cursor.offset + query.limit)
+      : undefined;
+  return Object.freeze({
+    hits: Object.freeze(hits),
+    support: Object.freeze(support),
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  });
+}
+
+function readSearchRows(
+  database: DatabaseSync,
+  query: SessionSearchQuery,
+  ftsQuery: string,
+  where: SqliteQueryWhere,
+  offset: number,
+): SearchRows {
+  const markers = createSnippetMarkers(database);
+  const rows = database
+    .prepare(
+      `WITH matching_segments AS (
+         SELECT canonical.session_id,
+                source.kind AS source_kind,
+                source.instance_id,
+                tracking.native_id,
+                canonical.created_at,
+                canonical.updated_at,
+                entry.ordinal AS entry_ordinal,
+                entry.kind AS entry_kind,
+                entry.actor,
+                entry.timestamp,
+                entry.related_entry_ordinal,
+                entry.tool_call_id,
+                entry.tool_name,
+                entry.tool_namespace,
+                occurrence.segment_ordinal,
+                occurrence.origin,
+                occurrence.confidence,
+                content.text,
+                snippet(sessions_content_fts, 0, ?, ?, ' … ', 64)
+                  AS snippet_text,
+                bm25(sessions_content_fts) AS score
+         FROM sessions_content_fts
+         JOIN sessions_content_values AS content
+           ON content.content_id = sessions_content_fts.rowid
+         JOIN sessions_content_occurrences AS occurrence
+           ON occurrence.content_id = content.content_id
+         JOIN sessions_entries AS entry
+           ON entry.session_id = occurrence.session_id
+          AND entry.ordinal = occurrence.entry_ordinal
+         JOIN sessions_canonical_sessions AS canonical
+           ON canonical.session_id = entry.session_id
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = canonical.session_id
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id
+         WHERE sessions_content_fts MATCH ?${where.sql}
+       ), ranked_segments AS (
+         SELECT matching_segments.*,
+                COUNT(*) OVER (
+                  PARTITION BY session_id, entry_ordinal
+                ) AS matching_segment_count,
+                ROW_NUMBER() OVER (
+                  PARTITION BY session_id, entry_ordinal
+                  ORDER BY score, segment_ordinal
+                ) AS segment_rank
+         FROM matching_segments
+       )
+       SELECT *
+       FROM ranked_segments
+       WHERE segment_rank = 1
+       ORDER BY
+         score,
+         CASE WHEN COALESCE(updated_at, created_at) IS NULL THEN 1 ELSE 0 END,
+         COALESCE(updated_at, created_at) DESC,
+         source_kind COLLATE BINARY,
+         instance_id COLLATE BINARY,
+         native_id COLLATE BINARY,
+         entry_ordinal
+       LIMIT ? OFFSET ?`,
+    )
+    .all(
+      markers.start,
+      markers.end,
+      ftsQuery,
+      ...where.parameters,
+      query.limit + 1,
+      offset,
+    ) as unknown as readonly SearchRow[];
+  return { rows, markers };
+}
+
+function readSupport(
+  database: DatabaseSync,
+  ftsQuery: string,
+  where: SqliteQueryWhere,
+): SessionSearchPage["support"] {
+  const joins = searchJoins();
+  const aggregate = database
+    .prepare(
+      `SELECT COUNT(*) AS occurrences,
+              COUNT(DISTINCT occurrence.content_id) AS unique_content
+       ${joins}
+       WHERE sessions_content_fts MATCH ?${where.sql}`,
+    )
+    .get(ftsQuery, ...where.parameters) as AggregateRow | undefined;
+  if (aggregate === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  const matchingRows = database
+    .prepare(
+      `SELECT DISTINCT source.kind, source.instance_id, tracking.native_id
+       ${joins}
+       WHERE sessions_content_fts MATCH ?${where.sql}
+       ORDER BY source.kind COLLATE BINARY,
+                source.instance_id COLLATE BINARY,
+                tracking.native_id COLLATE BINARY`,
+    )
+    .all(ftsQuery, ...where.parameters) as unknown as readonly IdentityRow[];
+  const roots = countRootSupport(database, matchingRows.map(identityAt));
+  return {
+    occurrences: integerAt(aggregate.occurrences),
+    uniqueContent: integerAt(aggregate.unique_content),
+    ...roots,
+  };
+}
+
+function searchJoins(): string {
+  return `FROM sessions_content_fts
+    JOIN sessions_content_values AS content
+      ON content.content_id = sessions_content_fts.rowid
+    JOIN sessions_content_occurrences AS occurrence
+      ON occurrence.content_id = content.content_id
+    JOIN sessions_entries AS entry
+      ON entry.session_id = occurrence.session_id
+     AND entry.ordinal = occurrence.entry_ordinal
+    JOIN sessions_canonical_sessions AS canonical
+      ON canonical.session_id = entry.session_id
+    JOIN sessions_session_tracking AS tracking
+      ON tracking.session_id = canonical.session_id
+    JOIN sessions_source_instances AS source
+      ON source.source_instance_id = tracking.source_instance_id`;
+}
+
+function searchHit(
+  database: DatabaseSync,
+  row: SearchRow,
+  adjacentContext: number,
+  summaryCache: Map<number, SessionQuerySummary>,
+  markers: SnippetMarkers,
+): SessionSearchHit {
+  const sessionId = integerAt(row.session_id);
+  const identity = identityAt({
+    kind: row.source_kind,
+    instance_id: row.instance_id,
+    native_id: row.native_id,
+  });
+  let summary = summaryCache.get(sessionId);
+  if (summary === undefined) {
+    const stored = readSessionSummary(database, identity);
+    if (stored === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    summary = freezeSummary(stored);
+    summaryCache.set(sessionId, summary);
+  }
+  const entry = entryAt({
+    ordinal: row.entry_ordinal,
+    kind: row.entry_kind,
+    actor: row.actor,
+    timestamp: row.timestamp,
+    related_entry_ordinal: row.related_entry_ordinal,
+    tool_call_id: row.tool_call_id,
+    tool_name: row.tool_name,
+    tool_namespace: row.tool_namespace,
+  });
+  const snippet = snippetAt(row, markers);
+  const context = readSearchContext(database, sessionId, entry.ordinal, adjacentContext);
+  return Object.freeze({
+    session: summary,
+    entry,
+    snippet,
+    context: context.entries,
+    linkedContextTruncated: context.linkedContextTruncated,
+  });
+}
+
+function snippetAt(row: SearchRow, markers: SnippetMarkers): SessionSearchSnippet {
+  const fullText = storedString(row.text);
+  const markedExcerpt = storedString(row.snippet_text);
+  if (!ORIGINS.has(row.origin) || !CONFIDENCES.has(row.confidence)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  const markerIndex = markedExcerpt.indexOf(markers.start);
+  if (
+    markerIndex < 0 ||
+    markedExcerpt.indexOf(markers.end, markerIndex + markers.start.length) < 0
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  const beforeMatch = removeSnippetMarkers(markedExcerpt.slice(0, markerIndex), markers);
+  const excerpt = removeSnippetMarkers(markedExcerpt, markers);
+  const bounded = truncateUtf8Around(excerpt, beforeMatch.length);
+  const matchingSegments = integerAt(row.matching_segment_count);
+  if (matchingSegments < 1) throw new SqliteSessionIndexError("corrupt-data");
+  return Object.freeze({
+    segmentOrdinal: integerAt(row.segment_ordinal),
+    origin: row.origin,
+    originConfidence: row.confidence,
+    text: bounded.text,
+    truncated: bounded.truncated || excerpt !== fullText,
+    additionalMatchingSegments: matchingSegments - 1,
+  });
+}
+
+function createSnippetMarkers(database: DatabaseSync): SnippetMarkers {
+  const library = readQueryRevision(database).libraryInstanceId;
+  for (let candidate = 0; ; candidate += 1) {
+    if (!Number.isSafeInteger(candidate)) throw new SqliteSessionIndexError("corrupt-data");
+    const markers = {
+      start: `\u0001sessions-${library}-${String(candidate)}-match-start\u0002`,
+      end: `\u0001sessions-${library}-${String(candidate)}-match-end\u0002`,
+    };
+    const collision = database
+      .prepare(
+        `SELECT 1
+         FROM sessions_content_values
+         WHERE instr(text, ?) > 0 OR instr(text, ?) > 0
+         LIMIT 1`,
+      )
+      .get(markers.start, markers.end);
+    if (collision === undefined) return markers;
+  }
+}
+
+function removeSnippetMarkers(value: string, markers: SnippetMarkers): string {
+  return value.replaceAll(markers.start, "").replaceAll(markers.end, "");
+}
+
+function prepareCursor(
+  database: DatabaseSync,
+  command: QueryCommand,
+  query: SessionListQuery | SessionSearchQuery,
+): PreparedCursor {
+  const revision = readQueryRevision(database);
+  const fingerprint = fingerprintQuery(sessionQueryFingerprintMaterial(query));
+  if (query.cursor === undefined) return { revision, fingerprint, offset: 0 };
+  const decoded = decodeQueryCursor(query.cursor, { command, fingerprint, revision });
+  if (!decoded.ok) {
+    if (decoded.reason === "stale") throw new SessionQueryOperationalError("stale-cursor");
+    throw new SessionQueryUsageError(
+      decoded.reason === "mismatch" ? "cursor-query-mismatch" : "invalid-cursor",
+    );
+  }
+  return { revision, fingerprint, offset: decoded.offset };
+}
+
+function nextQueryCursor(command: QueryCommand, cursor: PreparedCursor, offset: number) {
+  return createSessionQueryCursor(
+    encodeQueryCursor({
+      command,
+      fingerprint: cursor.fingerprint,
+      revision: cursor.revision,
+      offset,
+    }),
+  );
+}
+
+function freezeSummary(summary: SessionQuerySummary): SessionQuerySummary {
+  return Object.freeze({
+    ...summary,
+    identity: Object.freeze({
+      source: Object.freeze({ ...summary.identity.source }),
+      nativeId: summary.identity.nativeId,
+    }),
+  });
+}
+
+function identityAt(row: IdentityRow): SessionIdentity {
+  const identity = {
+    source: { kind: row.kind, instanceId: row.instance_id },
+    nativeId: row.native_id,
+  };
+  if (!isSessionIdentity(identity)) throw new SqliteSessionIndexError("corrupt-data");
+  return identity;
+}
+
+function emptySearchPage(): SessionSearchPage {
+  return Object.freeze({
+    hits: Object.freeze([]),
+    support: Object.freeze({
+      occurrences: 0,
+      uniqueContent: 0,
+      uniqueKnownRoots: 0,
+      unknownLineageSessions: 0,
+    }),
+  });
+}
+
+function storedString(value: unknown): string {
+  if (typeof value !== "string" || !value.isWellFormed()) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return value;
+}
+
+function integerAt(value: unknown): number {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return number;
+}
+
+interface PreparedCursor {
+  readonly revision: QueryRevision;
+  readonly fingerprint: string;
+  readonly offset: number;
+}
+
+interface SnippetMarkers {
+  readonly start: string;
+  readonly end: string;
+}
+
+interface SearchRows {
+  readonly rows: readonly SearchRow[];
+  readonly markers: SnippetMarkers;
+}
+
+interface IdentityRow {
+  readonly kind: unknown;
+  readonly instance_id: unknown;
+  readonly native_id: unknown;
+}
+
+interface AggregateRow {
+  readonly occurrences: unknown;
+  readonly unique_content: unknown;
+}
+
+interface SearchRow {
+  readonly session_id: unknown;
+  readonly source_kind: unknown;
+  readonly instance_id: unknown;
+  readonly native_id: unknown;
+  readonly entry_ordinal: unknown;
+  readonly entry_kind: unknown;
+  readonly actor: never;
+  readonly timestamp: unknown;
+  readonly related_entry_ordinal: unknown;
+  readonly tool_call_id: unknown;
+  readonly tool_name: unknown;
+  readonly tool_namespace: unknown;
+  readonly segment_ordinal: unknown;
+  readonly origin: ContentOrigin;
+  readonly confidence: OriginConfidence;
+  readonly text: unknown;
+  readonly snippet_text: unknown;
+  readonly matching_segment_count: unknown;
+}

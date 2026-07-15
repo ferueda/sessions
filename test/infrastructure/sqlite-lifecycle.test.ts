@@ -669,7 +669,7 @@ describe("FTS5 security", () => {
     }
   });
 
-  test("fails writer setup when a positive probe cannot configure the persistent table", async () => {
+  test("repairs a missing FTS projection before configuring secure delete", async () => {
     const paths = await fixturePaths();
     const migrations = [
       ...sqliteMigrations,
@@ -688,16 +688,14 @@ describe("FTS5 security", () => {
       }),
     });
 
-    const failure: unknown = await lifecycle.openWriter(paths).then(
-      async (unexpectedWriter) => {
-        await unexpectedWriter.close();
-        return undefined;
-      },
-      (error: unknown) => error,
-    );
-    expect(failure).toBeInstanceOf(Fts5SecureDeleteConfigurationError);
-    expect((failure as Fts5SecureDeleteConfigurationError).cause).toMatchObject({
-      code: "ERR_SQLITE_ERROR",
+    const writer = await lifecycle.openWriter(paths);
+    expect(writer.fts5SecureDelete).toBe(true);
+    await writer.close();
+    await expect(lifecycle.inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      ftsStructure: "ok",
+      ftsContent: "ok",
+      ftsSecureDelete: "enabled",
     });
   });
 

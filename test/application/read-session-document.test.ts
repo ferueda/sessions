@@ -250,6 +250,7 @@ function discoveredSession(): DiscoveredSession {
 function validDocument(documentIdentity: SessionIdentity = identity): SessionDocument {
   return {
     identity: documentIdentity,
+    lineageCoverage: "unknown",
     relations: [],
     entries: [
       {

@@ -1,3 +1,5 @@
+import { FTS_PROJECTION_SCHEMA_SQL } from "../fts-projection.ts";
+
 export const bootstrapMigration = {
   version: 1,
   name: "bootstrap",
@@ -7,6 +9,18 @@ export const bootstrapMigration = {
   checksum TEXT NOT NULL,
   applied_at TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE sessions_library (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  instance_id TEXT NOT NULL COLLATE BINARY
+    CHECK (
+      length(instance_id) = 32
+      AND instance_id NOT GLOB '*[^a-f0-9]*'
+    )
+) STRICT;
+
+INSERT INTO sessions_library (singleton, instance_id)
+VALUES (1, lower(hex(randomblob(16))));
 
 CREATE TABLE sessions_source_instances (
   source_instance_id INTEGER PRIMARY KEY,
@@ -61,6 +75,8 @@ CREATE TABLE sessions_session_tracking (
 CREATE TABLE sessions_canonical_sessions (
   session_id INTEGER PRIMARY KEY
     REFERENCES sessions_session_tracking(session_id) ON DELETE CASCADE,
+  lineage_coverage TEXT NOT NULL
+    CHECK (lineage_coverage IN ('complete', 'unknown')),
   title TEXT,
   workspace TEXT,
   created_at TEXT,
@@ -126,32 +142,7 @@ CREATE TABLE sessions_content_values (
   UNIQUE (hash_scheme, digest, text)
 ) STRICT;
 
-CREATE VIRTUAL TABLE sessions_content_fts USING fts5(
-  text,
-  content='sessions_content_values',
-  content_rowid='content_id',
-  tokenize='unicode61'
-);
-
-CREATE TRIGGER sessions_content_values_ai
-AFTER INSERT ON sessions_content_values
-BEGIN
-  INSERT INTO sessions_content_fts(rowid, text)
-  VALUES (new.content_id, new.text);
-END;
-
-CREATE TRIGGER sessions_content_values_bd
-BEFORE DELETE ON sessions_content_values
-BEGIN
-  INSERT INTO sessions_content_fts(sessions_content_fts, rowid, text)
-  VALUES ('delete', old.content_id, old.text);
-END;
-
-CREATE TRIGGER sessions_content_values_bu
-BEFORE UPDATE ON sessions_content_values
-BEGIN
-  SELECT RAISE(ABORT, 'sessions content values are immutable');
-END;
+${FTS_PROJECTION_SCHEMA_SQL}
 
 CREATE TABLE sessions_content_occurrences (
   session_id INTEGER NOT NULL,

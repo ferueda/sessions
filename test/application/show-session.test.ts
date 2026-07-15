@@ -5,6 +5,7 @@ import type {
   IndexedSession,
   SessionIndexReader,
 } from "../../src/application/ports/session-index.ts";
+import type { SessionQueryRepository } from "../../src/application/ports/session-query.ts";
 import { SessionLibraryError } from "../../src/application/library-error.ts";
 import { showSession } from "../../src/application/show-session.ts";
 import type { SessionIdentity } from "../../src/domain/session.ts";
@@ -73,6 +74,7 @@ function lifecycleWith(
       supportedSchemaVersion: 1,
     },
     sessions,
+    query: {} as SessionQueryRepository,
     close: vi.fn<() => Promise<void>>(async () => undefined),
   };
   return {
@@ -98,6 +100,6 @@ function sessionWithEntries(count: number): IndexedSession {
   );
   return {
     summary: { identity, freshness: "current", sourceState: "present" },
-    document: { identity, relations: [], entries },
+    document: { identity, lineageCoverage: "unknown", relations: [], entries },
   };
 }

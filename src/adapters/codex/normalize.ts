@@ -3,6 +3,7 @@ import type { UnknownRecord } from "../../domain/data-snapshot.ts";
 import type {
   Actor,
   ContentSegment,
+  LineageCoverage,
   SessionDocument,
   SessionEntry,
   SessionIdentity,
@@ -35,6 +36,7 @@ import {
 export interface CodexRolloutNormalizationOptions {
   readonly identity: SessionIdentity;
   readonly logicalLocator: string;
+  readonly spawnEdgeCoverage: LineageCoverage;
   readonly stateParentNativeId?: string;
   readonly title?: string;
   readonly workspace?: string;
@@ -91,7 +93,11 @@ class CodexNormalizerState {
       throw new TypeError("Codex logical locator must be non-empty and well-formed");
     }
     this.#options = options;
-    this.#lineage = new CodexLineageTracker(options.identity, options.stateParentNativeId);
+    this.#lineage = new CodexLineageTracker(
+      options.identity,
+      options.spawnEdgeCoverage,
+      options.stateParentNativeId,
+    );
   }
 
   addRecord(value: unknown, recordOrdinal: number): void {
@@ -122,7 +128,7 @@ class CodexNormalizerState {
   finish(): SessionDocument {
     if (this.#finished) throw new TypeError("Codex rollout normalizer is already finished");
     this.#finished = true;
-    const relations = this.#lineage.finish();
+    const lineage = this.#lineage.finish();
 
     for (const [id, resultOrdinal] of this.#toolResults) {
       const callOrdinal = this.#toolCalls.get(id);
@@ -143,7 +149,8 @@ class CodexNormalizerState {
       ...(this.#options.workspace === undefined ? {} : { workspace: this.#options.workspace }),
       ...(this.#options.createdAt === undefined ? {} : { createdAt: this.#options.createdAt }),
       ...(this.#options.updatedAt === undefined ? {} : { updatedAt: this.#options.updatedAt }),
-      relations,
+      lineageCoverage: lineage.lineageCoverage,
+      relations: lineage.relations,
       entries: this.#entries,
     };
   }

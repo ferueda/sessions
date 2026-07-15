@@ -39,10 +39,15 @@ The port and values live under `src/application/ports/`; canonical transcript va
   only while ownership remains valid, and aggregates applicable
   operation/cleanup/lease failures. The adapter never sees its root, lease
   identity, or cleanup policy.
-- Missing optional metadata maps to absent/unknown values.
+- Missing optional metadata maps to absent/unknown values. Every document declares
+  immediate rootward lineage coverage as `complete` or `unknown`; an empty
+  relation list proves a root only when provider evidence supports complete
+  coverage.
 - Discovery reports source evidence only. Adapters never decide whether an unseen
   canonical session is retained, marked missing, or explicitly deleted.
-- Origin or lineage is classified only when source evidence supports it.
+- Origin, relations, and lineage coverage are classified only when source
+  evidence supports them. Adapters do not resolve roots or infer inverse/content-
+  based lineage.
 - Unavailable, unreadable, malformed, source-changed, and unsupported-format
   failures use the shared discriminated error contract and sanitized messages; no
   partial document is admitted.
@@ -106,7 +111,10 @@ unavailable execution evidence without embedding skill policy in adapters.
 roots, snapshots active SQLite/WAL state into the leased private workspace,
 feature-detects supported thread/edge columns, and discovers ordered candidates.
 Reads verify live rollout identity before and after streaming plain JSONL or
-Zstandard data and normalize only declared record variants. Unknown supported
+Zstandard data and normalize only declared record variants. `codex-v2` preserves
+spawn-edge-table coverage separately from an optional parent edge so table
+absence remains unknown while supported-table row absence can be complete.
+Unknown supported
 structural records become privacy-safe omissions; malformed or changing evidence
 returns a typed failure and never a partial document.
 

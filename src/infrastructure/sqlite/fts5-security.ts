@@ -1,7 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 
-export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
-
 export interface Fts5SecurityCapability {
   readonly sqliteVersion: string;
   readonly fts5: true;

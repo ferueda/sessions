@@ -5,9 +5,14 @@ import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
+import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
+import {
+  MAX_SESSION_SEARCH_BODY_BYTES,
+  MAX_SESSION_SEARCH_LINKED_CONTEXT,
+} from "../domain/session-query.ts";
 
 export type OutputFormat = "human" | "json";
 
@@ -81,7 +86,54 @@ export function renderList(result: ListSessionsResult): string {
     const capture = session.capturedAt === undefined ? "capture unknown" : session.capturedAt;
     return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]`;
   });
-  if (result.truncated) lines.push("… more sessions not shown");
+  if (result.nextCursor !== undefined) {
+    lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderSearch(result: SearchSessionsResult): string {
+  if (result.hits.length === 0) return "No matches found.\n";
+
+  const lines: string[] = [];
+  for (const [index, hit] of result.hits.entries()) {
+    if (index > 0) lines.push("");
+    const identity = renderScalar(formatSessionIdentity(hit.session.identity));
+    const title = hit.session.title === undefined ? "(untitled)" : renderScalar(hit.session.title);
+    const capture =
+      hit.session.capturedAt === undefined ? "capture unknown" : hit.session.capturedAt;
+    lines.push(
+      `${identity}  ${title}  [${hit.session.freshness}; ${hit.session.sourceState}; ${capture}]`,
+      renderEntryHeading(hit.entry),
+      renderSearchBody(hit.snippet.text, hit.snippet.truncated),
+      `Evidence: segment #${String(hit.snippet.segmentOrdinal)}; ${hit.snippet.origin}/${hit.snippet.originConfidence}; ${String(hit.snippet.additionalMatchingSegments)} additional matching segment(s)`,
+    );
+    for (const context of hit.context) {
+      const relation =
+        context.adjacent && context.linked
+          ? "adjacent+linked"
+          : context.linked
+            ? "linked"
+            : "adjacent";
+      lines.push(
+        `Context (${relation}) ${renderEntryHeading(context)}`,
+        renderSearchBody(context.body, context.bodyTruncated),
+      );
+    }
+    if (hit.linkedContextTruncated) {
+      lines.push(
+        `Linked context: truncated at ${String(MAX_SESSION_SEARCH_LINKED_CONTEXT)} entries`,
+      );
+    }
+  }
+
+  lines.push(
+    "",
+    `Support: ${String(result.support.occurrences)} occurrence(s); ${String(result.support.uniqueContent)} unique content value(s); ${String(result.support.uniqueKnownRoots)} known root(s); ${String(result.support.unknownLineageSessions)} unknown-lineage session(s)`,
+  );
+  if (result.nextCursor !== undefined) {
+    lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -126,7 +178,16 @@ function renderScalar(value: string): string {
   return truncateUtf8(escapeScalar(value), MAX_SEGMENT_BYTES);
 }
 
-function renderEntryHeading(entry: ShowSessionResult["entries"][number]): string {
+function renderEntryHeading(entry: {
+  readonly ordinal: number;
+  readonly actor: string;
+  readonly kind: string;
+  readonly timestamp?: string;
+  readonly toolName?: string;
+  readonly toolNamespace?: string;
+  readonly toolCallId?: string;
+  readonly relatedEntryOrdinal?: number;
+}): string {
   const values = [`#${String(entry.ordinal)}`, renderScalar(entry.actor), renderScalar(entry.kind)];
   if (entry.timestamp !== undefined) values.push(entry.timestamp);
   if (entry.toolName !== undefined) {
@@ -141,6 +202,13 @@ function renderEntryHeading(entry: ShowSessionResult["entries"][number]): string
     values.push(`related=#${String(entry.relatedEntryOrdinal)}`);
   }
   return truncateUtf8(values.join(" "), MAX_SEGMENT_BYTES);
+}
+
+function renderSearchBody(value: string, alreadyTruncated: boolean): string {
+  const escaped = escapeScalar(value);
+  const bounded = truncateUtf8(escaped, MAX_SESSION_SEARCH_BODY_BYTES);
+  if (!alreadyTruncated || bounded.endsWith("… [truncated]")) return bounded;
+  return truncateUtf8(`${bounded} … [truncated]`, MAX_SESSION_SEARCH_BODY_BYTES);
 }
 
 function truncateUtf8(value: string, maximum: number): string {

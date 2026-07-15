@@ -24,7 +24,8 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 5 are complete. The repository currently has:
+Milestones 0 through 6 are complete. M7 is the current implementation milestone.
+The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
 - strict dependency, format, lint, type, test, build, dist, and packed-install
@@ -48,16 +49,26 @@ Milestones 0 through 5 are complete. The repository currently has:
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- public `index`, `list`, `show`, `forget`, and `data clear` workflows backed only
-  by the provider-neutral application and storage layers;
+- public `index`, `list`, `search`, `show`, `forget`, and `data clear` workflows
+  backed only by the provider-neutral application and storage layers;
+- filtered/cursored retained-session list plus literal lexical search over one
+  immutable canonical-library snapshot, with provider-neutral query values and
+  no adapter reads;
+- deterministic entry-level ranking, bounded adjacent/direct tool context,
+  query-wide occurrence/content/root/unknown-lineage support, and opaque cursors
+  bound to query, library identity, and writer generation;
+- explicit complete/unknown lineage coverage, Codex `codex-v2` evidence, and an
+  iterative provider-neutral root resolver;
+- canonical-only FTS projection repair during explicit leased indexing while
+  doctor remains read-only;
 - platform application-data storage, non-destructive missing/unknown source
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have provider-neutral search/evidence queries, portable export,
-the Cursor adapter, the packaged Agent Skill, release automation, or the pinned
-Harness integration. M6 is next and builds query semantics over the retained
-Codex evidence without changing adapter responsibilities.
+It does not yet have portable export or transcript-bearing JSON/JSONL DTOs, the
+Cursor adapter, the packaged Agent Skill, release automation, or the pinned
+Harness integration. M7 builds export/stable machine schemas over
+the same retained evidence without changing adapter responsibilities.
 
 ## Execution rules
 
@@ -90,8 +101,8 @@ flowchart TD
   M2 --> M3["M3 Canonical repository — complete"]
   M3 --> M4["M4 Indexing and reconciliation — complete"]
   M4 --> M5["M5 Codex vertical slice — complete"]
-  M5 --> M6["M6 Query and evidence engine"]
-  M6 --> M7["M7 Export and CLI schemas"]
+  M5 --> M6["M6 Query and evidence engine — complete"]
+  M6 --> M7["M7 Export and CLI schemas — current"]
   M7 --> M8["M8 Cursor parity"]
   M8 --> M9["M9 Packaged Agent Skill"]
   M9 --> M10["M10 Release qualification"]
@@ -555,7 +566,7 @@ Exit gate:
 - The packed CLI can run the synthetic Codex workflow.
 - `pnpm check` passes on all CI operating systems.
 
-### M6 — Add provider-neutral search and evidence semantics
+### M6 — Add provider-neutral search and evidence semantics (complete)
 
 Outcome: one query engine implements lexical retrieval, filters, context, lineage,
 and honest recurrence measures over retained canonical data.
@@ -569,20 +580,24 @@ Primary change areas:
 
 Required behavior:
 
-- Public query values cover text, source/source instance, source presence,
-  capture/source-observation time, workspace, time bounds,
+- Public query values cover text, source/source instance, effective source state,
+  capture/source-observation time, workspace, exclusive time bounds,
   actor, origin, exact entry kind, exact source-observed tool name, exact
   source-observed tool namespace, exact session identity, limit, and opaque
   continuation cursor. Raw FTS5 syntax is never a public API; special characters
   are accepted as user text.
-- Search text uses literal whitespace-delimited terms combined with AND. Exact
-  filters are case-sensitive, one-valued, and combine with AND; time dimensions
-  are named explicitly rather than silently mixing session, capture, observation,
-  and entry clocks.
+- Search text uses literal Unicode-whitespace-delimited terms combined with AND;
+  punctuation/FTS operators remain data and tokenless input is empty success.
+  Exact filters are case-sensitive, one-valued, and combine with AND; time
+  dimensions are named explicitly rather than silently mixing session, capture,
+  observation, and entry clocks. Effective observation uses source coverage time
+  while coverage is unknown and session presence time otherwise.
 - Translate to parameterized FTS/SQL with deterministic ordering and stable
-  pagination. Ranking, tokenizer settings, and bounded defaults are selected from
-  a checked-in synthetic corpus representing prose, file paths, symbols, IDs,
-  punctuation, and repeated content—not intuition.
+  pagination. Rank entries by best content-level BM25, then activity
+  descending/null-last, binary source identity, and entry ordinal; repeated
+  occurrences do not improve rank. The checked-in synthetic corpus locks
+  `unicode61`, the 20-hit default, 50-session list default, and 512-byte search
+  bodies.
 - Search returns index-backed snippets, canonical entry ordinals, entry kinds,
   available tool identity/linkage, and bounded surrounding entries. Empty results
   are success. One primary hit represents one canonical entry, page limits do not
@@ -590,11 +605,14 @@ Required behavior:
   Show remains exact-ID transcript retrieval rather than accepting unrelated
   search filters.
 - Exact tool-name and namespace filters select canonical call entries only and
-  combine with logical AND. Bounded related context includes directly linked
-  result entries even when non-adjacent; result entries retain linkage without
-  receiving invented tool identity.
-- Resolve known lineage without recursion hazards. Cycles, missing ancestors, or
-  unsupported relations remain unknown and never fabricate independent roots.
+  combine with logical AND. Search accepts 0–10 adjacent entries per side and
+  independently includes up to 20 direct observed call/result partners, including
+  non-adjacent pairs. Expansion is non-recursive and excludes turn/lifecycle or
+  other related-entry pairs; results retain linkage without receiving invented
+  tool identity.
+- Resolve known lineage iteratively. Unknown coverage/kind, low-confidence
+  ancestry, cycles, missing ancestors, or diverging paths remain unknown;
+  multiple paths that converge on one root remain known.
 - Canonical documents distinguish complete lineage coverage from unknown
   coverage so an empty relation list can prove a root only when source evidence
   supports it. High-confidence parent, fork, and continuation relations point
@@ -604,9 +622,10 @@ Required behavior:
   before pagination. Do not infer copied origin from equal text.
 - Keep ranking and root resolution in provider-neutral query/storage code. Adapter
   metadata may supply evidence, never policy.
-- Rebuild or repair derived FTS rows only from canonical library data. FTS-only
-  damage never recommends or causes canonical deletion; a public repair command
-  remains optional until its user need is proven.
+- Rebuild or repair derived FTS rows only from canonical library data during an
+  explicit leased index writer operation. FTS-only damage never recommends or
+  causes canonical deletion; doctor remains read-only and no public repair
+  command exists.
 - Continuation cursors bind the normalized query/order contract, a persistent
   library instance identity, and the current writer generation. Query mismatch is
   invalid usage; library recreation or a later admitted writer makes the cursor
@@ -628,7 +647,7 @@ Exit gate:
   and truncation behavior in the CLI contract.
 - `pnpm check` passes.
 
-### M7 — Complete export and stabilize CLI/structured output
+### M7 — Complete export and stabilize CLI/structured output (current)
 
 Outcome: the entire planned V1 command surface is scriptable and bounded, and one
 retained session can be extracted as portable provider-neutral context without

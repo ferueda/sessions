@@ -1,7 +1,7 @@
 # Codex format support
 
-- Status: current M5 contract
-- Adapter format version: `codex-v1`
+- Status: current M6 contract
+- Adapter format version: `codex-v2`
 - Survey baseline: upstream Codex commit
   [`d7ba5ff9553a6aa0898a8e3bd5cb3bc00d0c9ddf`](https://github.com/openai/codex/tree/d7ba5ff9553a6aa0898a8e3bd5cb3bc00d0c9ddf)
 
@@ -11,13 +11,18 @@ forever. Unknown structural records remain observable as non-searchable
 omissions. A recognized record with a malformed supported field fails that
 session capture rather than silently changing its meaning.
 
+`codex-v2` adds explicit complete/unknown lineage-coverage evidence. A retained
+`codex-v1` candidate is therefore re-read on the next index rather than silently
+reinterpreted; after successful V2 capture, an unchanged candidate again skips
+the rollout read.
+
 Sessions reads Codex files without changing them. It stores canonical evidence,
 not raw JSON records, encrypted values, image URLs, local image paths, world
 state, or provider caches.
 
 ## Instance and path resolution
 
-M5 resolves one global/default Codex instance:
+Sessions resolves one global/default Codex instance:
 
 1. Non-blank `CODEX_HOME`, relative to the current directory when relative;
    otherwise `~/.codex`.
@@ -37,8 +42,8 @@ Rollout paths come only from admitted state rows. Plain
 `rollout-*.jsonl` wins over its `.zst` representation when both exist. The
 resolved regular file or provably missing parent must remain beneath the
 canonical `sessions` or `archived_sessions` root; symlink escapes and unexpected
-names are malformed. M5 does not discover profiles, projects, cloud histories,
-or arbitrary rollout trees.
+names are malformed. Sessions does not discover profiles, projects, cloud
+histories, or arbitrary rollout trees.
 
 ## State database support
 
@@ -51,8 +56,15 @@ columns are ignored and therefore do not require an adapter change.
 `thread_spawn_edges` is optional. When present it must expose
 `parent_thread_id` and `child_thread_id`; optional `status` participates in the
 candidate fingerprint but does not change lineage meaning. More than one parent
-row for a child is malformed. Missing optional tables/columns preserve unknown
-evidence rather than inventing values.
+row for a child is malformed. A supported table records complete immediate
+rootward coverage for each thread, including an explicit row absence. A missing
+table records unknown lineage coverage even when rollout metadata supplies a
+relation; Sessions must not interpret that absence as proof of a root.
+
+The frozen discovery candidate carries this coverage independently of its
+optional parent edge. With a supported table, one valid edge or no row may yield
+`complete` after rollout metadata consistency succeeds. With no table, a valid
+metadata parent/fork relation is still retained, but coverage remains `unknown`.
 
 During explicit indexing, Sessions copies database/WAL bytes into its leased
 private workspace, validates a stable generation, and opens only that copy. It
@@ -119,8 +131,10 @@ A state-database spawn edge is authoritative and produces one high-confidence
 `parent` relation. Metadata IDs may only confirm that parent. Without a state
 edge, `parent_thread_id` produces a parent relation; otherwise
 `forked_from_id` produces a fork relation. Equal repeated relations collapse.
-Conflicting current metadata is malformed. Each current metadata occurrence
-with base instructions retains its own injected entry.
+Conflicting current metadata is malformed. Complete or unknown lineage coverage
+is admitted only after current metadata passes these consistency checks. Each
+current metadata occurrence with base instructions retains its own injected
+entry.
 
 ## Response items
 

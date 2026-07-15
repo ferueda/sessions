@@ -24,6 +24,10 @@ afterEach(async () => {
 });
 
 describe("Codex session source", () => {
+  test("uses the codex-v2 normalization contract", () => {
+    expect(CODEX_ADAPTER_VERSION).toBe("codex-v2");
+  });
+
   test("probes canonical roots and distinguishes unavailable from unreadable", async () => {
     const fixture = await createFixture();
     const selected = await createCodexSource(fixture.environment);
@@ -107,6 +111,7 @@ describe("Codex session source", () => {
       workspace: "/synthetic/workspace",
       createdAt: "1970-01-01T00:00:01.000Z",
       updatedAt: "1970-01-01T00:00:02.000Z",
+      lineageCoverage: "complete",
       relations: [
         {
           kind: "parent",
@@ -121,6 +126,30 @@ describe("Codex session source", () => {
       recordId: "1",
     });
     expect(JSON.stringify(document.entries)).not.toContain(fixture.codexHome);
+  });
+
+  test("keeps lineage unknown when the optional spawn-edge table is absent", async () => {
+    const fixture = await createFixture();
+    const rolloutPath = "sessions/rollout-2026-child-thread.jsonl";
+    const database = new DatabaseSync(fixture.stateDatabase);
+    database.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL);
+      INSERT INTO threads VALUES ('child-thread', '${rolloutPath}');
+    `);
+    database.close();
+    await fixture.writeRollout(
+      rolloutPath,
+      codexRolloutRecords("child-thread", "Synthetic message", "metadata-parent"),
+    );
+    const selected = await createCodexSource(fixture.environment);
+    const [candidate] = await discover(selected.adapter, fixture.workspace);
+
+    const document = await selected.adapter.read(candidate!);
+
+    expect(document).toMatchObject({
+      lineageCoverage: "unknown",
+      relations: [{ kind: "parent", target: { nativeId: "metadata-parent" } }],
+    });
   });
 
   test("keeps one frozen state generation until the next discovery", async () => {

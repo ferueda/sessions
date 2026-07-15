@@ -27,6 +27,7 @@ describe("canonical SQLite baseline", () => {
         "sessions_entries",
         "sessions_index_run_items",
         "sessions_index_runs",
+        "sessions_library",
         "sessions_relations",
         "sessions_schema_migrations",
         "sessions_session_tracking",
@@ -39,6 +40,10 @@ describe("canonical SQLite baseline", () => {
       expect(tableColumns(database, "sessions_entries")).toEqual(
         expect.arrayContaining(["tool_name", "tool_namespace"]),
       );
+      expect(tableColumns(database, "sessions_canonical_sessions")).toContain("lineage_coverage");
+      expect(database.prepare("SELECT instance_id FROM sessions_library").get()).toEqual({
+        instance_id: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      });
       expect(tableColumns(database, "sessions_index_runs")).toContain("missing_count");
       expect(tableColumns(database, "sessions_index_runs")).not.toContain("removed_count");
       expect(
@@ -401,7 +406,10 @@ function insertTrackedSession(database: DatabaseSync): { readonly sessionId: num
     .get(sourceInstanceId, DIGEST, DIGEST) as { readonly session_id: number | bigint };
   const sessionId = Number(row.session_id);
   database
-    .prepare("INSERT INTO sessions_canonical_sessions (session_id, title) VALUES (?, 'Proof')")
+    .prepare(
+      `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage, title)
+       VALUES (?, 'complete', 'Proof')`,
+    )
     .run(sessionId);
   return { sessionId };
 }

@@ -15,6 +15,8 @@ export type ContentOrigin =
 
 export type OriginConfidence = "high" | "medium" | "low" | "unknown";
 
+export type LineageCoverage = "complete" | "unknown";
+
 export interface SourceInstance {
   readonly kind: string;
   readonly instanceId: string;
@@ -82,6 +84,7 @@ export interface SessionDocument {
   readonly workspace?: string;
   readonly createdAt?: string;
   readonly updatedAt?: string;
+  readonly lineageCoverage: LineageCoverage;
   readonly relations: readonly SessionRelation[];
   readonly entries: readonly SessionEntry[];
 }
