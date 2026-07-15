@@ -8,6 +8,7 @@ import {
   IndexMaintenanceError,
   type RepairOrphansResult,
 } from "../../application/ports/index-maintenance.ts";
+import { yieldToEventLoop } from "../../application/yield-to-event-loop.ts";
 import { ftsProjectionStructureIsValid } from "./fts-projection.ts";
 import { MigrationHistoryError, readMigrationHistory, type SqliteMigration } from "./migrations.ts";
 import {
@@ -291,6 +292,7 @@ async function repairOwnedDatabase(
       deletedContentRows: batch.deletedRows.toString(),
       deletedContentBytes: batch.deletedBytes.toString(),
     });
+    await yieldToEventLoop();
   }
 
   return {

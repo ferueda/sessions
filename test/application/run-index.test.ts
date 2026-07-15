@@ -113,6 +113,40 @@ describe("runIndex", () => {
     expect(source.discoveryWorkspaces).toEqual([syntheticDiscoveryWorkspace]);
   });
 
+  test("yields to the event loop while processing session candidates", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("one"), source.candidate("two")]);
+    const harness = createIndexHarness();
+    const replaceSession = harness.index.replaceSession.bind(harness.index);
+    let replacements = 0;
+    let eventLoopAdvanced = false;
+    let eventLoopAdvancedBeforeSecond = false;
+    let resolveEventLoopTurn!: () => void;
+    const eventLoopTurn = new Promise<void>((resolve) => {
+      resolveEventLoopTurn = resolve;
+    });
+    vi.spyOn(harness.index, "replaceSession").mockImplementation(async (run, replacement) => {
+      replacements += 1;
+      if (replacements === 2) eventLoopAdvancedBeforeSecond = eventLoopAdvanced;
+      await replaceSession(run, replacement);
+      if (replacements === 1) {
+        setImmediate(() => {
+          eventLoopAdvanced = true;
+          resolveEventLoopTurn();
+        });
+      }
+    });
+
+    const report = await execute(harness, [source.selected]);
+    await eventLoopTurn;
+
+    expect(replacements).toBe(2);
+    expect(eventLoopAdvancedBeforeSecond).toBe(true);
+    expect(report).toMatchObject({
+      counts: { discovered: 2, updated: 2 },
+    });
+  });
+
   test("rejects duplicate selections before opening the index", async () => {
     const source = createFakeIndexingSource();
     const harness = createIndexHarness();

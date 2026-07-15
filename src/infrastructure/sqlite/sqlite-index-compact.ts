@@ -8,6 +8,7 @@ import {
   IndexMaintenanceError,
   type CompactIndexResult,
 } from "../../application/ports/index-maintenance.ts";
+import { yieldToEventLoop } from "../../application/yield-to-event-loop.ts";
 import { readMigrationHistory, type SqliteMigration } from "./migrations.ts";
 import {
   assertCanonicalIndexPaths,
@@ -262,6 +263,7 @@ async function compactOwnedDatabase(
     await options.observer?.afterBatch?.(progress);
     checkpointOrdinal += 1;
     await checkpointAndFence(database, lease, checkpointOrdinal, options);
+    await yieldToEventLoop();
     if (progress.afterFreelist === 0) break;
   }
 
