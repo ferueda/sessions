@@ -16,7 +16,7 @@
 | `pnpm test:docs`                 | Run documentation contract tests                                        | No                              | No                                  |
 | `pnpm clean`                     | Remove compiled output                                                  | `dist/`                         | No                                  |
 | `pnpm build`                     | Clean and compile distributable JS                                      | `dist/`                         | No                                  |
-| `pnpm smoke:dist`                | Exercise compiled M6 index/search/next-cursor/show with synthetic Codex | Temporary directory, removed    | No                                  |
+| `pnpm smoke:dist`                | Exercise compiled M6 capture/query/compact/delete with synthetic Codex  | Temporary directory, removed    | No                                  |
 | `pnpm smoke:package`             | Offline-install tarball and exercise the same M6 workflow               | Temporary directory, removed    | No after dependencies are installed |
 | `pnpm check` / `pnpm check:ci`   | Complete definition-of-done gate                                        | Build/temp state                | No after dependencies are installed |
 | `pnpm check:docs`                | Run the documentation-only CI gate                                      | No                              | No                                  |
@@ -36,5 +36,7 @@ Current public CLI commands are documented in
 but create no directories, files, migrations, or rollout reads. Index explicitly
 creates/updates the durable library from read-only provider inputs;
 list/search/show are library-only reads; forget/data-clear delete only
-Sessions-owned state. Tests and smokes use generated providers and protected
-state beneath temporary directories.
+Sessions-owned state. `data compact` is provider-free physical maintenance over
+an existing current library: it reclaims reusable whole SQLite pages in bounded
+transactions without deleting canonical rows. Tests and smokes use generated
+providers and protected state beneath temporary directories.

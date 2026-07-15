@@ -79,8 +79,8 @@ M6 extends the first Codex vertical slice with provider-neutral filtered list,
 lexical search, pagination, bounded context, lineage resolution, support counts,
 and canonical-only FTS projection repair. The baseline also includes durable
 canonical evidence, non-destructive source-presence reconciliation,
-index/list/search/show, scoped forget, all-data clear, and source-aware diagnostics. The
-maintained file-by-file map is the
+index/list/search/show, scoped forget, all-data clear, source-aware diagnostics,
+and explicit bounded physical page reclamation. The maintained file-by-file map is the
 [current architecture guide](contributing/architecture.md); this memo remains the
 stable target design.
 
@@ -95,7 +95,9 @@ The current baseline persists exact text and privacy-safe omissions, tool
 identity/linkage, complete/unknown lineage coverage, capture/source-observation
 state, rebuildable FTS, a random library identity, and writer coordination
 directly. Complete-scan absence marks a retained snapshot missing instead of
-deleting it. One generation lease fences index, forget, clear, and query cursors.
+deleting it. One generation lease fences index, forget, compact, and clear;
+query cursors bind the observed writer generation and become stale after a later
+writer.
 
 `scripts/check-dependencies.ts` enforces that graph for explicit static and dynamic relative imports and refuses a vacuous zero-module pass. Oxlint rejects cycles. Strict `tsconfig.json` checks source/tests/scripts directly; `tsconfig.build.json` compiles only `src/` to `dist/` and rewrites explicit TypeScript import extensions for Node.js. Tests and repository scripts sit outside the production graph.
 
@@ -313,6 +315,14 @@ The schema separates source instances, sessions, source observations, relations,
 entries, content values, occurrences, index runs, migration metadata, library
 identity, and writer coordination.
 
+The current pre-launch baseline selects SQLite incremental auto-vacuum before
+WAL or schema creation and rejects existing databases in another mode. Explicit
+`data compact` owns a dedicated writer lease, runs bounded transactional
+incremental-vacuum batches, and checkpoints between them. Committed batches are
+durable and rerunnable; the operation changes physical allocation only and
+reports observed main-file lengths without promising savings or partial-page
+repacking.
+
 The application exposes immutable provider-neutral list/search query values and
 one query repository beside canonical reconstruction on each read snapshot.
 Shared filters cover exact source/instance, effective source state, workspace,
@@ -379,6 +389,8 @@ integrity from derived FTS integrity.
   owned by other retained snapshots remain. `sessions data clear` removes all
   known Sessions-owned library files and the exact ephemeral scratch subtree
   after explicit invocation.
+- `sessions data compact` reclaims reusable whole database pages without deleting
+  canonical rows, resolving a provider, or claiming forensic erasure.
 - Rebuilding derived FTS/query state never deletes retained canonical rows.
 - SQLite core `secure_delete` and FTS5 secure-delete are enabled when supported, but docs make no encryption or forensic secure-erasure claim.
 - The library stores the latest successful normalized canonical snapshot needed for faithful show/export, not entire raw provider payloads or every historical revision.
@@ -399,6 +411,12 @@ evidence and incoming relation tuples so it does not silently rewrite other
 retained snapshots. Reindex can recapture the selected identity. No public
 `index clear` command exists.
 
+Scoped forget makes freed pages reusable but does not guarantee file shrink.
+`sessions data compact` is separate provider-free maintenance: it checkpoints
+WAL and returns reusable whole pages in bounded committed batches. Failure after
+progress emits no report; rerun resumes safely. It neither deletes retained
+evidence nor replaces full-library clear.
+
 ## CLI contract
 
 Current surface:
@@ -412,6 +430,7 @@ sessions list [filters] [--limit N] [--cursor TOKEN]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
 sessions show <canonical-id> [--entry N --context N]
 sessions forget <canonical-id> [--format human|json]
+sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
@@ -718,7 +737,10 @@ Durable intent/design docs, strict package scaffold, canonical types and source 
 
 ### Phase 1 — Canonical library (complete)
 
-SQLite schema/migrations, application-data paths, file permissions, secure-delete configuration, durable canonical repository, non-destructive reconciliation, typed failures, last-good/absence tests, explicit forget/data-clear commands, and rebuildable FTS projections.
+SQLite schema/migrations, application-data paths, file permissions, secure-delete
+configuration, durable canonical repository, non-destructive reconciliation,
+typed failures, last-good/absence tests, explicit forget/data-compact/data-clear
+commands, and rebuildable FTS projections.
 
 ### Phase 2 — First adapter (complete)
 

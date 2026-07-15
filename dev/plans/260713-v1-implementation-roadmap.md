@@ -42,14 +42,16 @@ The repository now includes:
   repository-authoritative reports;
 - renewable writer leases, transactional mutation fencing, abandoned-run
   interruption, and valid WAL recovery;
-- internal only-owned-file clear maintenance and immutable ready-index health
-  inspection used by doctor;
-- one current storage baseline with durable canonical evidence, exact text, privacy-safe omissions,
-  generic tool identity/linkage, capture time, and source-presence state;
+- internal only-owned-file clear/compact maintenance and immutable ready-index
+  health inspection used by doctor;
+- one current storage baseline with durable canonical evidence, exact text,
+  privacy-safe omissions, incremental whole-page reclamation, generic tool
+  identity/linkage, capture time, and source-presence state;
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- public `index`, `list`, `search`, `show`, `forget`, and `data clear` workflows
+- public `index`, `list`, `search`, `show`, `forget`, `data compact`, and
+  `data clear` workflows
   backed only by the provider-neutral application and storage layers;
 - filtered/cursored retained-session list plus literal lexical search over one
   immutable canonical-library snapshot, with provider-neutral query values and
@@ -647,6 +649,18 @@ Exit gate:
 - Corpus results justify the selected tokenizer, rank tie-breakers, default limit,
   and truncation behavior in the CLI contract.
 - `pnpm check` passes.
+
+### Storage hardening follow-up (complete)
+
+- The single pre-launch schema-1 baseline stores compact collision-safe digest
+  buckets and selects SQLite incremental auto-vacuum before WAL/bootstrap.
+- Existing development databases with another checksum or page mode fail closed;
+  no compatibility migration or silent mode rewrite exists before launch.
+- `sessions data compact` uses dedicated renewable ownership and bounded
+  incremental-vacuum transactions with truncating checkpoints between batches.
+- Forget remains logical scoped deletion. Compaction is explicit provider-free
+  physical maintenance, reports observed main-file lengths only, preserves
+  canonical/FTS evidence, and is safely rerunnable after partial durable progress.
 
 ### M7 — Complete export and stabilize CLI/structured output (current)
 
