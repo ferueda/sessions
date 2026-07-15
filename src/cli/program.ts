@@ -25,7 +25,6 @@ import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts
 import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import { encodeStructuredJson } from "./encode-json-output.ts";
 import { encodeStructuredJsonl } from "./encode-jsonl-output.ts";
-import { withCliActivity } from "./activity.ts";
 import {
   buildListJsonV1,
   buildListJsonlV1,
@@ -54,7 +53,6 @@ export interface CliOutput {
   readonly stderrIsInteractive?: boolean;
   writeOut(text: string): void;
   writeErr(text: string): void;
-  clearErrLine?(): void;
 }
 
 export interface ProgramOptions {
@@ -109,6 +107,15 @@ const retainedQueryFormatOption = () =>
 const exportFormatOption = () =>
   new Option("--format <format>", "output format").choices(["json", "jsonl"]).makeOptionMandatory();
 
+const writeLongOperationNotice = (output: CliOutput, message: string): void => {
+  if (output.stderrIsInteractive !== true) return;
+  try {
+    output.writeErr(`${message}\n`);
+  } catch {
+    // Terminal feedback is best-effort and must not change command behavior.
+  }
+};
+
 export function createProgram(options: ProgramOptions): Command {
   const program = new Command();
   program
@@ -150,9 +157,11 @@ export function createProgram(options: ProgramOptions): Command {
     )
     .addOption(operationalFormatOption())
     .action(async ({ source, format }: { source?: string; format: OperationalOutputFormat }) => {
-      const report = await withCliActivity(options.output, "Indexing sessions", () =>
-        options.index(source),
+      writeLongOperationNotice(
+        options.output,
+        "Indexing sessions; this may take a couple of minutes.",
       );
+      const report = await options.index(source);
       options.output.writeOut(renderIndex(report, format));
       if (report.incompleteSources > 0) throw new OperationalExit();
     });
@@ -269,9 +278,11 @@ export function createProgram(options: ProgramOptions): Command {
     .description("Delete unreachable canonical content from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      const report = await withCliActivity(options.output, "Repairing orphaned content", () =>
-        options.repairOrphanedData(),
+      writeLongOperationNotice(
+        options.output,
+        "Repairing orphaned content; this may take a couple of minutes.",
       );
+      const report = await options.repairOrphanedData();
       options.output.writeOut(renderDataRepairOrphans(report, format));
     });
   data
@@ -279,9 +290,11 @@ export function createProgram(options: ProgramOptions): Command {
     .description("Reclaim reusable whole pages from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      const report = await withCliActivity(options.output, "Compacting Sessions data", () =>
-        options.compactData(),
+      writeLongOperationNotice(
+        options.output,
+        "Compacting Sessions data; this may take a couple of minutes.",
       );
+      const report = await options.compactData();
       options.output.writeOut(renderDataCompact(report, format));
     });
   data

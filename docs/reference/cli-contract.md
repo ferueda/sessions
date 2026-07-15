@@ -612,11 +612,11 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 - Exit `2`: invalid command, flag, value, or required argument.
 
 `sessions index`, `sessions data repair-orphans`, and `sessions data compact`
-show a transient activity indicator with elapsed seconds when stderr is an
-interactive terminal. The indicator is cleared before the requested stdout
-report or an error. Redirected or captured stderr remains quiet on success. This
-is liveness feedback only: it exposes no percentage, work total, ETA, cursor,
-partial outcome, or machine-readable progress contract.
+write one startup notice to interactive stderr warning that the operation may
+take a couple of minutes. Redirected or captured stderr remains quiet on
+success. This is expectation-setting only: it exposes no percentage, elapsed
+time, work total, ETA, cursor, partial outcome, or machine-readable progress
+contract.
 
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 Concurrent index/forget/repair/compact/clear ownership is a sanitized

@@ -69,9 +69,6 @@ describe("SQLite index compaction", () => {
       readonly afterFreelist: number;
       readonly maximumPages: number;
     }[] = [];
-    let eventLoopAdvanced = false;
-    let eventLoopAdvancedBeforeSecond = false;
-    let eventLoopTurn: Promise<void> | undefined;
 
     const result = await createSqliteIndexMaintenance({
       now,
@@ -79,23 +76,11 @@ describe("SQLite index compaction", () => {
       compactObserver: {
         afterBatch(progress) {
           batches.push(progress);
-          if (batches.length === 1) {
-            eventLoopTurn = new Promise((resolve) => {
-              setImmediate(() => {
-                eventLoopAdvanced = true;
-                resolve();
-              });
-            });
-          } else if (batches.length === 2) {
-            eventLoopAdvancedBeforeSecond = eventLoopAdvanced;
-          }
         },
       },
     }).compact(paths);
-    await eventLoopTurn;
 
     expect(batches.length).toBeGreaterThan(1);
-    expect(eventLoopAdvancedBeforeSecond).toBe(true);
     for (const batch of batches) {
       expect(batch.beforeFreelist).toBeGreaterThan(batch.afterFreelist);
       expect(batch.beforeFreelist - batch.afterFreelist).toBeLessThanOrEqual(batch.maximumPages);

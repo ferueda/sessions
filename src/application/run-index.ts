@@ -25,7 +25,6 @@ import {
   type SessionRevision,
   type ValidatedSessionReplacement,
 } from "./validate-session.ts";
-import { yieldToEventLoop } from "./yield-to-event-loop.ts";
 import { isSessionIdentity } from "../domain/session-identity.ts";
 import type { SessionIdentity, SourceInstance } from "../domain/session.ts";
 
@@ -126,29 +125,24 @@ async function runSource(
 
     const seen = new Set<string>();
     for (const candidate of discovery.candidates) {
-      try {
-        const observation = candidate.observation;
-        seen.add(observation.identity.nativeId);
-        const freshness = await index.getFreshness(observation.identity);
-        if (matchesLastGoodRevision(freshness, observation.revision)) {
-          await index.recordUnchanged(run, observation);
-          continue;
-        }
-
-        let replacement: ValidatedSessionReplacement;
-        try {
-          replacement = await readSessionReplacement(selection.adapter, candidate);
-        } catch (error) {
-          if (!isSourceFailureError(error)) throw error;
-          await index.recordFailure(run, observation, error.failure.kind);
-          continue;
-        }
-        // Repository replacement failures are already durably recorded once by the port.
-        await index.replaceSession(run, replacement);
-      } finally {
-        // SQLite calls are synchronous; give terminal and lease timers a turn between candidates.
-        await yieldToEventLoop();
+      const observation = candidate.observation;
+      seen.add(observation.identity.nativeId);
+      const freshness = await index.getFreshness(observation.identity);
+      if (matchesLastGoodRevision(freshness, observation.revision)) {
+        await index.recordUnchanged(run, observation);
+        continue;
       }
+
+      let replacement: ValidatedSessionReplacement;
+      try {
+        replacement = await readSessionReplacement(selection.adapter, candidate);
+      } catch (error) {
+        if (!isSourceFailureError(error)) throw error;
+        await index.recordFailure(run, observation, error.failure.kind);
+        continue;
+      }
+      // Repository replacement failures are already durably recorded once by the port.
+      await index.replaceSession(run, replacement);
     }
 
     const indexed = await index.listIndexedIdentities(selection.instance);

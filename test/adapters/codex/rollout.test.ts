@@ -60,35 +60,6 @@ describe("Codex rollout reader", () => {
     expect(values).toEqual([{ kind: "compressed" }]);
   });
 
-  test("yields to the event loop while consuming a large buffered rollout", async () => {
-    const file = await temporaryFile(
-      `${Array.from({ length: 129 }, (_, index) => JSON.stringify({ index })).join("\n")}\n`,
-    );
-    let eventLoopAdvanced = false;
-    let eventLoopAdvancedBeforeRecord65 = false;
-    let resolveEventLoopTurn!: () => void;
-    const eventLoopTurn = new Promise<void>((resolve) => {
-      resolveEventLoopTurn = resolve;
-    });
-
-    await readCodexRollout({
-      file,
-      representation: "plain",
-      onRecord(_value, ordinal) {
-        if (ordinal === 0) {
-          setImmediate(() => {
-            eventLoopAdvanced = true;
-            resolveEventLoopTurn();
-          });
-        }
-        if (ordinal === 64) eventLoopAdvancedBeforeRecord65 = eventLoopAdvanced;
-      },
-    });
-    await eventLoopTurn;
-
-    expect(eventLoopAdvancedBeforeRecord65).toBe(true);
-  });
-
   test.each([
     { name: "invalid UTF-8", bytes: Buffer.from([0xff, 0x0a]), representation: "plain" as const },
     { name: "invalid JSON", bytes: Buffer.from("{\n"), representation: "plain" as const },

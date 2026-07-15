@@ -145,9 +145,6 @@ describe("SQLite orphan-content repair maintenance", () => {
       readonly deletedContentRows: string;
       readonly deletedContentBytes: string;
     }> = [];
-    let eventLoopAdvanced = false;
-    let eventLoopAdvancedBeforeSecond = false;
-    let eventLoopTurn: Promise<void> | undefined;
 
     await expect(
       createSqliteIndexMaintenance({
@@ -158,16 +155,6 @@ describe("SQLite orphan-content repair maintenance", () => {
         repairObserver: {
           afterBatch(progress) {
             batches.push(progress);
-            if (batches.length === 1) {
-              eventLoopTurn = new Promise((resolve) => {
-                setImmediate(() => {
-                  eventLoopAdvanced = true;
-                  resolve();
-                });
-              });
-            } else if (batches.length === 2) {
-              eventLoopAdvancedBeforeSecond = eventLoopAdvanced;
-            }
           },
         },
       }).repairOrphans(paths),
@@ -176,9 +163,7 @@ describe("SQLite orphan-content repair maintenance", () => {
       deletedContentRows: "4",
       deletedContentBytes: "12",
     });
-    await eventLoopTurn;
 
-    expect(eventLoopAdvancedBeforeSecond).toBe(true);
     expect(batches).toEqual([
       { ordinal: 1, deletedContentRows: "1", deletedContentBytes: "2" },
       { ordinal: 2, deletedContentRows: "1", deletedContentBytes: "3" },

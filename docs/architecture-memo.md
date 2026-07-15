@@ -339,7 +339,7 @@ Properties:
 - **Single writer:** a renewable generation lease admits one high-level writer. Expiry fences work between transactions; an immediate transaction may renew the unchanged exact generation, purpose, and token at entry and exit because its SQLite write lock prevents takeover. Rollback or process failure discards that renewal and partial work.
 - **Recoverable:** a later writer can recover valid WAL state, interrupt abandoned runs after lease expiry, and reindex idempotently.
 
-Probe/discovery/read failures are sanitized per-source outcomes and do not prevent later selected sources from running. A failed or incomplete source scan leaves current source coverage unknown and retained snapshots untouched. Repository, lease, or finalization failures abort the invocation because persistence trust is lost. Sources run sequentially; V1 adds no daemon, parallel indexing, or retries. Indexing and the two potentially long data-maintenance commands show only transient elapsed activity on interactive stderr; they expose no semantic work-count or continuation-progress contract.
+Probe/discovery/read failures are sanitized per-source outcomes and do not prevent later selected sources from running. A failed or incomplete source scan leaves current source coverage unknown and retained snapshots untouched. Repository, lease, or finalization failures abort the invocation because persistence trust is lost. Sources run sequentially; V1 adds no daemon, parallel indexing, or retries. Indexing and the two potentially long data-maintenance commands write only an interactive startup notice that they may take a couple of minutes; they expose no semantic work-count or continuation-progress contract.
 
 ## Storage and search
 

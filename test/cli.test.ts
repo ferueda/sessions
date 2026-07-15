@@ -21,31 +21,37 @@ import { StructuredOutputTooLargeError } from "../src/cli/structured-output-enco
 
 describe("sessions CLI", () => {
   test.each([
-    { argv: ["index"], label: "Indexing sessions" },
-    { argv: ["data", "compact"], label: "Compacting Sessions data" },
-    { argv: ["data", "repair-orphans"], label: "Repairing orphaned content" },
-  ])("shows transient activity for $label on interactive stderr", async ({ argv, label }) => {
+    {
+      argv: ["index"],
+      message: "Indexing sessions; this may take a couple of minutes.",
+    },
+    {
+      argv: ["data", "compact"],
+      message: "Compacting Sessions data; this may take a couple of minutes.",
+    },
+    {
+      argv: ["data", "repair-orphans"],
+      message: "Repairing orphaned content; this may take a couple of minutes.",
+    },
+  ])("shows a startup notice for $argv on interactive stderr", async ({ argv, message }) => {
     const events: string[] = [];
     const invocation = await invoke(argv, {}, { interactive: true, events });
 
     expect(invocation.exitCode).toBe(0);
-    expect(invocation.stderr).toBe("");
-    expect(events[0]).toBe("clear");
-    expect(events[1]).toBe(`stderr:- ${label} (0s)`);
-    expect(events.at(-2)).toBe("clear");
+    expect(invocation.stderr).toBe(`${message}\n`);
+    expect(events[0]).toBe(`stderr:${message}\n`);
     expect(events.at(-1)).toMatch(/^stdout:/u);
   });
 
-  test("does not show activity for commands outside the three-command scope", async () => {
+  test("does not show a notice for commands outside the three-command scope", async () => {
     const events: string[] = [];
     const invocation = await invoke(["data", "clear", "--yes"], {}, { interactive: true, events });
 
     expect(invocation.exitCode).toBe(0);
-    expect(events).not.toContain("clear");
     expect(events.every((event) => !event.startsWith("stderr:"))).toBe(true);
   });
 
-  test("clears interactive activity before reporting an operational error", async () => {
+  test("reports an operational error after the startup notice", async () => {
     const events: string[] = [];
     const failure = new Error("index failed");
     const invocation = await invoke(
@@ -61,9 +67,12 @@ describe("sessions CLI", () => {
     expect(invocation).toEqual({
       exitCode: 1,
       stdout: "",
-      stderr: `sessions: ${failure.message}\n`,
+      stderr: `Indexing sessions; this may take a couple of minutes.\nsessions: ${failure.message}\n`,
     });
-    expect(events.slice(-2)).toEqual(["clear", `stderr:sessions: ${failure.message}\n`]);
+    expect(events).toEqual([
+      "stderr:Indexing sessions; this may take a couple of minutes.\n",
+      `stderr:sessions: ${failure.message}\n`,
+    ]);
   });
 
   test("shows the current command surface", async () => {
@@ -686,10 +695,6 @@ async function invoke(
       ...(terminal.interactive === true
         ? {
             stderrIsInteractive: true,
-            clearErrLine: () => {
-              stderr = "";
-              terminal.events?.push("clear");
-            },
           }
         : {}),
       writeOut: (text) => {
