@@ -10,12 +10,15 @@ import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts"
 import type { SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import {
   acquireWriterLease,
   readWriterLeaseHealth,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
+const LEGACY_BOOTSTRAP_CHECKSUM =
+  "sha256-utf8-v1:be63645c8bcb17699fba78674153d9fa04603e0915497f6f9b6c194fdd58593c";
 const now = () => new Date("2026-07-14T12:00:00.000Z");
 const target: SessionIdentity = {
   source: { kind: "synthetic", instanceId: "profile-one" },
@@ -57,7 +60,7 @@ describe("SQLite session forget maintenance", () => {
     VALUES (
       1,
       'bootstrap',
-      'sha256-utf8-v1:obsolete-development-baseline',
+      '${LEGACY_BOOTSTRAP_CHECKSUM}',
       '2026-07-14T00:00:00.000Z'
     );`);
     database.close();
@@ -325,12 +328,16 @@ function insertEntry(database: DatabaseSync, sessionId: number | bigint, uri: st
 }
 
 function insertContent(database: DatabaseSync, digest: string, text: string): number | bigint {
-  return database
+  const row = database
     .prepare(
-      `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-       VALUES ('sha256-utf8-v1', ?, ?)`,
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
+       RETURNING content_id`,
     )
-    .run(digest, text).lastInsertRowid;
+    .get(encodeSqliteContentDigest(digest), text) as {
+    readonly content_id: number | bigint;
+  };
+  return row.content_id;
 }
 
 function insertOccurrence(

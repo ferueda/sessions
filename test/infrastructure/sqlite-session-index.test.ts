@@ -18,6 +18,7 @@ import {
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
@@ -117,6 +118,84 @@ describe("SQLite session index", () => {
         { segment_ordinal: 2, has_content: 1, content_class: null, source_type: null },
       ]);
       await finishCompleted(index, run, counts({ discovered: 1, updated: 1 }));
+    } finally {
+      database.close();
+    }
+  });
+
+  test("narrows by digest but interns and reuses only exact text", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("collision-profile", "collision-session");
+      const text = "canonical bucket evidence";
+      const contentHash = hashContent(text);
+      const collisionText = "forced collision storage fixture";
+      const collisionId = insertContentWithDigest(database, contentHash.digest, collisionText);
+      const document: SessionDocument = {
+        ...minimalDocument(sessionIdentity),
+        entries: [entry(0, text), entry(1, text)],
+      };
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      const admitted = replacement(sessionIdentity, "collision-a", document);
+
+      await index.replaceSession(run, admitted);
+
+      await expect(index.getDocument(sessionIdentity)).resolves.toEqual(admitted.document);
+      const rows = database
+        .prepare(
+          `SELECT content.content_id, content.text, COUNT(occurrence.content_id) AS occurrences
+           FROM sessions_content_values AS content
+           LEFT JOIN sessions_content_occurrences AS occurrence
+             ON occurrence.content_id = content.content_id
+           WHERE content.digest = ?
+           GROUP BY content.content_id
+           ORDER BY content.content_id`,
+        )
+        .all(encodeSqliteContentDigest(contentHash.digest));
+      expect(rows).toEqual([
+        { content_id: collisionId, text: collisionText, occurrences: 0 },
+        { content_id: expect.any(Number), text, occurrences: 2 },
+      ]);
+      expect(ftsCount(database, "canonical")).toBe(1);
+      expect(ftsCount(database, "forced")).toBe(1);
+      expectFtsIntegrity(database);
+      await finishCompleted(index, run, counts({ discovered: 1, updated: 1 }));
+    } finally {
+      database.close();
+    }
+  });
+
+  test("fails closed when canonical storage contains duplicate exact bucket members", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("corrupt-bucket-profile", "corrupt-bucket-session");
+      const text = "ambiguous exact bucket evidence";
+      const digest = hashContent(text).digest;
+      database.exec("DROP TRIGGER sessions_content_values_duplicate_guard");
+      insertContentWithDigest(database, digest, text);
+      insertContentWithDigest(database, digest, text);
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+
+      await expect(
+        index.replaceSession(
+          run,
+          replacement(sessionIdentity, "corrupt-bucket-a", {
+            ...minimalDocument(sessionIdentity),
+            entries: [entry(0, text)],
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+      await expect(index.getDocument(sessionIdentity)).resolves.toBeUndefined();
+      expect(rowCount(database, "sessions_content_values")).toBe(2);
+      expectFtsIntegrity(database);
     } finally {
       database.close();
     }
@@ -500,12 +579,20 @@ function expectFtsIntegrity(database: DatabaseSync): void {
 
 function insertOrphanContent(database: DatabaseSync, text: string): void {
   const contentHash = hashContent(text);
-  database
+  insertContentWithDigest(database, contentHash.digest, text);
+}
+
+function insertContentWithDigest(database: DatabaseSync, digest: string, text: string): number {
+  const row = database
     .prepare(
-      `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-       VALUES (?, ?, ?)`,
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
+       RETURNING content_id`,
     )
-    .run(contentHash.scheme, contentHash.digest, text);
+    .get(encodeSqliteContentDigest(digest), text) as {
+    readonly content_id: number | bigint;
+  };
+  return Number(row.content_id);
 }
 
 function contentOccurrenceCount(database: DatabaseSync, text: string): number | undefined {
@@ -536,7 +623,7 @@ function contentIdForText(database: DatabaseSync, text: string): number | undefi
 function contentRows(database: DatabaseSync): readonly Record<string, unknown>[] {
   return database
     .prepare(
-      `SELECT content_id, hash_scheme, digest, text
+      `SELECT content_id, hex(digest) AS digest, text
        FROM sessions_content_values
        ORDER BY content_id`,
     )

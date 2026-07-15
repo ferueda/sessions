@@ -10,6 +10,7 @@ import type {
   SessionRelation,
   TextContentSegment,
 } from "../../domain/session.ts";
+import { decodeSqliteContentDigest, encodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
 export function replaceCanonicalDocument(
@@ -202,26 +203,32 @@ function insertEntries(
 function prepareContentStatements(database: DatabaseSync): ContentStatements {
   return {
     insert: database.prepare(
-      `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-       VALUES (?, ?, ?)
-       ON CONFLICT (hash_scheme, digest, text) DO NOTHING`,
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
+       RETURNING content_id`,
     ),
     find: database.prepare(
       `SELECT content_id
        FROM sessions_content_values
-       WHERE hash_scheme = ? AND digest = ? AND text = ?`,
+       WHERE digest = ? AND text = ? COLLATE BINARY
+       ORDER BY content_id
+       LIMIT 2`,
     ),
   };
 }
 
 function internContent(statements: ContentStatements, segment: TextContentSegment): number {
-  statements.insert.run(segment.contentHash.scheme, segment.contentHash.digest, segment.text);
-  const row = statements.find.get(
-    segment.contentHash.scheme,
-    segment.contentHash.digest,
-    segment.text,
-  ) as { readonly content_id?: unknown } | undefined;
-  return integerAt(row?.content_id);
+  const digest = encodeSqliteContentDigest(segment.contentHash.digest);
+  const rows = statements.find.all(digest, segment.text) as unknown as readonly {
+    readonly content_id?: unknown;
+  }[];
+  if (rows.length > 1) throw new SqliteSessionIndexError("corrupt-data");
+  const existing = rows[0];
+  if (existing !== undefined) return integerAt(existing.content_id);
+  const inserted = statements.insert.get(digest, segment.text) as
+    | { readonly content_id?: unknown }
+    | undefined;
+  return integerAt(inserted?.content_id);
 }
 
 interface ContentStatements {
@@ -305,7 +312,6 @@ function readSegments(
               occurrence.content_id,
               occurrence.content_class,
               occurrence.source_type,
-              content.hash_scheme,
               content.digest,
               content.text
        FROM sessions_content_occurrences AS occurrence
@@ -329,7 +335,6 @@ function readSegments(
     } as const;
     if (row.content_id === null) {
       if (
-        row.hash_scheme !== null ||
         row.digest !== null ||
         row.text !== null ||
         !isContentClass(row.content_class) ||
@@ -345,20 +350,14 @@ function readSegments(
       });
     } else {
       integerAt(row.content_id);
-      if (
-        row.content_class !== null ||
-        row.source_type !== null ||
-        row.hash_scheme !== "sha256-utf8-v1" ||
-        typeof row.digest !== "string" ||
-        typeof row.text !== "string"
-      ) {
+      if (row.content_class !== null || row.source_type !== null || typeof row.text !== "string") {
         throw new SqliteSessionIndexError("corrupt-data");
       }
       segments.push({
         kind: "text",
         ...common,
         text: row.text,
-        contentHash: { scheme: row.hash_scheme, digest: row.digest },
+        contentHash: decodeSqliteContentDigest(row.digest),
       });
     }
     result.set(entryOrdinal, segments);
@@ -474,7 +473,6 @@ interface SegmentRow {
   readonly content_id: number | bigint | null;
   readonly content_class: unknown;
   readonly source_type: unknown;
-  readonly hash_scheme: unknown;
   readonly digest: unknown;
   readonly text: unknown;
 }

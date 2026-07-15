@@ -23,6 +23,8 @@ import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/in
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
+const LEGACY_BOOTSTRAP_CHECKSUM =
+  "sha256-utf8-v1:be63645c8bcb17699fba78674153d9fa04603e0915497f6f9b6c194fdd58593c";
 
 afterEach(async () => {
   await Promise.all(
@@ -368,7 +370,7 @@ async function createObsoleteDevelopmentIndex(paths: IndexPaths): Promise<void> 
         `INSERT INTO sessions_schema_migrations (version, name, checksum, applied_at)
          VALUES (1, 'bootstrap', ?, '2026-07-14T12:00:00.000Z')`,
       )
-      .run(`sha256-utf8-v1:${"0".repeat(64)}`);
+      .run(LEGACY_BOOTSTRAP_CHECKSUM);
   } finally {
     database.close();
   }

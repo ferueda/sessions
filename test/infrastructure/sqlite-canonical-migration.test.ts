@@ -6,6 +6,7 @@ import {
   applyMigrations,
   readMigrationHistory,
 } from "../../src/infrastructure/sqlite/migrations.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 
 const DIGEST = "a".repeat(64);
 
@@ -41,6 +42,40 @@ describe("canonical SQLite baseline", () => {
         expect.arrayContaining(["tool_name", "tool_namespace"]),
       );
       expect(tableColumns(database, "sessions_canonical_sessions")).toContain("lineage_coverage");
+      expect(tableColumns(database, "sessions_content_values")).toEqual([
+        "content_id",
+        "digest",
+        "text",
+      ]);
+      expect(
+        database
+          .prepare(
+            `SELECT name, "unique" AS is_unique
+             FROM pragma_index_list('sessions_content_values')
+             ORDER BY name`,
+          )
+          .all(),
+      ).toEqual([{ name: "sessions_content_values_digest_idx", is_unique: 0 }]);
+      expect(
+        database
+          .prepare(
+            `SELECT name
+             FROM pragma_index_xinfo('sessions_content_values_digest_idx')
+             WHERE key = 1
+             ORDER BY seqno`,
+          )
+          .all(),
+      ).toEqual([{ name: "digest" }]);
+      expect(
+        database
+          .prepare(
+            `SELECT name
+             FROM sqlite_schema
+             WHERE type = 'trigger'
+               AND name = 'sessions_content_values_duplicate_guard'`,
+          )
+          .get(),
+      ).toEqual({ name: "sessions_content_values_duplicate_guard" });
       expect(database.prepare("SELECT instance_id FROM sessions_library").get()).toEqual({
         instance_id: expect.stringMatching(/^[a-f0-9]{32}$/u),
       });
@@ -73,14 +108,17 @@ describe("canonical SQLite baseline", () => {
           .prepare(
             `SELECT content_id, text
              FROM sessions_content_values
-             WHERE hash_scheme = ? AND digest = ?
+             WHERE digest = ?
              ORDER BY content_id`,
           )
-          .all("sha256-utf8-v1", DIGEST),
+          .all(encodeSqliteContentDigest(DIGEST)),
       ).toEqual([
         { content_id: alphaId, text: "collision alpha" },
         { content_id: betaId, text: "collision beta" },
       ]);
+      expect(() => insertContent(database, DIGEST, "collision alpha")).toThrow(
+        /duplicate sessions content value/u,
+      );
       expect(ftsMatches(database, "alpha")).toEqual([alphaId]);
       expect(ftsMatches(database, "beta")).toEqual([betaId]);
 
@@ -234,6 +272,20 @@ describe("canonical SQLite baseline", () => {
       expect(() =>
         insertOccurrence.run(sessionId, 2, null, "unknown", "a".repeat(64)),
       ).not.toThrow();
+
+      const insertStoredContent = database.prepare(
+        `INSERT INTO sessions_content_values (digest, text)
+         VALUES (?, ?)`,
+      );
+      expect(() => insertStoredContent.run(DIGEST, "text digest rejected")).toThrow(
+        /cannot store TEXT value in BLOB column/u,
+      );
+      expect(() => insertStoredContent.run(new Uint8Array(31), "short digest rejected")).toThrow(
+        /CHECK constraint failed/u,
+      );
+      expect(() => insertStoredContent.run(new Uint8Array(33), "long digest rejected")).toThrow(
+        /CHECK constraint failed/u,
+      );
     } finally {
       database.close();
     }
@@ -417,11 +469,11 @@ function insertTrackedSession(database: DatabaseSync): { readonly sessionId: num
 function insertContent(database: DatabaseSync, digest: string, text: string): number {
   const row = database
     .prepare(
-      `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-       VALUES ('sha256-utf8-v1', ?, ?)
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
        RETURNING content_id`,
     )
-    .get(digest, text) as { readonly content_id: number | bigint };
+    .get(encodeSqliteContentDigest(digest), text) as { readonly content_id: number | bigint };
   return Number(row.content_id);
 }
 
