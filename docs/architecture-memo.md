@@ -372,10 +372,13 @@ result, or automatic repair policy is public.
 
 The application exposes immutable provider-neutral list/search query values and
 one query repository beside canonical reconstruction on each read snapshot.
-Shared filters cover exact source/instance, effective source state, workspace,
-exclusive capture/source-observation bounds, and canonical identity. Search adds
-exclusive entry-time bounds, actor, content origin, exact entry kind, exact
-source-observed tool name/namespace, bounded context, and literal text. The
+Shared filters cover exact source/instance, exact opaque provider-native ID,
+effective source state, workspace, exclusive capture/source-observation bounds,
+and canonical identity. Native-ID lookup returns zero or more canonical summaries
+and never replaces the complete three-part identity required by singular or
+destructive operations. Search adds exclusive entry-time bounds, actor, content
+origin, exact entry kind, exact source-observed tool name/namespace, bounded
+context, and literal text. The
 effective observation time is the source coverage observation while coverage is
 unknown and the session presence observation otherwise; it never falls back to
 last-seen or provider activity time.

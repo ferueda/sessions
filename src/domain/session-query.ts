@@ -24,6 +24,7 @@ export type SessionSourceState = "present" | "missing" | "unknown";
 export interface SessionFilterInput {
   readonly source?: string;
   readonly instance?: string;
+  readonly nativeId?: string;
   readonly sourceState?: SessionSourceState;
   readonly workspace?: string;
   readonly capturedAfter?: string;
@@ -223,6 +224,7 @@ export function sessionQueryFingerprintMaterial(
     filter.capturedBefore ?? null,
     filter.observedAfter ?? null,
     filter.observedBefore ?? null,
+    filter.nativeId ?? null,
     filter.session?.source.kind ?? null,
     filter.session?.source.instanceId ?? null,
     filter.session?.nativeId ?? null,
@@ -258,6 +260,7 @@ function createFilter(
   if (instance !== undefined && source === undefined) {
     throw new TypeError("Source instance requires a source");
   }
+  const nativeId = optionalOpaque(input.nativeId, "Native ID");
   const sourceState = optionalLiteral(input.sourceState, SOURCE_STATES, "Source state");
   const workspace = optionalExact(input.workspace, "Workspace");
   const capturedAfter = optionalTimestamp(input.capturedAfter, "Captured-after");
@@ -271,6 +274,7 @@ function createFilter(
   const common = {
     ...(source === undefined ? {} : { source }),
     ...(instance === undefined ? {} : { instance }),
+    ...(nativeId === undefined ? {} : { nativeId }),
     ...(sourceState === undefined ? {} : { sourceState }),
     ...(workspace === undefined ? {} : { workspace }),
     ...(capturedAfter === undefined ? {} : { capturedAfter }),

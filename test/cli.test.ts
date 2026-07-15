@@ -282,6 +282,8 @@ describe("sessions CLI", () => {
         "codex",
         "--instance",
         "local",
+        "--native-id",
+        "provider-thread",
         "--source-state",
         "missing",
         "--workspace",
@@ -326,6 +328,7 @@ describe("sessions CLI", () => {
       filter: {
         source: "codex",
         instance: "local",
+        nativeId: "provider-thread",
         sourceState: "missing",
         workspace: "/repo",
         capturedAfter: "2026-07-14T00:00:00.000Z",
@@ -358,6 +361,7 @@ describe("sessions CLI", () => {
     const emptyInstance = await invoke(["list", "--source", "codex", "--instance", ""], {
       list,
     });
+    const emptyNativeId = await invoke(["list", "--native-id", ""], { list });
     const equalBounds = await invoke(
       [
         "search",
@@ -375,10 +379,11 @@ describe("sessions CLI", () => {
     expect([
       missingSource.exitCode,
       emptyInstance.exitCode,
+      emptyNativeId.exitCode,
       equalBounds.exitCode,
       blank.exitCode,
       unicodeBlank.exitCode,
-    ]).toEqual([2, 2, 2, 2, 2]);
+    ]).toEqual([2, 2, 2, 2, 2, 2]);
     expect(list).not.toHaveBeenCalled();
     expect(search).not.toHaveBeenCalled();
   });

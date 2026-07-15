@@ -301,6 +301,7 @@ const SOURCE_STATES: readonly SessionSourceState[] = ["present", "missing", "unk
 interface SessionOptionValues {
   readonly source?: string;
   readonly instance?: string;
+  readonly nativeId?: string;
   readonly sourceState?: SessionSourceState;
   readonly workspace?: string;
   readonly capturedAfter?: string;
@@ -398,6 +399,7 @@ function addSessionFilterOptions(command: Command): Command {
   return command
     .option("--source <source>", "exact source kind", parseSource)
     .option("--instance <instance>", "exact source instance", parseNonEmptyValue)
+    .option("--native-id <native-id>", "exact provider-native session ID", parseNonEmptyValue)
     .addOption(
       new Option("--source-state <state>", "effective source state").choices(SOURCE_STATES),
     )
@@ -434,6 +436,7 @@ function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefi
   const filter: SessionFilterInput = {
     ...(values.source === undefined ? {} : { source: values.source }),
     ...(values.instance === undefined ? {} : { instance: values.instance }),
+    ...(values.nativeId === undefined ? {} : { nativeId: values.nativeId }),
     ...(values.sourceState === undefined ? {} : { sourceState: values.sourceState }),
     ...(values.workspace === undefined ? {} : { workspace: values.workspace }),
     ...(values.capturedAfter === undefined ? {} : { capturedAfter: values.capturedAfter }),

@@ -265,6 +265,8 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
 
     const structuredList = await stableProviderCommand(options, fixture.codexHome, environment, [
       "list",
+      "--native-id",
+      NATIVE_ID,
       "--limit",
       "1",
       "--format",
@@ -278,11 +280,14 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     const structuredSession = readObject(structuredListSummary.session);
     const structuredDigest = readObject(structuredListSummary.documentDigest);
     assert.equal(structuredSession.canonicalId, canonicalId);
+    assert.equal(structuredSession.nativeId, NATIVE_ID);
     assertDocumentDigest(structuredDigest);
 
     const structuredSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
       "search",
       "distribution smoke",
+      "--native-id",
+      NATIVE_ID,
       "--limit",
       "1",
       "--context",

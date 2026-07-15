@@ -17,6 +17,7 @@ describe("session query values", () => {
     const input = {
       source: "synthetic",
       instance: "Profile-A",
+      nativeId: "Provider-Session-A",
       workspace: "/Users/Example/Workspace",
       session: identity,
     };
@@ -27,6 +28,7 @@ describe("session query values", () => {
     expect(filter).toEqual({
       source: "synthetic",
       instance: "Profile-A",
+      nativeId: "Provider-Session-A",
       workspace: "/Users/Example/Workspace",
       session: {
         source: { kind: "synthetic", instanceId: "Profile-A" },
@@ -44,6 +46,16 @@ describe("session query values", () => {
     );
     expect(() => createSessionFilter({ source: "synthetic", instance: "" })).toThrow(
       "Source instance must not be empty",
+    );
+  });
+
+  test("requires an exact non-empty well-formed native ID", () => {
+    expect(createSessionFilter({ nativeId: "Provider-Session-A" })).toEqual({
+      nativeId: "Provider-Session-A",
+    });
+    expect(() => createSessionFilter({ nativeId: "" })).toThrow("Native ID must not be empty");
+    expect(() => createSessionFilter({ nativeId: "bad\ud800id" })).toThrow(
+      "Native ID must be a well-formed string",
     );
   });
 
@@ -111,10 +123,17 @@ describe("session query values", () => {
       filter: { source: "synthetic" },
       limit: 25,
     });
+    const nativeScoped = createSessionListQuery({
+      filter: { source: "synthetic", nativeId: "Provider-Session-A" },
+      limit: 50,
+    });
 
     expect(sessionQueryFingerprintMaterial(first)).toBe(sessionQueryFingerprintMaterial(second));
     expect(sessionQueryFingerprintMaterial(first)).not.toBe(
       sessionQueryFingerprintMaterial(changed),
+    );
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(
+      sessionQueryFingerprintMaterial(nativeScoped),
     );
   });
 

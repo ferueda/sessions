@@ -19,12 +19,14 @@ sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
 sessions list [--source SOURCE] [--instance INSTANCE]
+              [--native-id NATIVE-ID]
               [--source-state present|missing|unknown] [--workspace WORKSPACE]
               [--captured-after TIME] [--captured-before TIME]
               [--observed-after TIME] [--observed-before TIME]
               [--session CANONICAL-ID] [--limit N] [--cursor TOKEN]
               [--format human|json|jsonl]
 sessions search <text> [--source SOURCE] [--instance INSTANCE]
+                       [--native-id NATIVE-ID]
                        [--source-state present|missing|unknown]
                        [--workspace WORKSPACE]
                        [--captured-after TIME] [--captured-before TIME]
@@ -489,12 +491,23 @@ use their case-sensitive canonical representation:
 
 - `--source` selects an exact source kind. `--instance` selects an exact source
   instance and requires `--source`.
+- `--native-id` selects an exact provider-native session ID. It can be used
+  alone and can return multiple retained canonical sessions because native IDs
+  are unique only within a source instance. `--source` and `--instance` narrow
+  the match.
 - `--source-state` accepts `present`, `missing`, or `unknown`.
 - `--workspace` selects the exact retained workspace value.
 - `--captured-after` / `--captured-before` bound successful capture time.
 - `--observed-after` / `--observed-before` bound effective source-observation
   time.
-- `--session` selects one exact canonical identity.
+- `--session` selects one exact canonical identity. Combining it with
+  `--native-id` uses the same AND rule; contradictory identities return an empty
+  successful result.
+
+Native IDs are non-empty, case-sensitive opaque values. Sessions does not parse,
+normalize, prefix-match, or send them through transcript FTS. List results expose
+the canonical identity required by `show`, `export`, and `forget`; those singular
+or destructive commands do not auto-resolve native IDs across source instances.
 
 Times must be canonical UTC with milliseconds, such as
 `2026-07-14T12:00:00.000Z`. Every `after`/`before` bound is exclusive; equal or
