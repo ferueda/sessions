@@ -9,4 +9,11 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. Resume M7 as the next roadmap work.
+Active executor plan:
+
+- [Expose and repair orphaned canonical content](260714-orphan-observability-repair.md)
+  is third in the storage-hardening sequence. Implement it only after the
+  compact-content baseline and compaction lease extension have landed and this
+  plan has been reconciled with their resulting schema and lease contracts.
+
+Resume M7 after the storage-hardening sequence is complete.
