@@ -8,9 +8,9 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > implemented: explicit durable indexing, filtered/paginated list, lexical
 > search with evidence context and support counts, show, scoped forget, all-data
 > clear, explicit orphan-content diagnosis/repair, explicit SQLite page
-> reclamation, source diagnostics, and the current canonical storage baseline.
-> Portable export, Cursor, the packaged Agent Skill, and npm release remain
-> planned.
+> reclamation, source diagnostics, versioned JSON/JSONL query output, and
+> portable retained-session export. Cursor, Markdown presentation, the packaged
+> Agent Skill, and npm release remain planned.
 
 ## Why Sessions
 
@@ -19,7 +19,7 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 - Durable normalized local snapshots that survive later provider disappearance.
 - Provenance that distinguishes human, injected, delegated, copied, model, tool, and system content.
 - Deduplicated evidence counts that do not mistake forks or copied prompts for independent recurrence.
-- Human output for exploration, portable Markdown context, and versioned JSON/JSONL for scripts and agents.
+- Human output for exploration and versioned JSON/JSONL for scripts, agents, and portable retained context.
 
 ## Current quick start
 
@@ -43,6 +43,7 @@ node dist/bin/sessions.js list
 node dist/bin/sessions.js search 'query engine' --context 2
 node dist/bin/sessions.js search -- '-term'
 node dist/bin/sessions.js show '<canonical-id>'
+node dist/bin/sessions.js export '<canonical-id>' --format jsonl
 ```
 
 Current command surface:
@@ -51,9 +52,11 @@ Current command surface:
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
-sessions list [filters] [--limit N] [--cursor TOKEN]
+sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
-sessions show <canonical-id> [--entry N --context N]
+                       [--format human|json|jsonl]
+sessions show <canonical-id> [--entry N --context N] [--format human|json|jsonl]
+sessions export <canonical-id> --format json|jsonl [--full]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -64,11 +67,12 @@ sessions data clear --yes [--format human|json]
 the library. It copies normalized evidence into Sessions-owned application data;
 a later complete scan that no longer sees a provider thread marks it missing but
 retains its content. `list`, `search`, and `show` read only that durable library,
-so they continue working when Codex data changes or disappears. They are
-human-only in this milestone: list defaults to 50 sessions; search defaults to 20
-entry hits and zero adjacent context; both accept at most 200 primary rows and
-emit an opaque next cursor when another page exists. Show defaults to the first
-50 entries or 3 entries of context around `--entry` (maximum context 100).
+so they continue working when Codex data changes or disappears. They support
+human, JSON, and independently attributable JSONL output. List defaults to 50
+sessions; search defaults to 20 entry hits and zero adjacent context; both accept
+at most 200 primary rows and emit an opaque next cursor when another page exists.
+Show defaults to the first 50 entries or 3 entries of context around `--entry`
+(maximum context 100). Format does not change query ordering or cursor identity.
 
 Search treats whitespace-delimited input as literal FTS terms combined with AND,
 not as public FTS syntax. Use the `--` delimiter before search text that begins
@@ -79,6 +83,17 @@ reports matching segment occurrences, distinct canonical content, distinct known
 lineage roots, and matching sessions whose root remains unknown. Shared filters,
 exclusive time bounds, ranking, cursor invalidation, and exact output rules are in
 the [CLI contract](docs/reference/cli-contract.md).
+
+`export` extracts one retained canonical snapshot as JSON or JSONL without
+reopening Codex, following relations, or delivering it anywhere. Default
+show/export output applies explicit title, relation, entry, segment, and raw-text
+bounds. `export --full` removes those presentation bounds for export-eligible
+fields in that one snapshot; it does not expose raw provider payloads or omitted
+media. Every transcript-bearing structured record is marked
+`untrusted-history`, and every bounded machine result is encoded fully before
+stdout and limited to 16 MiB. See the
+[structured output contract](docs/reference/structured-output.md) for the exact
+schema, null rules, bounds, and trust limits.
 
 `forget` deletes one Sessions-owned retained copy without touching Codex. A later
 index can capture it again while the provider still has it. Deleted database
@@ -114,12 +129,13 @@ supported state and rollout shapes.
 ## Remaining V1
 
 ```text
-sessions export <source-instance:id> --format md|json|jsonl [--full]
 sessions index --source cursor
+sessions export <canonical-id> --format md [--full]
 ```
 
-M7 adds versioned JSON/JSONL for transcript-bearing list/search/show results and
-portable export. M6 list/search/show output remains human-facing.
+M7 JSON/JSONL delivery is complete, so M8 Cursor parity is next. Markdown remains
+a separate presentation layer over the same public projection after M8 and
+before M9/V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 
@@ -139,6 +155,7 @@ See the [privacy contract](docs/privacy.md) for promises and limitations.
 - [Accepted architecture memo](docs/architecture-memo.md)
 - [V1 implementation roadmap](dev/plans/260713-v1-implementation-roadmap.md)
 - [CLI contract](docs/reference/cli-contract.md)
+- [Structured output contract](docs/reference/structured-output.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Active implementation plans](dev/plans/README.md)
 

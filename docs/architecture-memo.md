@@ -405,10 +405,9 @@ FTS structure and rebuild logic are shared by bootstrap and projection repair. A
 leased index-writer open first distinguishes canonical corruption from FTS-only
 damage, then rebuilds only the projection from canonical content values. Doctor
 remains immutable and reports `rebuild-required`; `data repair-orphans` never
-rebuilds FTS and refuses candidates whose derived row is missing. Show
-reconstructs canonical sessions directly rather than routing through search;
-planned export will do the same, including for retained sessions whose latest
-source state is missing or unknown.
+rebuilds FTS and refuses candidates whose derived row is missing. Show and export
+reconstruct canonical sessions directly rather than routing through search,
+including retained sessions whose latest source state is missing or unknown.
 
 A missing, malformed, unknown-scheme, or mismatching public-document digest is
 canonical corruption. It fails full document reads and the semantic health walk;
@@ -491,61 +490,68 @@ sessions
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
-sessions list [filters] [--limit N] [--cursor TOKEN]
+sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
-sessions show <canonical-id> [--entry N --context N]
+                       [--format human|json|jsonl]
+sessions show <canonical-id> [--entry N --context N] [--format human|json|jsonl]
+sessions export <canonical-id> --format json|jsonl [--full]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-Next planned M7 surface:
+Next planned adapter surface:
 
 ```text
-sessions export <source-instance:id> --format json|jsonl [--full]
+sessions index --source cursor
 ```
 
 Deferred presentation work after M8 and before M9/V1 adds `--format md` over the
 same projection. It does not change eligible evidence or digest semantics.
-M8 separately adds `sessions index --source cursor`.
 
 Behavioral rules:
 
-- Human-readable output is default.
+- Human-readable output is the list/search/show default; export requires JSON or
+  JSONL explicitly.
 - JSON/JSONL are explicit and schema-versioned.
 - Stdout carries requested results; stderr carries warnings, progress, and errors.
 - Exit `0` means successful execution, including no matches; `1` means operational failure; `2` means invalid usage.
 - A fresh uninitialized library lists as a successful empty result without
   creating storage or probing a provider. Cursor-free search behaves the same;
-  show of an absent identity remains an operational not-found result.
+  show/export of an absent identity remains an operational not-found result.
 - Unknown flags and invalid values fail; they are not ignored.
-- Potentially large output is bounded by default. `--full` is explicit.
+- Potentially large output is bounded by default. Only export accepts explicit
+  `--full`.
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
-- Current list/search/show output is human-facing. Their versioned JSON/JSONL
-  DTOs and portable JSON/JSONL export are the next M7 change.
+- List/search/show use one shared selection for human, JSON, and JSONL. Export
+  uses the same snapshot selection and emits JSON or JSONL.
 - `index` durably retains the latest successful normalized snapshot. A complete
   later scan can change its source state to missing but cannot delete it.
 - Destructive deletion is explicit and distinct from rebuilding derived search
   state.
 
 The exact current surface is generated help; stable semantics live in
-[the CLI contract](reference/cli-contract.md).
+[the CLI contract](reference/cli-contract.md). Exact machine fields, records,
+null rules, order, and bounds live in the
+[structured output contract](reference/structured-output.md).
 
 ## Portable context export
 
-Planned `sessions export` will emit one retained canonical snapshot from
-Sessions-owned storage and never reopen provider histories. JSON will be one
-versioned bundle; JSONL will carry equivalent provider-neutral evidence as
-independently attributable ordered records. Markdown remains later presentation
+`sessions export` emits one retained canonical snapshot from Sessions-owned
+storage and never reopens provider histories. JSON is one versioned bundle;
+JSONL carries equivalent provider-neutral evidence as independently attributable
+ordered records. Markdown remains later presentation
 work after M8 and before M9/V1. Sessions performs extraction only: it does not
 import the artifact, call provider APIs, use a clipboard or application UI,
 create a destination conversation, or manage a target provider's context limits.
 
-Every planned format identifies the canonical session, capture time, effective
+Every snapshot envelope identifies the canonical session, capture time, effective
 source state and observation time, last-good adapter version,
-document-digest scheme/value, and explicit truncation or omission state. The
+document-digest scheme/value, and explicit truncation or omission state. Every
+JSONL session/evidence-bearing record repeats the canonical reference and digest
+needed for independent attribution. The
 implemented digest covers the complete versioned public projection and remains
 stable across output formats and later source-state observations. It excludes
 identity/attribution, diagnostic locators, adapter input locators, source
@@ -559,13 +565,22 @@ evidence the adapter never observed. Known relations are metadata and are not
 recursively exported.
 
 Later Markdown will structurally frame actor-labeled transcript content as
-untrusted historical data. JSON and JSONL will carry the same disposition
-explicitly. Source
-locators and local paths are never emitted as metadata by default, but secrets or
+untrusted historical data. JSON and JSONL carry the same disposition
+explicitly. JSON escaping protects syntax, not semantic trust. Source locators
+and local paths are never emitted as metadata by default, but secrets or
 paths written inside faithful transcript text are not automatically redacted.
 Users control whether an artifact leaves the local privacy boundary. Equal text,
 an export operation, or a matching document digest never creates lineage or
 proves later reuse.
+
+Default export selects the first 50 entries, first 50 relations, and first 100
+segments, with at most 8 KiB raw UTF-8 per title/text segment and 256 KiB across
+segment text. Show applies the same relation/segment/text bounds after its
+existing entry window. Selection truncates only at Unicode code-point boundaries
+and never shortens structural identity, hash, or linkage values. Every bounded
+JSON/JSONL result is completely encoded and validated before stdout and may not
+exceed 16 MiB. `export --full` alone removes selection and aggregate output caps
+for export-eligible fields in the one snapshot.
 
 ## Doctor
 
@@ -791,9 +806,8 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 2 are implemented;
-Phase 3 is in progress. M6 supplies its completed provider-neutral query/evidence half and
-M7 is the current structured-output/export half. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 3 are implemented;
+M8 Cursor parity is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query and export engine is completed
 over Codex before Cursor becomes the second-adapter proof. The
@@ -818,14 +832,14 @@ Implement Codex behind `probe`/`discover`/`read`, using the source survey and ne
 synthetic fixtures rather than porting the Harness parser. Complete
 index/list/show for the first vertical slice.
 
-### Phase 3 — Query and export (in progress)
+### Phase 3 — Query and export (complete)
 
 M6 implements the completed provider-neutral lexical search, filtered/cursored
 list, bounded adjacent and linked context, lineage-aware support reporting, and
-FTS repair. The M7 canonical public projection, JCS digest, atomic persistence,
-verification, and same-snapshot attribution are complete. Versioned JSON/JSONL
-and portable JSON/JSONL export are next. Framed Markdown follows after M8 and
-before M9/V1 over the same projection.
+FTS repair. M7 implements the canonical public projection, JCS digest, atomic
+persistence, same-snapshot attribution, shared bounded selection, closed
+schema-1 JSON/JSONL DTOs, and portable retained-session export. Framed Markdown
+follows after M8 and before M9/V1 over the same projection.
 
 ### Phase 4 — Equivalent second adapter
 
