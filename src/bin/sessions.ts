@@ -2,6 +2,7 @@
 
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { clearLine, cursorTo } from "node:readline";
 
 import { createCodexSource } from "../adapters/codex/source.ts";
 import { clearData } from "../application/clear-index.ts";
@@ -53,8 +54,13 @@ const resolvePaths = () =>
 const exitCode = await runCli(process.argv.slice(2), {
   version,
   output: {
+    stderrIsInteractive: process.stderr.isTTY === true && process.env.TERM !== "dumb",
     writeOut: (text) => process.stdout.write(text),
     writeErr: (text) => process.stderr.write(text),
+    clearErrLine: () => {
+      cursorTo(process.stderr, 0);
+      clearLine(process.stderr, 0);
+    },
   },
   doctor: async () => {
     const sources = await resolveAllSources();

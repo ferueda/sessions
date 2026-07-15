@@ -608,6 +608,13 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 - Exit `1`: operational or capability failure.
 - Exit `2`: invalid command, flag, value, or required argument.
 
+`sessions index`, `sessions data repair-orphans`, and `sessions data compact`
+show a transient activity indicator with elapsed seconds when stderr is an
+interactive terminal. The indicator is cleared before the requested stdout
+report or an error. Redirected or captured stderr remains quiet on success. This
+is liveness feedback only: it exposes no percentage, work total, ETA, cursor,
+partial outcome, or machine-readable progress contract.
+
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 Concurrent index/forget/repair/compact/clear ownership is a sanitized
 `Session library is busy` operational failure; lease tokens, owners, and timing

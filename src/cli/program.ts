@@ -25,6 +25,7 @@ import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts
 import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import { encodeStructuredJson } from "./encode-json-output.ts";
 import { encodeStructuredJsonl } from "./encode-jsonl-output.ts";
+import { withCliActivity } from "./activity.ts";
 import {
   buildListJsonV1,
   buildListJsonlV1,
@@ -50,8 +51,10 @@ import {
 } from "./render.ts";
 
 export interface CliOutput {
+  readonly stderrIsInteractive?: boolean;
   writeOut(text: string): void;
   writeErr(text: string): void;
+  clearErrLine?(): void;
 }
 
 export interface ProgramOptions {
@@ -147,7 +150,9 @@ export function createProgram(options: ProgramOptions): Command {
     )
     .addOption(operationalFormatOption())
     .action(async ({ source, format }: { source?: string; format: OperationalOutputFormat }) => {
-      const report = await options.index(source);
+      const report = await withCliActivity(options.output, "Indexing sessions", () =>
+        options.index(source),
+      );
       options.output.writeOut(renderIndex(report, format));
       if (report.incompleteSources > 0) throw new OperationalExit();
     });
@@ -264,14 +269,20 @@ export function createProgram(options: ProgramOptions): Command {
     .description("Delete unreachable canonical content from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      options.output.writeOut(renderDataRepairOrphans(await options.repairOrphanedData(), format));
+      const report = await withCliActivity(options.output, "Repairing orphaned content", () =>
+        options.repairOrphanedData(),
+      );
+      options.output.writeOut(renderDataRepairOrphans(report, format));
     });
   data
     .command("compact")
     .description("Reclaim reusable whole pages from Sessions-owned local data")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      options.output.writeOut(renderDataCompact(await options.compactData(), format));
+      const report = await withCliActivity(options.output, "Compacting Sessions data", () =>
+        options.compactData(),
+      );
+      options.output.writeOut(renderDataCompact(report, format));
     });
   data
     .command("clear")

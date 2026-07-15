@@ -20,6 +20,52 @@ import { runCli } from "../src/cli/run.ts";
 import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
 
 describe("sessions CLI", () => {
+  test.each([
+    { argv: ["index"], label: "Indexing sessions" },
+    { argv: ["data", "compact"], label: "Compacting Sessions data" },
+    { argv: ["data", "repair-orphans"], label: "Repairing orphaned content" },
+  ])("shows transient activity for $label on interactive stderr", async ({ argv, label }) => {
+    const events: string[] = [];
+    const invocation = await invoke(argv, {}, { interactive: true, events });
+
+    expect(invocation.exitCode).toBe(0);
+    expect(invocation.stderr).toBe("");
+    expect(events[0]).toBe("clear");
+    expect(events[1]).toBe(`stderr:- ${label} (0s)`);
+    expect(events.at(-2)).toBe("clear");
+    expect(events.at(-1)).toMatch(/^stdout:/u);
+  });
+
+  test("does not show activity for commands outside the three-command scope", async () => {
+    const events: string[] = [];
+    const invocation = await invoke(["data", "clear", "--yes"], {}, { interactive: true, events });
+
+    expect(invocation.exitCode).toBe(0);
+    expect(events).not.toContain("clear");
+    expect(events.every((event) => !event.startsWith("stderr:"))).toBe(true);
+  });
+
+  test("clears interactive activity before reporting an operational error", async () => {
+    const events: string[] = [];
+    const failure = new Error("index failed");
+    const invocation = await invoke(
+      ["index"],
+      {
+        index: async () => {
+          throw failure;
+        },
+      },
+      { interactive: true, events },
+    );
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: `sessions: ${failure.message}\n`,
+    });
+    expect(events.slice(-2)).toEqual(["clear", `stderr:sessions: ${failure.message}\n`]);
+  });
+
   test("shows the current command surface", async () => {
     const invocation = await invoke([]);
 
@@ -610,6 +656,7 @@ describe("sessions CLI", () => {
 async function invoke(
   argv: readonly string[],
   overrides: Partial<Omit<ProgramOptions, "output" | "version">> = {},
+  terminal: { readonly interactive?: boolean; readonly events?: string[] } = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
@@ -636,11 +683,22 @@ async function invoke(
     ...defaults,
     ...overrides,
     output: {
+      ...(terminal.interactive === true
+        ? {
+            stderrIsInteractive: true,
+            clearErrLine: () => {
+              stderr = "";
+              terminal.events?.push("clear");
+            },
+          }
+        : {}),
       writeOut: (text) => {
         stdout += text;
+        terminal.events?.push(`stdout:${text}`);
       },
       writeErr: (text) => {
         stderr += text;
+        terminal.events?.push(`stderr:${text}`);
       },
     },
   });
