@@ -40,6 +40,7 @@ node dist/bin/sessions.js doctor
 node dist/bin/sessions.js index --source codex
 node dist/bin/sessions.js list
 node dist/bin/sessions.js search 'query engine' --context 2
+node dist/bin/sessions.js search -- '-term'
 node dist/bin/sessions.js show '<canonical-id>'
 ```
 
@@ -67,7 +68,8 @@ emit an opaque next cursor when another page exists. Show defaults to the first
 50 entries or 3 entries of context around `--entry` (maximum context 100).
 
 Search treats whitespace-delimited input as literal FTS terms combined with AND,
-not as public FTS syntax. Each hit identifies one canonical entry, renders a
+not as public FTS syntax. Use the `--` delimiter before search text that begins
+with a dash; unknown flags remain usage errors. Each hit identifies one canonical entry, renders a
 bounded snippet, can include up to 10 adjacent entries per side, and automatically
 includes directly linked observed tool-call/result evidence. Query-wide support
 reports matching segment occurrences, distinct canonical content, distinct known

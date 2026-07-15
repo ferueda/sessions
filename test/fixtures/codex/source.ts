@@ -152,11 +152,19 @@ export function userMessageRecord(message = "Synthetic Codex message"): unknown 
   };
 }
 
-export function sessionMetadataRecord(id: string, parentThreadId?: string): unknown {
+export function sessionMetadataRecord(
+  id: string,
+  parentThreadId?: string,
+  sessionId?: string,
+): unknown {
   return {
     timestamp: "2026-07-14T11:59:59.000Z",
     type: "session_meta",
-    payload: { id, ...(parentThreadId === undefined ? {} : { parent_thread_id: parentThreadId }) },
+    payload: {
+      id,
+      ...(sessionId === undefined ? {} : { session_id: sessionId }),
+      ...(parentThreadId === undefined ? {} : { parent_thread_id: parentThreadId }),
+    },
   };
 }
 
@@ -164,6 +172,7 @@ export function codexRolloutRecords(
   id: string,
   message = "Synthetic Codex message",
   parentThreadId?: string,
+  sessionId?: string,
 ): readonly unknown[] {
-  return [sessionMetadataRecord(id, parentThreadId), userMessageRecord(message)];
+  return [sessionMetadataRecord(id, parentThreadId, sessionId), userMessageRecord(message)];
 }

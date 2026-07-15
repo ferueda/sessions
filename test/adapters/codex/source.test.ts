@@ -24,8 +24,8 @@ afterEach(async () => {
 });
 
 describe("Codex session source", () => {
-  test("uses the codex-v2 normalization contract", () => {
-    expect(CODEX_ADAPTER_VERSION).toBe("codex-v2");
+  test("uses the codex-v3 normalization contract", () => {
+    expect(CODEX_ADAPTER_VERSION).toBe("codex-v3");
   });
 
   test("probes canonical roots and distinguishes unavailable from unreadable", async () => {
@@ -84,6 +84,7 @@ describe("Codex session source", () => {
   test("normalizes a ready rollout with private logical locators and state lineage", async () => {
     const fixture = await createFixture();
     const rolloutPath = "sessions/rollout-2026-child-thread.jsonl";
+    const groupId = "shared-root-group";
     fixture.writeState(
       [
         {
@@ -98,7 +99,7 @@ describe("Codex session source", () => {
     );
     await fixture.writeRollout(
       rolloutPath,
-      codexRolloutRecords("child-thread", "Synthetic message", "parent-thread"),
+      codexRolloutRecords("child-thread", "Synthetic message", "parent-thread", groupId),
     );
     const selected = await createCodexSource(fixture.environment);
     const [candidate] = await discover(selected.adapter, fixture.workspace);
@@ -125,7 +126,9 @@ describe("Codex session source", () => {
       uri: "codex://rollout/rollout-2026-child-thread.jsonl",
       recordId: "1",
     });
-    expect(JSON.stringify(document.entries)).not.toContain(fixture.codexHome);
+    const serialized = JSON.stringify(document);
+    expect(serialized).not.toContain(groupId);
+    expect(serialized).not.toContain(fixture.codexHome);
   });
 
   test("keeps lineage unknown when the optional spawn-edge table is absent", async () => {

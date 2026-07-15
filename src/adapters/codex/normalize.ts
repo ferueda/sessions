@@ -188,8 +188,7 @@ class CodexNormalizerState {
     recordOrdinal: number,
   ): readonly EntryDraft[] {
     const id = requiredText(payload, "id", true);
-    const sessionId = optionalText(payload, "session_id", true);
-    if (sessionId !== undefined && sessionId !== id) throwMalformed();
+    optionalText(payload, "session_id", true);
     const parentThreadId = optionalText(payload, "parent_thread_id", true);
     const forkedFromId = optionalText(payload, "forked_from_id", true);
     const baseInstructions = optionalRecord(payload, "base_instructions");

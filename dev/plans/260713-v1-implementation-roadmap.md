@@ -57,7 +57,7 @@ The repository now includes:
 - deterministic entry-level ranking, bounded adjacent/direct tool context,
   query-wide occurrence/content/root/unknown-lineage support, and opaque cursors
   bound to query, library identity, and writer generation;
-- explicit complete/unknown lineage coverage, Codex `codex-v2` evidence, and an
+- explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and an
   iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
   doctor remains read-only;

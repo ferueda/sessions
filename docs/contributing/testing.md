@@ -46,8 +46,8 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                            |
 | CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar/rendering in-process; composition, environment, streams, and side effects in a child process |
 | Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                   |
-| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus one synthetic Codex index/search/next-cursor/show journey                       |
-| Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | Tarball allowlist, offline install, installed binary independence and wiring                         |
+| Distribution smoke    | `scripts/smoke-dist.ts`, `scripts/smoke-m6-workflow.ts`                         | Compiled binary plus synthetic Codex indexing, query paging, observed tool filters/linkage, and show |
+| Package smoke         | `scripts/smoke-package.ts` plus the M6 workflow                                 | The same workflow through an offline-installed tarball, plus allowlist and independence checks       |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
 or authenticated live command today. Export, Cursor, and the packaged Agent

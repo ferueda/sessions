@@ -111,10 +111,13 @@ unavailable execution evidence without embedding skill policy in adapters.
 roots, snapshots active SQLite/WAL state into the leased private workspace,
 feature-detects supported thread/edge columns, and discovers ordered candidates.
 Reads verify live rollout identity before and after streaming plain JSONL or
-Zstandard data and normalize only declared record variants. `codex-v2` preserves
-spawn-edge-table coverage separately from an optional parent edge so table
-absence remains unknown while supported-table row absence can be complete.
-Unknown supported
+Zstandard data and normalize only declared record variants. `codex-v3` preserves
+the V2 spawn-edge coverage contract: table absence remains unknown while row
+absence in a supported table can be complete. V3 also accepts independently
+validated, non-empty `session_meta.session_id` group identity that may differ
+from the thread `id`. Only `id` supplies thread identity; the group value is
+neither projected nor treated as lineage. Retained V2 candidates re-normalize
+once under V3, then unchanged inputs skip rollout reads again. Unknown supported
 structural records become privacy-safe omissions; malformed or changing evidence
 returns a typed failure and never a partial document.
 

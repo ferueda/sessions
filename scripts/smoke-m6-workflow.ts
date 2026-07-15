@@ -20,6 +20,11 @@ export interface M6SmokeWorkflowOptions {
 const NATIVE_ID = "distribution-smoke-thread";
 const TITLE = "Distribution smoke task";
 const MESSAGE = "Synthetic distribution smoke message";
+const TOOL_MARKER = "distribution-tool-proof";
+const BARE_TOOL_NAME = "inspect_fixture";
+const NAMESPACED_TOOL_NAME = "read_fixture";
+const TOOL_NAMESPACE = "synthetic";
+const TOOL_MENTION = `Ordinary text mentions ${TOOL_MARKER}, ${BARE_TOOL_NAME}, and ${TOOL_NAMESPACE}/${NAMESPACED_TOOL_NAME}.`;
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
 
 /** Exercise the complete M6 journey through a spawned CLI, never through application imports. */
@@ -42,8 +47,47 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
       ...codexRolloutRecords(NATIVE_ID, MESSAGE),
       {
         timestamp: "2026-07-14T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          call_id: "bare-tool-call",
+          name: BARE_TOOL_NAME,
+          arguments: JSON.stringify({ marker: TOOL_MARKER }),
+        },
+      },
+      {
+        timestamp: "2026-07-14T12:02:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "bare-tool-call",
+          output: "Synthetic bare tool result",
+        },
+      },
+      {
+        timestamp: "2026-07-14T12:03:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          call_id: "namespaced-tool-call",
+          name: NAMESPACED_TOOL_NAME,
+          namespace: TOOL_NAMESPACE,
+          input: JSON.stringify({ marker: TOOL_MARKER }),
+        },
+      },
+      {
+        timestamp: "2026-07-14T12:04:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "namespaced-tool-call",
+          output: "Synthetic namespaced tool result",
+        },
+      },
+      {
+        timestamp: "2026-07-14T12:05:00.000Z",
         type: "event_msg",
-        payload: { type: "user_message", message: `${MESSAGE} follow-up` },
+        payload: { type: "user_message", message: `${MESSAGE} follow-up. ${TOOL_MENTION}` },
       },
     ]);
     fixture.writeState([
@@ -110,6 +154,65 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
       "json",
     ]);
     assertCompleteIndex(firstIndex, { updated: 1, unchanged: 0, missing: 0 });
+
+    const bareToolSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      TOOL_MARKER,
+      "--tool-name",
+      BARE_TOOL_NAME,
+      "--context",
+      "0",
+    ]);
+    assertObservedToolSearch(bareToolSearch, {
+      callOrdinal: 1,
+      resultOrdinal: 2,
+      callTimestamp: "2026-07-14T12:01:00.000Z",
+      resultTimestamp: "2026-07-14T12:02:00.000Z",
+      callId: "bare-tool-call",
+      tool: BARE_TOOL_NAME,
+      excludedTool: `${TOOL_NAMESPACE}/${NAMESPACED_TOOL_NAME}`,
+    });
+
+    const namespacedToolSearch = await stableProviderCommand(
+      options,
+      fixture.codexHome,
+      environment,
+      [
+        "search",
+        TOOL_MARKER,
+        "--tool-name",
+        NAMESPACED_TOOL_NAME,
+        "--tool-namespace",
+        TOOL_NAMESPACE,
+        "--context",
+        "0",
+      ],
+    );
+    assertObservedToolSearch(namespacedToolSearch, {
+      callOrdinal: 3,
+      resultOrdinal: 4,
+      callTimestamp: "2026-07-14T12:03:00.000Z",
+      resultTimestamp: "2026-07-14T12:04:00.000Z",
+      callId: "namespaced-tool-call",
+      tool: `${TOOL_NAMESPACE}/${NAMESPACED_TOOL_NAME}`,
+      excludedTool: BARE_TOOL_NAME,
+    });
+
+    const leadingDashSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "--",
+      "---",
+    ]);
+    assertCommand(leadingDashSearch, 0, "leading-dash search with delimiter");
+    assert.equal(leadingDashSearch.stdout, "No matches found.\n");
+
+    const leadingDashOption = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "---",
+    ]);
+    assert.equal(leadingDashOption.status, 2);
+    assert.equal(leadingDashOption.stdout, "");
+    assert.match(leadingDashOption.stderr, /unknown option '---'/u);
 
     const firstSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
       "search",
@@ -353,6 +456,32 @@ function assertCompleteIndex(
   const source = readObject(readArray(report, "sources")[0]);
   assert.equal(source.status, "completed");
   assert.equal(readObject(source.coverage).status, "complete");
+}
+
+function assertObservedToolSearch(
+  result: SmokeCommandResult,
+  expected: {
+    readonly callOrdinal: number;
+    readonly resultOrdinal: number;
+    readonly callTimestamp: string;
+    readonly resultTimestamp: string;
+    readonly callId: string;
+    readonly tool: string;
+    readonly excludedTool: string;
+  },
+): void {
+  assertCommand(result, 0, `observed tool search for ${expected.tool}`);
+  const primaryHeadings = result.stdout.match(/^#\d+ .*$/gmu) ?? [];
+  assert.deepEqual(primaryHeadings, [
+    `#${String(expected.callOrdinal)} model tool-call ${expected.callTimestamp} tool=${expected.tool} call=${expected.callId}`,
+  ]);
+  const linkedHeadings = result.stdout.match(/^Context \(linked\) .*$/gmu) ?? [];
+  assert.deepEqual(linkedHeadings, [
+    `Context (linked) #${String(expected.resultOrdinal)} tool tool-result ${expected.resultTimestamp} call=${expected.callId} related=#${String(expected.callOrdinal)}`,
+  ]);
+  assert.match(result.stdout, /Support: 1 occurrence\(s\); 1 unique content value\(s\)/u);
+  assert.doesNotMatch(result.stdout, new RegExp(escapePattern(expected.excludedTool), "u"));
+  assert.doesNotMatch(result.stdout, new RegExp(escapePattern(TOOL_MENTION), "u"));
 }
 
 function firstListedIdentity(output: string): string {

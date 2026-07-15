@@ -1,7 +1,7 @@
 # Codex format support
 
 - Status: current M6 contract
-- Adapter format version: `codex-v2`
+- Adapter format version: `codex-v3`
 - Survey baseline: upstream Codex commit
   [`d7ba5ff9553a6aa0898a8e3bd5cb3bc00d0c9ddf`](https://github.com/openai/codex/tree/d7ba5ff9553a6aa0898a8e3bd5cb3bc00d0c9ddf)
 
@@ -11,10 +11,11 @@ forever. Unknown structural records remain observable as non-searchable
 omissions. A recognized record with a malformed supported field fails that
 session capture rather than silently changing its meaning.
 
-`codex-v2` adds explicit complete/unknown lineage-coverage evidence. A retained
-`codex-v1` candidate is therefore re-read on the next index rather than silently
-reinterpreted; after successful V2 capture, an unchanged candidate again skips
-the rollout read.
+`codex-v2` added explicit complete/unknown lineage-coverage evidence. `codex-v3`
+accepts Codex's distinct thread and group identities while projecting only the
+thread identity. A retained V2 candidate is re-read once under V3 rather than
+silently reinterpreted; after successful V3 capture, an unchanged candidate
+again skips the rollout read.
 
 Sessions reads Codex files without changing them. It stores canonical evidence,
 not raw JSON records, encrypted values, image URLs, local image paths, world
@@ -123,9 +124,12 @@ Deferred, unknown, and skipped records break adjacent-message deduplication.
 | `world_state`                        | none                                                                                        | Known skip                                              |
 | Any other non-empty type             | none                                                                                        | Unknown omission using a safe form of the discriminator |
 
-At least one `session_meta.id` must equal the discovered native thread ID.
-Metadata for another ID is inherited replay context: it does not emit content or
-lineage. When present, `session_id` must equal `id`.
+At least one `session_meta.id` must equal the discovered native thread ID; `id`
+is the thread identity. Metadata for another ID is inherited replay context: it
+does not emit content or lineage. Optional `session_id` is independently
+validated as a non-empty, well-formed group identity shared by a root thread and
+its descendants. It may differ from `id`, is not retained or projected, and is
+not direct lineage evidence.
 
 A state-database spawn edge is authoritative and produces one high-confidence
 `parent` relation. Metadata IDs may only confirm that parent. Without a state
