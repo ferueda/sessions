@@ -7,6 +7,10 @@ import {
   selectSessionSource,
 } from "../../src/application/validate-session.ts";
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
+import {
+  digestPublicSessionDocument,
+  projectPublicSessionDocument,
+} from "../../src/domain/public-session-document.ts";
 import { createTestDocument, createTestIdentity } from "../fixtures/session.ts";
 
 describe("session admission", () => {
@@ -130,10 +134,44 @@ describe("session admission", () => {
     entry.content[0]!.sourceMetadata.fixture = "mutated";
 
     expect(result.replacement.document).toEqual(createTestDocument());
+    expect(result.replacement.documentDigest).toEqual(
+      digestPublicSessionDocument(projectPublicSessionDocument(result.replacement.document)),
+    );
     expect(Object.isFrozen(result.replacement)).toBe(true);
+    expect(Object.isFrozen(result.replacement.documentDigest)).toBe(true);
     expect(
       Object.isFrozen(result.replacement.document.entries[0]?.content[0]?.sourceMetadata),
     ).toBe(true);
+  });
+
+  test("rejects an adapter-supplied document digest instead of accepting an override", () => {
+    const result = admitSessionReplacement(admittedObservation(), {
+      ...createTestDocument(),
+      documentDigest: {
+        scheme: "sha256-sessions-document-jcs-v1",
+        digest: "0".repeat(64),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [{ code: "unexpected-property", path: "/" }],
+      truncated: false,
+    });
+  });
+
+  test("keeps document identity independent from adapter observation metadata", () => {
+    const firstObservation = admittedObservation();
+    const nextCandidate = mutableCandidate();
+    nextCandidate.adapterVersion = "adapter-v2";
+    const nextObservation = admitSessionObservation(nextCandidate);
+    if (!nextObservation.ok) throw new Error("expected admitted next observation");
+
+    const first = admitSessionReplacement(firstObservation, createTestDocument());
+    const next = admitSessionReplacement(nextObservation.observation, createTestDocument());
+
+    if (!first.ok || !next.ok) throw new Error("expected admitted replacements");
+    expect(next.replacement.documentDigest).toEqual(first.replacement.documentDigest);
   });
 
   test("rejects accessor candidates without invoking or reporting their values", () => {

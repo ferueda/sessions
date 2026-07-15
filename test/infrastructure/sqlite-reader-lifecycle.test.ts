@@ -18,7 +18,8 @@ import {
   sqliteMigrations,
 } from "../../src/infrastructure/sqlite/migrations.ts";
 import { createSqliteReadSnapshot } from "../../src/infrastructure/sqlite/read-snapshot.ts";
-import { createTestIdentity } from "../fixtures/session.ts";
+import { counts, finishCompleted, replacement } from "../contracts/session-index.contract.ts";
+import { createTestDocument, createTestIdentity } from "../fixtures/session.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -86,6 +87,43 @@ describe("SQLite reader lifecycle", () => {
     await expect(
       reader.sessions.getFreshness(createTestIdentity("after-close")),
     ).rejects.toBeInstanceOf(SqliteIndexReaderClosedError);
+  });
+
+  test("returns one verified session and attribution from an immutable reader snapshot", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const identity = createTestIdentity("snapshot-session");
+    const admitted = replacement(identity, "snapshot-revision", createTestDocument({ identity }));
+    const writer = await lifecycle.openWriter(paths);
+    const run = await writer.sessions.startRun({
+      source: identity.source,
+      startedAt: "2026-07-15T12:00:00.000Z",
+    });
+    await writer.sessions.replaceSession(run, admitted);
+    await finishCompleted(writer.sessions, run, counts({ discovered: 1, updated: 1 }));
+    await writer.close();
+
+    const reader = await lifecycle.openReader(paths);
+    try {
+      await expect(reader.sessions.getSession(identity)).resolves.toEqual({
+        summary: {
+          identity,
+          title: "Synthetic session",
+          workspace: "/workspace/synthetic",
+          createdAt: "2026-07-13T12:00:00.000Z",
+          updatedAt: "2026-07-13T12:01:00.000Z",
+          freshness: "current",
+          sourceState: "present",
+          capturedAt: "2026-07-15T12:00:00.000Z",
+          sourceObservedAt: "2026-07-15T12:00:00.000Z",
+          adapterVersion: "synthetic-v1",
+          documentDigest: admitted.documentDigest,
+        },
+        document: admitted.document,
+      });
+    } finally {
+      await reader.close();
+    }
   });
 
   test("refuses absent and migration-required state without initializing it", async () => {

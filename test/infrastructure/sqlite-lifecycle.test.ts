@@ -43,8 +43,8 @@ import {
   openSqliteWriterDatabase,
 } from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
 
-const PRIOR_COMPACT_CONTENT_BOOTSTRAP_CHECKSUM =
-  "sha256-utf8-v1:512e19690e3a12774372c06c23feb61d6a261309732428e320f998129cdd852b";
+const PRIOR_DOCUMENT_DIGEST_BOOTSTRAP_CHECKSUM =
+  "sha256-utf8-v1:9e2233fa22b3dc8f999252985e3a65a036198d773ac4ebe6d787fd45ddbc2e5e";
 
 const temporaryDirectories: string[] = [];
 
@@ -239,7 +239,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     mutateDatabase(checksumPaths.database, (database) => {
       database
         .prepare("UPDATE sessions_schema_migrations SET checksum = ? WHERE version = 1")
-        .run(PRIOR_COMPACT_CONTENT_BOOTSTRAP_CHECKSUM);
+        .run(PRIOR_DOCUMENT_DIGEST_BOOTSTRAP_CHECKSUM);
     });
     const obsoleteBytes = await readFile(checksumPaths.database);
     await expect(lifecycle.inspect(checksumPaths)).resolves.toMatchObject({

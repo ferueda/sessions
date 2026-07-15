@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { forgetSession } from "../../src/application/forget-session.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { SESSION_DOCUMENT_DIGEST_SCHEME } from "../../src/domain/public-session-document.ts";
 import type { SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
@@ -274,10 +275,18 @@ function seedRetainedEvidence(database: DatabaseSync): void {
   const retainedId = insertTracking(database, sourceId, "retained");
   database
     .prepare(
-      `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage)
-       VALUES (?, 'unknown'), (?, 'unknown')`,
+      `INSERT INTO sessions_canonical_sessions (
+         session_id, lineage_coverage, document_digest_scheme, document_digest
+       ) VALUES (?, 'unknown', ?, ?), (?, 'unknown', ?, ?)`,
     )
-    .run(targetId, retainedId);
+    .run(
+      targetId,
+      SESSION_DOCUMENT_DIGEST_SCHEME,
+      new Uint8Array(32),
+      retainedId,
+      SESSION_DOCUMENT_DIGEST_SCHEME,
+      new Uint8Array(32),
+    );
   insertEntry(database, targetId, "memory://target");
   insertEntry(database, retainedId, "memory://retained");
 

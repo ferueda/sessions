@@ -7,6 +7,11 @@ import type {
 } from "../../application/ports/session-index.ts";
 import type { SessionRevision } from "../../application/validate-session.ts";
 import type { SessionIdentity } from "../../domain/session.ts";
+import {
+  EFFECTIVE_SOURCE_OBSERVED_AT_SQL,
+  EFFECTIVE_SOURCE_STATE_SQL,
+} from "./sqlite-query-filters.ts";
+import { decodeSqliteDocumentDigest } from "./sqlite-document-digest.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
 const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
@@ -135,8 +140,10 @@ export function readSessionSummary(
               canonical.created_at,
               canonical.updated_at,
               tracking.captured_at,
-              tracking.presence_status,
-              source.coverage_status
+              canonical.document_digest_scheme,
+              canonical.document_digest,
+              ${EFFECTIVE_SOURCE_STATE_SQL} AS source_state,
+              ${EFFECTIVE_SOURCE_OBSERVED_AT_SQL} AS source_observed_at
        FROM sessions_canonical_sessions AS canonical
        JOIN sessions_session_tracking AS tracking
          ON tracking.session_id = canonical.session_id
@@ -154,25 +161,29 @@ export function readSessionSummary(
   if (freshness.status !== "current" && freshness.status !== "stale") {
     throw new SqliteSessionIndexError("corrupt-data");
   }
-  return summaryFromRow(identity, row, freshness.status);
+  return summaryFromRow(identity, row, freshness);
 }
 
 function summaryFromRow(
   identity: SessionIdentity,
   row: SummaryRow,
-  freshness: "current" | "stale",
+  freshness: RetainedSessionFreshness,
 ): IndexedSessionSummary {
-  const sourceState = effectiveSourceState(row.coverage_status, row.presence_status);
-  assertOptionalCanonicalTimestamp(row.captured_at);
+  const sourceState = effectiveSourceStateAt(row.source_state);
+  const capturedAt = canonicalTimestampAt(row.captured_at);
+  const sourceObservedAt = canonicalTimestampAt(row.source_observed_at);
   return {
     identity: copyIdentity(identity),
     ...optional("title", row.title),
     ...optional("workspace", row.workspace),
     ...optional("createdAt", row.created_at),
     ...optional("updatedAt", row.updated_at),
-    freshness,
+    freshness: freshness.status,
     sourceState,
-    ...optional("capturedAt", row.captured_at),
+    capturedAt,
+    sourceObservedAt,
+    adapterVersion: freshness.lastGood.adapterVersion,
+    documentDigest: decodeSqliteDocumentDigest(row.document_digest_scheme, row.document_digest),
   };
 }
 
@@ -255,24 +266,21 @@ interface SummaryRow {
   readonly workspace: string | null;
   readonly created_at: string | null;
   readonly updated_at: string | null;
-  readonly captured_at: string | null;
-  readonly presence_status: unknown;
-  readonly coverage_status: unknown;
+  readonly captured_at: unknown;
+  readonly source_state: unknown;
+  readonly source_observed_at: unknown;
+  readonly document_digest_scheme: unknown;
+  readonly document_digest: unknown;
 }
 
-function effectiveSourceState(
-  coverage: unknown,
-  presence: unknown,
-): IndexedSessionSummary["sourceState"] {
-  if (coverage === "unknown") return "unknown";
-  if (coverage === "complete" && (presence === "present" || presence === "missing")) {
-    return presence;
-  }
+type RetainedSessionFreshness = Extract<SessionFreshness, { readonly status: "current" | "stale" }>;
+
+function effectiveSourceStateAt(value: unknown): IndexedSessionSummary["sourceState"] {
+  if (value === "present" || value === "missing" || value === "unknown") return value;
   throw new SqliteSessionIndexError("corrupt-data");
 }
 
-function assertOptionalCanonicalTimestamp(value: unknown): void {
-  if (value === null) return;
+function canonicalTimestampAt(value: unknown): string {
   if (typeof value !== "string") throw new SqliteSessionIndexError("corrupt-data");
   const milliseconds = Date.parse(value);
   if (
@@ -282,4 +290,5 @@ function assertOptionalCanonicalTimestamp(value: unknown): void {
   ) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
+  return value;
 }

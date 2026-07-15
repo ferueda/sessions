@@ -19,6 +19,7 @@ import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
+import { decodeSqliteDocumentDigest } from "../../src/infrastructure/sqlite/sqlite-document-digest.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
@@ -93,6 +94,7 @@ describe("SQLite session index", () => {
       await index.replaceSession(run, admitted);
 
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(admitted.document);
+      expect(storedDocumentDigest(database)).toEqual(admitted.documentDigest);
       expect(rowCount(database, "sessions_content_values")).toBe(2);
       expect(ftsCount(database, "before")).toBe(1);
       expect(ftsCount(database, "input")).toBe(0);
@@ -275,6 +277,8 @@ describe("SQLite session index", () => {
           .get(),
       ).toEqual({ source_metadata_json: '{"10":"ten","2":"two"}' });
       const baselineContentRows = contentRows(database);
+      const baselineDocumentDigest = storedDocumentDigest(database);
+      expect(baselineDocumentDigest).toEqual(baseline.documentDigest);
       await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
 
       const nextObservation = observation(sessionIdentity, "revision-b");
@@ -299,6 +303,7 @@ describe("SQLite session index", () => {
         /forced replacement commit abort/u,
       );
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
+      expect(storedDocumentDigest(database)).toEqual(baselineDocumentDigest);
       await expect(index.getFreshness(sessionIdentity)).resolves.toEqual({
         status: "stale",
         identity: sessionIdentity,
@@ -317,6 +322,8 @@ describe("SQLite session index", () => {
       database.exec("DROP TRIGGER test_abort_replacement_commit");
       await index.replaceSession(replacementRun, next);
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(next.document);
+      expect(storedDocumentDigest(database)).toEqual(next.documentDigest);
+      expect(next.documentDigest).not.toEqual(baselineDocumentDigest);
       expect(ftsCount(database, "old")).toBe(0);
       expect(ftsCount(database, "replacement")).toBe(1);
       expectFtsIntegrity(database);
@@ -325,6 +332,83 @@ describe("SQLite session index", () => {
         replacementRun,
         counts({ discovered: 2, updated: 1, failed: 1, stale: 1 }),
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  test("reads stored attribution directly but fails full reads on a mismatching digest", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("digest-corruption-profile", "digest-corruption-session");
+      const admitted = replacement(
+        sessionIdentity,
+        "revision-a",
+        completeDocument(sessionIdentity),
+      );
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      await index.replaceSession(run, admitted);
+      database
+        .prepare("UPDATE sessions_canonical_sessions SET document_digest = zeroblob(32)")
+        .run();
+
+      await expect(index.getSummary(sessionIdentity)).resolves.toMatchObject({
+        documentDigest: { digest: "0".repeat(64) },
+      });
+      await expect(index.getDocument(sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+      await expect(index.getSession(sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "missing capture time",
+      mutate(database: DatabaseSync) {
+        database.prepare("UPDATE sessions_session_tracking SET captured_at = NULL").run();
+      },
+    },
+    {
+      name: "missing effective source observation",
+      mutate(database: DatabaseSync) {
+        database.prepare("UPDATE sessions_source_instances SET coverage_observed_at = NULL").run();
+      },
+    },
+    {
+      name: "malformed last-good adapter version",
+      mutate(database: DatabaseSync) {
+        database
+          .prepare("UPDATE sessions_session_tracking SET last_good_adapter_version = ''")
+          .run();
+      },
+    },
+  ])("fails retained summary reads for $name", async ({ mutate }) => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("attribution-corruption-profile", "retained-session");
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      await index.replaceSession(
+        run,
+        replacement(sessionIdentity, "revision-a", minimalDocument(sessionIdentity)),
+      );
+      mutate(database);
+
+      await expect(index.getSummary(sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
     } finally {
       database.close();
     }
@@ -604,6 +688,18 @@ function migratedDatabase(): DatabaseSync {
   database.exec("PRAGMA trusted_schema = OFF");
   applyMigrations(database);
   return database;
+}
+
+function storedDocumentDigest(database: DatabaseSync) {
+  const row = database
+    .prepare(
+      `SELECT document_digest_scheme, document_digest
+       FROM sessions_canonical_sessions`,
+    )
+    .get() as
+    | { readonly document_digest_scheme?: unknown; readonly document_digest?: unknown }
+    | undefined;
+  return decodeSqliteDocumentDigest(row?.document_digest_scheme, row?.document_digest);
 }
 
 function ftsCount(database: DatabaseSync, query: string): number {

@@ -11,7 +11,10 @@ import {
   createSessionSearchQuery,
 } from "../../src/domain/session-query.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
-import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
+import {
+  createCoordinatedSqliteSessionIndex,
+  createSqliteSessionIndexReader,
+} from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
@@ -207,6 +210,47 @@ describe("SQLite session query", () => {
       interruptOwnedRunsAndReleaseWriterLease(fixture.database, lease, {
         now: () => new Date("2026-07-14T15:00:00.000Z"),
       });
+      fixture.database.close();
+    }
+  });
+
+  test("returns stored list/search digests without reconstructing a corrupt document", async () => {
+    const fixture = await seededQueryFixture();
+    const identity = sessionQueryCorpusIdentity("a-session");
+    try {
+      fixture.database
+        .prepare(
+          `UPDATE sessions_canonical_sessions
+           SET document_digest = zeroblob(32)
+           WHERE session_id = (
+             SELECT tracking.session_id
+             FROM sessions_session_tracking AS tracking
+             JOIN sessions_source_instances AS source
+               ON source.source_instance_id = tracking.source_instance_id
+             WHERE source.kind = ? AND source.instance_id = ? AND tracking.native_id = ?
+           )`,
+        )
+        .run(identity.source.kind, identity.source.instanceId, identity.nativeId);
+      const repository = createSqliteSessionQuery(fixture.database);
+
+      const listed = await repository.list(
+        createSessionListQuery({ filter: { session: identity }, limit: 20 }),
+      );
+      const searched = await repository.search(
+        createSessionSearchQuery({
+          text: "MAGIC_LATE_MATCH",
+          filter: { session: identity },
+          limit: 20,
+          context: 0,
+        }),
+      );
+
+      expect(listed.sessions[0]?.documentDigest.digest).toBe("0".repeat(64));
+      expect(searched.hits[0]?.session.documentDigest.digest).toBe("0".repeat(64));
+      await expect(
+        createSqliteSessionIndexReader(fixture.database).getDocument(identity),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+    } finally {
       fixture.database.close();
     }
   });

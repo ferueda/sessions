@@ -8,9 +8,14 @@ import {
   type SessionIndexWriter,
 } from "../../application/ports/session-index.ts";
 import type { SessionObservation } from "../../application/validate-session.ts";
+import { sameSessionDocumentDigest } from "../../domain/public-session-document.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity, SourceInstance } from "../../domain/session.ts";
-import { readCanonicalDocument, replaceCanonicalDocument } from "./sqlite-session-document.ts";
+import {
+  readCanonicalDocument,
+  readCanonicalDocumentRecord,
+  replaceCanonicalDocument,
+} from "./sqlite-session-document.ts";
 import { readImmutableIndexRunResult } from "./sqlite-index-run-result.ts";
 import {
   findSessionTracking,
@@ -65,10 +70,13 @@ export function createSqliteSessionIndexReader(database: DatabaseSync): SessionI
       assertIdentity(identity);
       const row = findSessionTracking(database, identity);
       if (row === undefined) return undefined;
-      const document = readCanonicalDocument(database, identity, integerAt(row.session_id));
+      const canonical = readCanonicalDocumentRecord(database, identity, integerAt(row.session_id));
       const summary = readSessionSummary(database, identity);
-      if (document === undefined || summary === undefined) return undefined;
-      return { summary, document };
+      if (canonical === undefined || summary === undefined) return undefined;
+      if (!sameSessionDocumentDigest(canonical.documentDigest, summary.documentDigest)) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      return { summary, document: canonical.document };
     },
   };
 }
@@ -174,7 +182,12 @@ export function createCoordinatedSqliteSessionIndex(
             null,
             run.startedAt,
           );
-          replaceCanonicalDocument(database, sessionId, replacement.document);
+          replaceCanonicalDocument(
+            database,
+            sessionId,
+            replacement.document,
+            replacement.documentDigest,
+          );
           updateSuccessfulRevision(database, sessionId, replacement.observation, run.startedAt);
           incrementRun(database, context.runId, "indexed");
         });

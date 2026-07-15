@@ -53,12 +53,22 @@ export function runSessionIndexContract(
         freshness: "current",
         sourceState: "unknown",
         capturedAt: "2026-07-13T12:00:00.000Z",
+        sourceObservedAt: "2026-07-13T12:00:00.000Z",
+        adapterVersion: "synthetic-v1",
+        documentDigest: first.documentDigest,
       });
       await expect(fixture.index.getSummary(secondIdentity)).resolves.toEqual({
         identity: secondIdentity,
         freshness: "current",
         sourceState: "unknown",
         capturedAt: "2026-07-13T12:00:00.000Z",
+        sourceObservedAt: "2026-07-13T12:00:00.000Z",
+        adapterVersion: "synthetic-v1",
+        documentDigest: second.documentDigest,
+      });
+      await expect(fixture.index.getSession(firstIdentity)).resolves.toMatchObject({
+        summary: { documentDigest: first.documentDigest },
+        document: first.document,
       });
 
       await finishCompleted(fixture.index, firstRun, counts({ discovered: 1, updated: 1 }));
@@ -73,7 +83,7 @@ export function runSessionIndexContract(
     try {
       const sessionIdentity = identity("profile-one", "freshness-session");
       const firstObservation = observation(sessionIdentity, "revision-a");
-      const changedObservation = observation(sessionIdentity, "revision-b");
+      const changedObservation = observation(sessionIdentity, "revision-b", "synthetic-v2");
       const baseline = admittedReplacement(firstObservation, completeDocument(sessionIdentity));
       const initialRun = await fixture.index.startRun(runInput(sessionIdentity.source));
       await fixture.index.replaceSession(initialRun, baseline);
@@ -96,6 +106,13 @@ export function runSessionIndexContract(
         },
       });
       await expect(fixture.index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
+      await expect(fixture.index.getSummary(sessionIdentity)).resolves.toMatchObject({
+        freshness: "stale",
+        capturedAt: "2026-07-13T12:00:00.000Z",
+        sourceObservedAt: "2026-07-13T13:00:00.000Z",
+        adapterVersion: "synthetic-v1",
+        documentDigest: baseline.documentDigest,
+      });
       await finishCompleted(
         fixture.index,
         failedRun,
@@ -115,6 +132,13 @@ export function runSessionIndexContract(
         identity: sessionIdentity,
         lastGood: firstObservation.revision,
         latest: { outcome: "unchanged", revision: firstObservation.revision },
+      });
+      await expect(fixture.index.getSummary(sessionIdentity)).resolves.toMatchObject({
+        freshness: "current",
+        capturedAt: "2026-07-13T12:00:00.000Z",
+        sourceObservedAt: "2026-07-13T14:00:00.000Z",
+        adapterVersion: "synthetic-v1",
+        documentDigest: baseline.documentDigest,
       });
       await finishCompleted(fixture.index, unchangedRun, counts({ discovered: 1, unchanged: 1 }));
     } finally {
@@ -156,6 +180,13 @@ export function runSessionIndexContract(
         latest: { outcome: "indexed", revision: indexed.observation.revision },
       });
       await expect(fixture.index.getDocument(indexedIdentity)).resolves.toEqual(indexed.document);
+      await expect(fixture.index.getSummary(indexedIdentity)).resolves.toMatchObject({
+        sourceState: "unknown",
+        capturedAt: "2026-07-13T13:00:00.000Z",
+        sourceObservedAt: "2026-07-13T13:00:00.000Z",
+        adapterVersion: "synthetic-v1",
+        documentDigest: indexed.documentDigest,
+      });
       await fixture.index.replaceSession(indexRun, indexed);
       await expect(fixture.index.getFreshness(indexedIdentity)).resolves.toEqual({
         status: "current",
@@ -183,6 +214,7 @@ export function identity(instanceId: string, nativeId: string): SessionIdentity 
 export function observation(
   sessionIdentity: SessionIdentity,
   revisionSeed: string,
+  adapterVersion = "synthetic-v1",
 ): SessionObservation {
   const candidate = createDiscoveredSession({
     identity: sessionIdentity,
@@ -193,7 +225,7 @@ export function observation(
         fingerprint: revisionSeed,
       },
     ],
-    adapterVersion: "synthetic-v1",
+    adapterVersion,
   });
   const result = admitSessionObservation(candidate);
   if (!result.ok) throw new Error("Synthetic observation must be admitted");

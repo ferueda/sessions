@@ -14,6 +14,15 @@ const identity = {
   source: { kind: "synthetic", instanceId: "one" },
   nativeId: "session",
 } as const;
+const retainedAttribution = {
+  capturedAt: "2026-07-14T00:00:00.000Z",
+  sourceObservedAt: "2026-07-14T00:00:00.000Z",
+  adapterVersion: "synthetic-v1",
+  documentDigest: {
+    scheme: "sha256-sessions-document-jcs-v1",
+    digest: "0".repeat(64),
+  },
+} as const;
 
 describe("human CLI rendering", () => {
   test.each([
@@ -89,10 +98,10 @@ describe("human CLI rendering", () => {
     const result: ShowSessionResult = {
       summary: {
         identity,
+        ...retainedAttribution,
         title: "title\u001b[31m",
         freshness: "current",
         sourceState: "missing",
-        capturedAt: "2026-07-14T00:00:00.000Z",
       },
       entries: [
         {
@@ -149,6 +158,7 @@ describe("human CLI rendering", () => {
       sessions: [
         {
           identity,
+          ...retainedAttribution,
           title: oversized,
           freshness: "current",
           sourceState: "present",
@@ -156,7 +166,12 @@ describe("human CLI rendering", () => {
       ],
     });
     const show = renderShow({
-      summary: { identity, freshness: "current", sourceState: "present" },
+      summary: {
+        identity,
+        ...retainedAttribution,
+        freshness: "current",
+        sourceState: "present",
+      },
       entries: [
         {
           ordinal: 0,
@@ -193,6 +208,7 @@ describe("human CLI rendering", () => {
         {
           session: {
             identity,
+            ...retainedAttribution,
             title: "match\u001b[31m",
             freshness: "current",
             sourceState: "present",

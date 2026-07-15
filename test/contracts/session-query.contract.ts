@@ -370,6 +370,16 @@ async function expectStateAt(
     }),
   );
   expect(result.sessions.map(({ identity: found }) => key(found))).toEqual([key(identity)]);
+  expect(result.sessions[0]).toMatchObject({
+    sourceState,
+    sourceObservedAt: observedAt,
+    adapterVersion: "synthetic-v1",
+    documentDigest: {
+      scheme: "sha256-sessions-document-jcs-v1",
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    },
+  });
+  expect(result.sessions[0]?.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
 }
 
 function search(query: SessionQueryRepository, text: string, session?: SessionIdentity) {
