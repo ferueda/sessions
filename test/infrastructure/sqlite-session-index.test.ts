@@ -201,6 +201,55 @@ describe("SQLite session index", () => {
     }
   });
 
+  test.each([-1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n])(
+    "rejects associated content ID %s before replacing canonical rows",
+    async (invalidContentId) => {
+      const database = migratedDatabase();
+      const index = createIndex(database);
+      try {
+        const sessionIdentity = identity("invalid-content-id-profile", String(invalidContentId));
+        const baseline = replacement(sessionIdentity, "revision-a", {
+          ...minimalDocument(sessionIdentity),
+          entries: [entry(0, "retained canonical evidence")],
+        });
+        const run = await index.startRun({
+          source: sessionIdentity.source,
+          startedAt: "2026-07-13T12:00:00.000Z",
+        });
+        await index.replaceSession(run, baseline);
+
+        database.exec("PRAGMA foreign_keys = OFF; DROP TRIGGER sessions_content_values_bu");
+        database
+          .prepare("UPDATE sessions_content_occurrences SET content_id = ?")
+          .run(invalidContentId);
+        database.prepare("UPDATE sessions_content_values SET content_id = ?").run(invalidContentId);
+        database.exec("PRAGMA foreign_keys = ON");
+
+        await expect(
+          index.replaceSession(
+            run,
+            replacement(sessionIdentity, "revision-b", {
+              ...minimalDocument(sessionIdentity),
+              entries: [entry(0, "replacement canonical evidence")],
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "corrupt-data" });
+
+        expect(rowCount(database, "sessions_canonical_sessions")).toBe(1);
+        expect(rowCount(database, "sessions_entries")).toBe(1);
+        expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
+        expect(database.prepare("SELECT text FROM sessions_content_values").all()).toEqual([
+          { text: "retained canonical evidence" },
+        ]);
+        const statement = database.prepare("SELECT content_id FROM sessions_content_occurrences");
+        statement.setReadBigInts(true);
+        expect(statement.get()).toEqual({ content_id: invalidContentId });
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   test("rolls back a forced replacement failure, records staleness, and retries cleanly", async () => {
     const database = migratedDatabase();
     const index = createIndex(database);

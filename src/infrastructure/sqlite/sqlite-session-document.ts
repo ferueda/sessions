@@ -23,6 +23,9 @@ export function replaceCanonicalDocument(
   document: SessionDocument,
 ): void {
   const obsoleteContentCandidates = readSessionContentCandidates(database, sessionId);
+  // Replacement keeps its established fail-closed JS-safe canonical ID boundary;
+  // storage maintenance uses the shared helper with full signed SQLite IDs.
+  for (const contentId of obsoleteContentCandidates) integerAt(contentId);
   database.prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?").run(sessionId);
   database
     .prepare(
