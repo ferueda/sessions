@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: M6 behavior implemented; later V1 behavior labeled
-- Last updated: 2026-07-14
+- Last updated: 2026-07-15
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -18,8 +18,9 @@ not a best-effort feature.
   Neither case automatically deletes retained content.
 - List, search, and show use only the Sessions library after indexing. They never
   reopen a provider transcript.
-- No TTL or automatic pruning exists. Only explicit `sessions forget` or
-  `sessions data clear --yes` removes retained content.
+- No TTL or automatic pruning exists. Only explicit `sessions forget`,
+  `sessions data repair-orphans`, or `sessions data clear --yes` removes
+  canonical content.
 - `sessions data compact` changes only physical allocation in the Sessions
   database. It never removes canonical rows or reads a provider.
 - Paths and doctor inspect library/source readiness without indexing, creating
@@ -65,8 +66,10 @@ Canonical sessions and capture/source-observation state are durable user data.
 FTS and bounded operational diagnostics are rebuildable derived state even though
 they share the database. During an explicit leased index, FTS-only damage can be
 rebuilt from canonical content after canonical integrity succeeds. Doctor only
-reports the condition. Repair never rereads a provider or deletes canonical
-evidence, and there is no public repair command.
+reports the condition; FTS projection repair never rereads a provider or deletes
+canonical evidence and has no public command. `sessions data repair-orphans` is
+a separate public canonical-deletion operation for content that no retained
+occurrence reaches. It never rebuilds FTS or resolves a provider.
 
 ## Codex capture
 
@@ -123,6 +126,16 @@ that identity's detailed historical run items while preserving aggregate run
 counts. Shared text and incoming relations owned by other retained sessions can
 remain. If the provider still exposes the session, a later index can capture it
 again.
+
+`sessions doctor` reports canonical content reachability without mutating the
+library. `sessions data repair-orphans` explicitly deletes content values that
+no retained occurrence reaches. It uses a dedicated writer lease and fixed
+internal committed batches; a failure can leave completed batches durably
+deleted, and a fresh invocation safely restarts. The command exposes no limit,
+cursor, or partial-progress contract. Its deleted-row and deleted-byte totals are
+aggregate decimal strings; bytes mean the exact logical UTF-8 text payload, not
+database or filesystem space. A later doctor invocation can verify that
+reachability is healthy. Provider histories remain untouched throughout.
 
 Logical deletion makes whole freed pages reusable inside SQLite but does not
 promise immediate main-file shrink. `sessions data compact` is the explicit

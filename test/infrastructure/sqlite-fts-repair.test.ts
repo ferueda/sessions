@@ -42,6 +42,8 @@ describe("SQLite FTS projection repair", () => {
       ok: false,
       canonicalIntegrity: "ok",
       foreignKeys: "ok",
+      contentReachability: "orphaned",
+      orphanContentRows: "1",
       ftsStructure: "failed",
       ftsContent: "failed",
       ftsRemediation: "rebuild-required",
@@ -72,9 +74,11 @@ describe("SQLite FTS projection repair", () => {
     expect(readCanonicalRows(paths.database)).toEqual(canonicalBefore);
     expectCanonicalDuplicateGuard(paths.database, contentHash.digest, text);
     await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
-      ok: true,
+      ok: false,
       canonicalIntegrity: "ok",
       foreignKeys: "ok",
+      contentReachability: "orphaned",
+      orphanContentRows: "1",
       ftsStructure: "ok",
       ftsContent: "ok",
       ftsRemediation: "not-needed",

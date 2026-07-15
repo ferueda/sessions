@@ -9,12 +9,5 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active storage-hardening plan:
-
-- [Expose and repair orphaned canonical content](260714-orphan-observability-repair.md)
-
-Deletion and physical compaction are complete. Reconcile the orphan-repair plan
-with the landed schema, page-reclamation health, and `compact` lease contract
-before implementation.
-
-Resume M7 after the storage-hardening sequence is complete.
+There are no active executor plans. Storage hardening is complete. Resume M7 as
+the next roadmap work.

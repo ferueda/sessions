@@ -47,6 +47,9 @@ function healthDetails(health: ReadyIndexHealth): Readonly<Record<string, string
   return {
     canonicalIntegrity: health.canonicalIntegrity,
     foreignKeys: health.foreignKeys,
+    contentReachability: health.contentReachability,
+    orphanContentRows: health.orphanContentRows,
+    orphanContentBytes: health.orphanContentBytes,
     ftsStructure: health.ftsStructure,
     ftsContent: health.ftsContent,
     ftsSecureDelete: health.ftsSecureDelete,

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { createCodexSource } from "../adapters/codex/source.ts";
 import { clearData } from "../application/clear-index.ts";
 import { compactIndex } from "../application/compact-index.ts";
+import { repairOrphanedContent } from "../application/repair-orphaned-content.ts";
 import { forgetSession } from "../application/forget-session.ts";
 import { getPaths } from "../application/get-paths.ts";
 import { listSessions } from "../application/list-sessions.ts";
@@ -101,6 +102,7 @@ const exitCode = await runCli(process.argv.slice(2), {
   forget: (identity) => forgetSession(resolvePaths(), maintenance, identity),
   clearData: () => clearData(resolvePaths(), maintenance),
   compactData: () => compactIndex(resolvePaths(), maintenance),
+  repairOrphanedData: () => repairOrphanedContent(resolvePaths(), maintenance),
 });
 
 process.exitCode = exitCode;

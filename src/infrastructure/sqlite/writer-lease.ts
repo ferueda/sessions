@@ -6,7 +6,7 @@ import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
 const LEASE_DURATION_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-export type WriterLeasePurpose = "index" | "forget" | "clear" | "compact";
+export type WriterLeasePurpose = "index" | "forget" | "repair" | "clear" | "compact";
 export type SqliteWriterLeaseErrorCode = "writer-busy" | "writer-lease-lost" | "corrupt-data";
 
 export class SqliteWriterLeaseError extends Error {
@@ -453,7 +453,13 @@ function integerAt(value: unknown): number {
 }
 
 function isPurpose(value: unknown): value is WriterLeasePurpose {
-  return value === "index" || value === "forget" || value === "clear" || value === "compact";
+  return (
+    value === "index" ||
+    value === "forget" ||
+    value === "repair" ||
+    value === "clear" ||
+    value === "compact"
+  );
 }
 
 function assertCanonicalTimestamp(value: string): void {

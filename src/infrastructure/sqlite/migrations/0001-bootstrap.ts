@@ -271,7 +271,7 @@ CREATE TABLE sessions_index_run_items (
 CREATE TABLE sessions_writer_lease (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   generation INTEGER NOT NULL CHECK (generation >= 0),
-  purpose TEXT CHECK (purpose IN ('index', 'forget', 'clear', 'compact')),
+  purpose TEXT CHECK (purpose IN ('index', 'forget', 'repair', 'clear', 'compact')),
   owner_token TEXT CHECK (owner_token <> ''),
   acquired_at TEXT,
   heartbeat_at TEXT,

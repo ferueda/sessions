@@ -10,6 +10,10 @@ import type {
   SessionRelation,
   TextContentSegment,
 } from "../../domain/session.ts";
+import {
+  deleteUnreferencedContentCandidates,
+  readSessionContentCandidates,
+} from "./sqlite-content-maintenance.ts";
 import { decodeSqliteContentDigest, encodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
@@ -18,7 +22,10 @@ export function replaceCanonicalDocument(
   sessionId: number,
   document: SessionDocument,
 ): void {
-  const obsoleteContentCandidates = readContentCandidates(database, sessionId);
+  const obsoleteContentCandidates = readSessionContentCandidates(database, sessionId);
+  // Replacement keeps its established fail-closed JS-safe canonical ID boundary;
+  // storage maintenance uses the shared helper with full signed SQLite IDs.
+  for (const contentId of obsoleteContentCandidates) integerAt(contentId);
   database.prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?").run(sessionId);
   database
     .prepare(
@@ -42,7 +49,7 @@ export function replaceCanonicalDocument(
 
   insertRelations(database, sessionId, document.relations);
   insertEntries(database, sessionId, document.entries);
-  deleteUnreferencedContent(database, obsoleteContentCandidates);
+  deleteUnreferencedContentCandidates(database, obsoleteContentCandidates);
 }
 
 export function readCanonicalDocument(
@@ -74,32 +81,6 @@ export function readCanonicalDocument(
   const validated = validateSessionDocument(candidate, { expectedIdentity: identity });
   if (!validated.ok) throw new SqliteSessionIndexError("corrupt-data");
   return validated.document;
-}
-
-function readContentCandidates(database: DatabaseSync, sessionId: number): readonly number[] {
-  const rows = database
-    .prepare(
-      `SELECT DISTINCT content_id
-       FROM sessions_content_occurrences
-       WHERE session_id = ? AND content_id IS NOT NULL
-       ORDER BY content_id`,
-    )
-    .all(sessionId) as unknown as readonly { readonly content_id?: unknown }[];
-  return rows.map((row) => integerAt(row.content_id));
-}
-
-function deleteUnreferencedContent(database: DatabaseSync, candidates: readonly number[]): void {
-  if (candidates.length === 0) return;
-  const statement = database.prepare(
-    `DELETE FROM sessions_content_values
-     WHERE content_id = ?
-       AND NOT EXISTS (
-         SELECT 1
-         FROM sessions_content_occurrences AS occurrence
-         WHERE occurrence.content_id = sessions_content_values.content_id
-       )`,
-  );
-  for (const contentId of candidates) statement.run(contentId);
 }
 
 function insertRelations(

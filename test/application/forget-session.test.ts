@@ -26,6 +26,7 @@ describe("forgetSession", () => {
       clear: vi.fn<IndexMaintenance["clear"]>(),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockResolvedValue(outcome),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(forgetSession(paths, maintenance, identity)).resolves.toEqual({
@@ -47,6 +48,7 @@ describe("forgetSession", () => {
       clear: vi.fn<IndexMaintenance["clear"]>(),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockRejectedValue(failure),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(forgetSession(paths, maintenance, identity)).rejects.toBe(failure);
@@ -58,6 +60,7 @@ describe("forgetSession", () => {
       clear: vi.fn<IndexMaintenance["clear"]>(),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>().mockRejectedValue(busy),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(forgetSession(paths, maintenance, identity)).rejects.toMatchObject({

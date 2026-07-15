@@ -96,7 +96,7 @@ describe("SQLite session forget maintenance", () => {
       expect(count(database, "sessions_canonical_sessions")).toBe(1);
       expect(count(database, "sessions_entries")).toBe(1);
       expect(count(database, "sessions_content_occurrences")).toBe(1);
-      expect(count(database, "sessions_content_values")).toBe(1);
+      expect(count(database, "sessions_content_values")).toBe(2);
       expect(count(database, "sessions_index_runs")).toBe(1);
       expect(count(database, "sessions_index_run_items")).toBe(0);
       expect(
@@ -125,6 +125,7 @@ describe("SQLite session forget maintenance", () => {
       });
       expect(ftsCount(database, "shared")).toBe(1);
       expect(ftsCount(database, "private")).toBe(0);
+      expect(ftsCount(database, "unrelated")).toBe(1);
       expect(readWriterLeaseHealth(database, { now })).toEqual({
         status: "free",
         generation: 1,
@@ -172,6 +173,42 @@ describe("SQLite session forget maintenance", () => {
       );
     } finally {
       unchanged.close();
+    }
+  });
+
+  test("rolls back target deletion when its FTS delete trigger fails", async () => {
+    const paths = await seededCurrentPaths();
+    const damaged = new DatabaseSync(paths.database);
+    try {
+      damaged.exec(`DROP TRIGGER sessions_content_values_bd;
+        CREATE TRIGGER sessions_content_values_bd
+        BEFORE DELETE ON sessions_content_values
+        BEGIN
+          SELECT RAISE(ABORT, 'synthetic FTS delete failure');
+        END;`);
+    } finally {
+      damaged.close();
+    }
+
+    await expect(
+      forgetSession(
+        paths,
+        createSqliteIndexMaintenance({ now, token: () => "failing-forget-owner" }),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "forget-failed" });
+
+    const database = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(count(database, "sessions_session_tracking")).toBe(2);
+      expect(count(database, "sessions_index_run_items")).toBe(2);
+      expect(count(database, "sessions_content_values")).toBe(3);
+      expect(ftsCount(database, "private")).toBe(1);
+      expect(database.prepare("SELECT omitted_item_count FROM sessions_index_runs").get()).toEqual({
+        omitted_item_count: 0,
+      });
+    } finally {
+      database.close();
     }
   });
 
@@ -246,6 +283,7 @@ function seedRetainedEvidence(database: DatabaseSync): void {
 
   const sharedId = insertContent(database, "a".repeat(64), "shared evidence");
   const privateId = insertContent(database, "b".repeat(64), "private target evidence");
+  insertContent(database, "c".repeat(64), "unrelated orphan evidence");
   insertOccurrence(database, targetId, 0, sharedId);
   insertOccurrence(database, targetId, 1, privateId);
   insertOccurrence(database, retainedId, 0, sharedId);

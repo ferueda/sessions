@@ -56,6 +56,9 @@ describe("createIndexStateDiagnostic", () => {
         schemaVersion: "1",
         canonicalIntegrity: "ok",
         foreignKeys: "ok",
+        contentReachability: "ok",
+        orphanContentRows: "0",
+        orphanContentBytes: "0",
         ftsStructure: "ok",
         ftsContent: "ok",
         ftsSecureDelete: "enabled",
@@ -98,6 +101,9 @@ describe("createIndexStateDiagnostic", () => {
         supportedSchemaVersion: "1",
         canonicalIntegrity: "ok",
         foreignKeys: "ok",
+        contentReachability: "ok",
+        orphanContentRows: "0",
+        orphanContentBytes: "0",
         ftsStructure: "ok",
         ftsContent: "failed",
         ftsSecureDelete: "enabled",
@@ -143,6 +149,23 @@ describe("createIndexStateDiagnostic", () => {
     expect(outcome).toMatchObject({
       ok: true,
       details: { writerLease: "compact-live" },
+    });
+  });
+
+  test("reports repair lease ownership without exposing private details", async () => {
+    const outcome = await diagnosticFor(
+      {
+        status: "ready",
+        initialized: true,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
+      },
+      { ...healthyIndex, writerLease: "repair-live" },
+    ).run();
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      details: { writerLease: "repair-live" },
     });
   });
 
@@ -238,6 +261,9 @@ const healthyIndex: ReadyIndexHealth = {
   ok: true,
   canonicalIntegrity: "ok",
   foreignKeys: "ok",
+  contentReachability: "ok",
+  orphanContentRows: "0",
+  orphanContentBytes: "0",
   ftsStructure: "ok",
   ftsContent: "ok",
   ftsSecureDelete: "enabled",
