@@ -46,6 +46,7 @@
     "format:docs:check": "oxfmt --check \"**/*.md\"",
     "lint": "oxlint -c .oxlintrc.json src scripts test vitest.config.ts",
     "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
+    "measure:content-storage": "node scripts/measure-content-storage.ts",
     "prepack": "pnpm build",
     "prepare": "simple-git-hooks",
     "smoke:dist": "node scripts/smoke-dist.ts",
