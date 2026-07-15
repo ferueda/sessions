@@ -9,10 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
+Active storage-hardening plans, in execution order:
 
-- [Compact collision-safe canonical content storage](260714-compact-content-storage.md)
+1. [Compact collision-safe canonical content storage](260714-compact-content-storage.md)
+2. [Deletion and physical compaction contract](260714-deletion-compaction-contract.md)
 
-Land the baseline-schema plan before compaction or orphan-maintenance plans that
-extend the same schema or writer-lease contracts. Resume M7 after the accepted
-storage-hardening sequence.
+Land and implement the compact-content baseline before beginning compaction.
+Resume M7 after the accepted storage-hardening sequence.
