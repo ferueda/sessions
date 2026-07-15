@@ -1,6 +1,6 @@
 # Privacy contract
 
-- Status: M7 canonical export foundation implemented; later delivery labeled
+- Status: current behavior plus explicit later-V1 boundaries
 - Last updated: 2026-07-15
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
@@ -18,8 +18,8 @@ not a best-effort feature.
 - A complete later scan can mark a retained session `missing`; unavailable,
   unreadable, malformed, changing, or incomplete discovery proves no absence.
   Neither case automatically deletes retained content.
-- List, search, and show use only the Sessions library after indexing. They never
-  reopen a provider transcript.
+- List, search, show, and export use only the Sessions library after indexing.
+  They never reopen a provider transcript.
 - No TTL or automatic pruning exists. Only explicit `sessions forget`,
   `sessions data repair-orphans`, or `sessions data clear --yes` removes
   canonical content.
@@ -28,8 +28,9 @@ not a best-effort feature.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
 
-Portable export, transcript-bearing JSON/JSONL, Cursor, library import/restore,
-and automatic analysis are not current commands.
+Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/show are
+current. Cursor, Markdown presentation, library import/restore, and automatic
+analysis are not current commands.
 
 ## Owned local state
 
@@ -137,11 +138,24 @@ the stored digest. Show reads attribution and the document under one immutable
 library snapshot and verifies the digest before returning canonical content.
 List/search read the stored digest directly and do not reopen providers.
 
-Human list/search/show output omits source locators, source metadata, and local
-workspace values. Search snippets and context are bounded to 512 UTF-8 bytes per
-body and terminal-control escaped; limits reduce accidental disclosure but are
-not redaction. Transcript/title text itself remains faithful evidence and is not
-secret- or path-redacted. Review it before copying it elsewhere.
+Human and structured list/search/show output omits source locators, source
+metadata, provider roots, attachment paths, and local workspace values. Export
+uses the same field-by-field public projection and never recursively opens a
+related session. Search snippets and context are bounded to 512 UTF-8 bytes per
+body. Human output is terminal-control escaped; JSON/JSONL preserves raw selected
+text with JSON escaping. Limits and escaping reduce accidental disclosure or
+syntax control, but they are not redaction. Transcript/title text itself remains
+faithful evidence and is not secret- or path-redacted. Review it before copying
+it elsewhere.
+
+Every transcript-bearing JSON/JSONL record is labeled
+`disposition: "untrusted-history"`. This label and JSON escaping do not make
+prompt-like instructions or tool output safe to execute. List, search, show, and
+default export apply bounded raw-text selection and an exact 16 MiB encoded-output
+cap before stdout. Over-cap output fails without a partial stream. Explicit
+`export --full` removes only those presentation limits for export-eligible fields
+in one retained snapshot. It does not expose raw provider payloads, media bytes or
+references, hidden reasoning, or evidence the adapter did not observe.
 
 Opaque list/search cursors contain query-binding, library-instance, generation,
 and offset data rather than transcript text. They are continuation tokens, not
@@ -196,13 +210,11 @@ manage backups according to their threat model.
 
 ## Later V1 boundaries
 
-Planned JSON/JSONL portable export will also read only the canonical library. It must
-exclude diagnostic locators, provider roots, source metadata, local workspace
-paths, and attachment paths by default; frame all prior instructions as untrusted
-history; and never deliver content to another provider itself. Versioned
-transcript-bearing list/search/show DTOs and JSON/JSONL export are the next M7
-work. Markdown presentation is deferred until after M8 and before M9/V1 over the
-same projection; current query output remains human-facing.
+JSON/JSONL portable export reads only the canonical library, excludes diagnostic
+locators and private path metadata, labels history as untrusted, and never
+delivers content to another provider. Markdown presentation is deferred until
+after M8 and before M9/V1 over the same projection. It may not add private fields
+or change which evidence the document digest covers.
 
 No project, skill, provider configuration, or source transcript is automatically
 edited from analysis output.

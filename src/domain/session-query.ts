@@ -1,4 +1,5 @@
 import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
+import type { ContentHash } from "./content-hash.ts";
 import type { SessionDocumentDigest } from "./public-session-document.ts";
 import { isSessionIdentity } from "./session-identity.ts";
 import type { Actor, ContentOrigin, OriginConfidence, SessionIdentity } from "./session.ts";
@@ -112,6 +113,7 @@ export interface SessionSearchSnippet {
   readonly segmentOrdinal: number;
   readonly origin: ContentOrigin;
   readonly originConfidence: OriginConfidence;
+  readonly contentHash: ContentHash;
   readonly text: string;
   readonly truncated: boolean;
   readonly additionalMatchingSegments: number;

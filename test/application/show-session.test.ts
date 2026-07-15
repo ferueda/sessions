@@ -31,10 +31,34 @@ describe("showSession", () => {
     const result = await showSession({ paths, lifecycle, identity, entry: 4, context: 2 });
 
     expect(result.entries.map(({ ordinal }) => ordinal)).toEqual([2, 3, 4, 5, 6]);
-    expect(result).toMatchObject({ firstEntry: 2, lastEntry: 6, totalEntries: 8 });
+    expect(result.snapshot.selection.entries).toEqual({
+      selected: 5,
+      total: 8,
+      truncated: true,
+      firstOrdinal: 2,
+      lastOrdinal: 6,
+    });
+    expect(result.entries[0]).not.toHaveProperty("sourceLocator");
+    expect(Object.isFrozen(result.entries)).toBe(true);
+    expect(Object.isFrozen(result.snapshot.selection)).toBe(true);
     const reader = await lifecycle.openReader.mock.results[0]!.value;
     expect(reader.sessions.getSession).toHaveBeenCalledWith(identity);
     expect(reader.close).toHaveBeenCalledOnce();
+  });
+
+  test("keeps the first-50 entry window before applying transcript bounds", async () => {
+    const lifecycle = lifecycleWith(sessionWithEntries(60));
+
+    const result = await showSession({ paths, lifecycle, identity });
+
+    expect(result.entries).toHaveLength(50);
+    expect(result.snapshot.selection.entries).toEqual({
+      selected: 50,
+      total: 60,
+      truncated: true,
+      firstOrdinal: 0,
+      lastOrdinal: 49,
+    });
   });
 
   test("treats uninitialized and absent sessions as the same not-found failure", async () => {

@@ -1,6 +1,6 @@
 # CLI contract
 
-- Status: current M6 behavior plus accepted later-V1 semantics
+- Status: current behavior plus accepted later-V1 semantics
 - Last updated: 2026-07-15
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
@@ -23,6 +23,7 @@ sessions list [--source SOURCE] [--instance INSTANCE]
               [--captured-after TIME] [--captured-before TIME]
               [--observed-after TIME] [--observed-before TIME]
               [--session CANONICAL-ID] [--limit N] [--cursor TOKEN]
+              [--format human|json|jsonl]
 sessions search <text> [--source SOURCE] [--instance INSTANCE]
                        [--source-state present|missing|unknown]
                        [--workspace WORKSPACE]
@@ -33,7 +34,10 @@ sessions search <text> [--source SOURCE] [--instance INSTANCE]
                        [--actor ACTOR] [--origin ORIGIN] [--kind KIND]
                        [--tool-name NAME] [--tool-namespace NAMESPACE]
                        [--limit N] [--context N] [--cursor TOKEN]
+                       [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N]
+                             [--format human|json|jsonl]
+sessions export <canonical-id> --format json|jsonl [--full]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -44,7 +48,8 @@ The bare command prints help. `index` is the only ordinary command that reads
 rollout content or initializes the durable library. `forget` mutates only a
 current initialized library. `data repair-orphans` and `data compact` are
 provider-free maintenance over an existing current library; neither resolves a
-source. `doctor` and `paths` inspect runtime, library, and registered-source
+source. List, search, show, and export are provider-free reads of the retained
+library. `doctor` and `paths` inspect runtime, library, and registered-source
 readiness without indexing or creating state.
 
 `index` selects all registered sources when `--source` is omitted. The only
@@ -60,20 +65,29 @@ activity descends, then the raw source/instance/native tuple ascends with binary
 collation. When another page exists, output ends with the copyable
 `Next cursor: <token>` line. A fresh library renders exactly
 `No sessions found.` plus a newline, exits `0`, and does not create state or
-resolve Codex.
+resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
 
 `search` requires non-blank text, defaults to 20 primary hits, and accepts 1
 through 200. `--context` defaults to 0 and accepts 0 through 10 adjacent entries
 on each side. A no-match result renders exactly `No matches found.` plus a
 newline and exits `0`. Search, list, and show read one immutable retained-library
-snapshot per operation and never resolve or reopen Codex.
+snapshot per operation and never resolve or reopen Codex. JSON emits an empty
+page bundle; JSONL emits one page record.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
 requires `--entry`. Missing session/entry values are operational failures.
-List/search/show are human-only until M7. They report applicable
-freshness/source-state/capture evidence, omit diagnostic locators and workspace
-from output, and escape/bound untrusted terminal content.
+List/search/show default to human and accept JSON or JSONL. Human output escapes
+and bounds untrusted terminal content. Machine output uses the exact closed
+schema-1 records in the
+[structured output contract](structured-output.md). All formats report
+applicable freshness/source-state/capture evidence and omit diagnostic locators
+and workspace metadata.
+
+`export` requires an explicit JSON or JSONL format and reads one retained
+canonical snapshot. Default export is bounded; `--full` removes presentation
+bounds and the aggregate encoded-output cap only for export-eligible fields in
+that snapshot. Export never resolves a provider or follows relations.
 
 `forget` idempotently deletes one retained Sessions copy and returns `forgotten`
 or `absent`. `data repair-orphans` requires no confirmation and deletes only
@@ -168,11 +182,13 @@ no partial report and exits `1`.
 ## Remaining V1 commands
 
 ```text
-sessions export <source-instance:id> --format md|json|jsonl [--full]
 sessions index --source cursor
+sessions export <canonical-id> --format md [--full]
 ```
 
-These routes are added to generated help only when implemented and contract-tested.
+Markdown is deferred until after M8 and before M9/V1. `--format md` is not
+accepted today. These routes are added to generated help only when implemented
+and contract-tested.
 
 ## Current retention and empty-library semantics
 
@@ -218,19 +234,20 @@ is safe. It reclaims whole free pages only, never repacks partially used pages,
 and reports observed main-database file lengths rather than guaranteed savings.
 
 On a fresh uninitialized library, `sessions list` and a cursor-free
-`sessions search` exit `0`, write their exact empty messages to stdout, and leave
-stderr empty. They do not create storage, run migrations, open a reader, or
-resolve/probe an adapter. Initialized-but-empty uses the same output through a
-normal read snapshot. A supplied cursor against absent/recreated state is stale.
-Other initialized non-ready states remain operational failures. `show` of an
-absent identity, including in an uninitialized library, remains a sanitized
-not-found operational failure.
+`sessions search` exit `0`, write their format-specific empty result to stdout,
+and leave stderr empty. Human uses the exact messages above; JSON uses an empty
+page bundle; JSONL uses one page record. They do not create storage, run
+migrations, open a reader, or resolve/probe an adapter. Initialized-but-empty
+uses the same output through a normal read snapshot. A supplied cursor against
+absent/recreated state is stale. Other initialized non-ready states remain
+operational failures. `show` and `export` of an absent identity, including in an
+uninitialized library, remain sanitized not-found operational failures.
 
 ## Current operational JSON
 
-The current pre-alpha operational reports are exact test-backed contracts.
-Transcript-bearing list/search/show output remains human-only until the M7 DTO
-work.
+The current pre-alpha operational reports are exact test-backed contracts. The
+separate [structured output contract](structured-output.md) owns
+transcript-bearing list/search/show/export JSON and JSONL.
 
 `sessions index --format json` emits the current schema-1 report. A complete
 representative report is:
@@ -572,7 +589,7 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 
 ## Streams and exit codes
 
-- Stdout: requested human, JSON, JSONL, Markdown, or transcript data.
+- Stdout: requested human, JSON, JSONL, or transcript data.
 - Stderr: usage diagnostics, warnings, and operational errors that are not the requested report.
 - Exit `0`: success, including an empty result set.
 - Exit `1`: operational or capability failure.
@@ -583,64 +600,38 @@ Concurrent index/forget/repair/compact/clear ownership is a sanitized
 `Session library is busy` operational failure; lease tokens, owners, and timing
 details are never rendered.
 
-## Structured output
+## Structured output and portable export
 
-Every JSON/JSONL command includes a numeric `schemaVersion`. Additive fields may appear within one schema version; removing or changing a field's meaning requires a new version. JSONL starts each record with enough command/type/version information to parse independently.
+Every list/search/show/export JSON/JSONL record has numeric `schemaVersion: 1`, a
+command, a record type, and `disposition: "untrusted-history"`. JSON is one
+bundle. JSONL is an ordered set of compact, independently attributable records. The exact closed DTOs,
+optional/null rules, record order, UTF-8 selection accounting, examples, and
+16 MiB fail-before-output limit are in the
+[structured output contract](structured-output.md).
 
-M6 structured output covers the operational doctor, paths, index, forget,
-data-repair-orphans, data-compact, and data-clear reports documented above. M7
-owns versioned list/search/show DTOs, document digests, and transcript-bearing
-JSON/JSONL; M6 does not expose a partial machine schema for those commands.
+Entry-bearing records preserve canonical coordinates, available exact
+tool/linkage values, segment provenance, and full canonical content hashes.
+Omitted non-text values include only their admitted broad class and canonical
+source-type token—never payload bytes, URLs, local paths, placeholder text, or a
+hash. Library records distinguish freshness from source state and include the
+latest successful capture, source observation, last-good adapter version, and
+document digest.
 
-Planned entry-bearing structured records preserve canonical entry ordinal and
-kind plus available exact tool name, exact tool namespace, provider call ID, and
-related entry ordinal. Every emitted segment includes its ordinal, kind, origin,
-and origin confidence. Text includes its exact value plus canonical content-hash
-scheme and digest. Omitted non-text content includes only its broad class and a
-1–64-byte lower-ASCII kebab source type matching
-`^[a-z0-9]+(?:-[a-z0-9]+)*$`—never bytes, URLs, local paths, placeholder text, or
-a hash. The token is a format-declared label, not sanitized arbitrary payload
-content. Missing source evidence remains absent or unknown; the DTO does not
-assign skill-specific meaning.
+JSON/JSONL never mixes progress or warnings into stdout. The complete encoded
+result is validated before the first write. Every bounded machine result at or
+below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search can be
+narrowed. Show is always bounded. Default export is bounded, while explicit
+`export --full` is the sole structured route exempt from the aggregate cap.
 
-Library-backed records also distinguish snapshot freshness from source state and
-include the latest successful capture time, source-observation time, adapter
-version, and versioned document-digest scheme/value where relevant. A retained
-session remains readable and exportable when its source state is `missing` or
-`unknown`.
+Export reads exactly one retained canonical snapshot and never probes or reopens
+a provider source. Known relations are metadata only and do not recursively
+include other session bodies. Generated metadata excludes source/input locators,
+source metadata, provider roots, workspace, and attachment paths. Faithful title
+or transcript text is not automatically path- or secret-redacted. Sessions does
+not import, upload, paste, call provider APIs, create a destination conversation,
+manage destination context limits, or infer transfer lineage from equal text or
+matching digests.
 
-Structured output never mixes progress or warnings into stdout.
-
-## Planned portable export (M7)
-
-`sessions export` will read exactly one retained canonical snapshot and will
-never probe or reopen a provider source. Markdown is a self-contained human/agent
-context artifact with actor labels, provenance, explicit omission/truncation
-markers, and an untrusted-history warning. JSON is one versioned bundle. JSONL
-carries the equivalent ordered public projection in independently parseable
-records; every record includes enough command, type, schema, session, and
-document-digest identity to be attributed without a preceding record.
-
-Every format reports canonical identity, capture time, source state and
-observation time, adapter version, document digest, and truncation state. Known
-relations are metadata only and do not recursively include other sessions.
-Generated metadata excludes entry source locators, input-descriptor locators,
-source metadata, provider roots, local workspace paths, and attachment paths.
-Faithful title or transcript text is not automatically path- or secret-redacted.
-
-All prior human, model, system, injected, and tool content remains untrusted
-historical data. Markdown escapes or structurally contains transcript Markdown
-and terminal controls so they cannot alter the generated document structure;
-machine formats label the same disposition. Sessions does not import, upload,
-paste, call provider APIs, create a destination conversation, manage destination
-context limits, or infer transfer lineage from equal text or matching digests.
-
-## Output bounds
-
-Potentially large list, search, and show views are bounded by default. Current
-list/search continuation and search body/context truncation are explicit in
-human output. M7 export will likewise be bounded: `--full` emits all
-export-eligible entries and text from the selected retained normalized snapshot.
-It does not reveal hidden reasoning, raw payloads, omitted media contents or
-references, private metadata, related-session bodies, or evidence the adapter
-never observed. `--full` is never implied by a machine format.
+Markdown remains deferred presentation work after M8 and before M9/V1. It is not
+a current format and may not change the eligible evidence or document-digest
+semantics defined by JSON/JSONL.

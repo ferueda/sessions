@@ -16,6 +16,7 @@ import {
   type SessionSearchQuery,
   type SessionSearchSnippet,
 } from "../../domain/session-query.ts";
+import { contentHashMatches } from "../../domain/content-hash.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import { literalFtsQuery } from "./literal-fts-query.ts";
@@ -30,6 +31,7 @@ import {
 import { readSearchContext, entryAt, truncateUtf8Around } from "./sqlite-query-context.ts";
 import { searchWhere, sessionWhere, type SqliteQueryWhere } from "./sqlite-query-filters.ts";
 import { countRootSupport } from "./sqlite-query-lineage.ts";
+import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { readSessionSummary } from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
@@ -146,6 +148,7 @@ function readSearchRows(
                 occurrence.origin,
                 occurrence.confidence,
                 content.text,
+                content.digest AS content_digest,
                 snippet(sessions_content_fts, 0, ?, ?, ' … ', 64)
                   AS snippet_text,
                 bm25(sessions_content_fts) AS score
@@ -292,6 +295,10 @@ function searchHit(
 
 function snippetAt(row: SearchRow, markers: SnippetMarkers): SessionSearchSnippet {
   const fullText = storedString(row.text);
+  const contentHash = decodeSqliteContentDigest(row.content_digest);
+  if (!contentHashMatches(fullText, contentHash)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
   const markedExcerpt = storedString(row.snippet_text);
   if (!ORIGINS.has(row.origin) || !CONFIDENCES.has(row.confidence)) {
     throw new SqliteSessionIndexError("corrupt-data");
@@ -312,6 +319,7 @@ function snippetAt(row: SearchRow, markers: SnippetMarkers): SessionSearchSnippe
     segmentOrdinal: integerAt(row.segment_ordinal),
     origin: row.origin,
     originConfidence: row.confidence,
+    contentHash: Object.freeze(contentHash),
     text: bounded.text,
     truncated: bounded.truncated || excerpt !== fullText,
     additionalMatchingSegments: matchingSegments - 1,
@@ -461,6 +469,7 @@ interface SearchRow {
   readonly origin: ContentOrigin;
   readonly confidence: OriginConfidence;
   readonly text: unknown;
+  readonly content_digest: unknown;
   readonly snippet_text: unknown;
   readonly matching_segment_count: unknown;
 }

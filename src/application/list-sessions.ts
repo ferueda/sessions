@@ -1,17 +1,21 @@
 import { SessionLibraryError } from "./library-error.ts";
 import type { IndexLifecycle, IndexPaths, IndexReader } from "./ports/index-lifecycle.ts";
+import { selectSessionSummary, type SelectedSessionSummary } from "./session-presentation.ts";
 import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
 import {
   createSessionListQuery,
   MAX_SESSION_QUERY_LIMIT,
   type SessionFilterInput,
-  type SessionListPage,
+  type SessionQueryCursor,
 } from "../domain/session-query.ts";
 
 export const DEFAULT_LIST_LIMIT = 50;
 export const MAX_LIST_LIMIT = MAX_SESSION_QUERY_LIMIT;
 
-export type ListSessionsResult = SessionListPage;
+export interface ListSessionsResult {
+  readonly sessions: readonly SelectedSessionSummary[];
+  readonly nextCursor?: SessionQueryCursor;
+}
 
 export async function listSessions(input: {
   readonly paths: IndexPaths;
@@ -33,7 +37,13 @@ export async function listSessions(input: {
   }
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
-  return withReader(input.lifecycle, input.paths, (reader) => reader.query.list(query));
+  return withReader(input.lifecycle, input.paths, async (reader) => {
+    const page = await reader.query.list(query);
+    return Object.freeze({
+      sessions: Object.freeze(page.sessions.map((session) => selectSessionSummary(session))),
+      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+    });
+  });
 }
 
 export async function withReader<T>(

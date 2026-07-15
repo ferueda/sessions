@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { describe, expect, test, vi } from "vitest";
 
 import type { DataClearReport } from "../src/application/clear-index.ts";
@@ -6,6 +8,7 @@ import type { DataRepairOrphansReport } from "../src/application/repair-orphaned
 import type { ForgetSessionReport } from "../src/application/forget-session.ts";
 import type { PathsReport } from "../src/application/get-paths.ts";
 import type { IndexReport } from "../src/application/index-report.ts";
+import type { ShowSessionResult } from "../src/application/show-session.ts";
 import type { DoctorReport } from "../src/application/run-doctor.ts";
 import { SessionLibraryError } from "../src/application/library-error.ts";
 import {
@@ -14,9 +17,10 @@ import {
 } from "../src/application/session-query-error.ts";
 import type { ProgramOptions } from "../src/cli/program.ts";
 import { runCli } from "../src/cli/run.ts";
+import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
 
 describe("sessions CLI", () => {
-  test("shows the M6 command surface", async () => {
+  test("shows the current command surface", async () => {
     const invocation = await invoke([]);
 
     expect(invocation.exitCode).toBe(0);
@@ -26,6 +30,7 @@ describe("sessions CLI", () => {
       "list",
       "search",
       "show",
+      "export",
       "forget",
       "data",
       "paths",
@@ -88,6 +93,165 @@ describe("sessions CLI", () => {
     const invocation = await invoke(["search", "missing"]);
 
     expect(invocation).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
+  });
+
+  test("renders explicit empty JSON and JSONL query pages", async () => {
+    const listJson = await invoke(["list", "--format", "json"]);
+    const listJsonl = await invoke(["list", "--format", "jsonl"]);
+    const searchJson = await invoke(["search", "missing", "--format", "json"]);
+    const searchJsonl = await invoke(["search", "missing", "--format", "jsonl"]);
+
+    expect(JSON.parse(listJson.stdout)).toEqual({
+      schemaVersion: 1,
+      command: "list",
+      type: "page",
+      disposition: "untrusted-history",
+      nextCursor: null,
+      sessions: [],
+    });
+    expect(
+      listJsonl.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        command: "list",
+        type: "page",
+        disposition: "untrusted-history",
+        sessionCount: 0,
+        nextCursor: null,
+      },
+    ]);
+    expect(JSON.parse(searchJson.stdout)).toMatchObject({
+      schemaVersion: 1,
+      command: "search",
+      type: "page",
+      disposition: "untrusted-history",
+      nextCursor: null,
+      hits: [],
+    });
+    expect(
+      searchJsonl.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        command: "search",
+        type: "page",
+        disposition: "untrusted-history",
+        hitCount: 0,
+        nextCursor: null,
+        support: emptySearch().support,
+      },
+    ]);
+    expect(
+      [listJson, listJsonl, searchJson, searchJsonl].every(({ exitCode }) => exitCode === 0),
+    ).toBe(true);
+  });
+
+  test("renders equivalent show JSON and attributable JSONL", async () => {
+    const result = selectedSnapshot();
+    const show = vi.fn<ProgramOptions["show"]>(async () => result);
+
+    const json = await invoke(["show", "synthetic@one:session", "--format", "json"], {
+      show,
+    });
+    const jsonl = await invoke(["show", "synthetic@one:session", "--format", "jsonl"], {
+      show,
+    });
+    const bundle = JSON.parse(json.stdout);
+    const records = jsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    expect(json.exitCode).toBe(0);
+    expect(jsonl.exitCode).toBe(0);
+    expect(bundle).toMatchObject({ command: "show", type: "snapshot" });
+    expect(records.map(({ type }) => type)).toEqual(["session", "relation", "entry"]);
+    expect(records[0].snapshot).toEqual(bundle.snapshot);
+    expect(records[1]).toMatchObject({
+      session: bundle.snapshot.session,
+      documentDigest: bundle.snapshot.documentDigest,
+      relation: bundle.relations[0],
+    });
+    expect(records[2]).toMatchObject({
+      session: bundle.snapshot.session,
+      documentDigest: bundle.snapshot.documentDigest,
+      entry: bundle.entries[0],
+    });
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
+  test("requires an export format and forwards the explicit full request", async () => {
+    const result = selectedSnapshot("full");
+    const exportSession = vi.fn<ProgramOptions["export"]>(async () => result);
+
+    const omitted = await invoke(["export", "synthetic@one:session"], {
+      export: exportSession,
+    });
+    const human = await invoke(["export", "synthetic@one:session", "--format", "human"], {
+      export: exportSession,
+    });
+    const markdown = await invoke(["export", "synthetic@one:session", "--format", "md"], {
+      export: exportSession,
+    });
+    const full = await invoke(["export", "synthetic@one:session", "--format", "json", "--full"], {
+      export: exportSession,
+    });
+
+    expect([omitted.exitCode, human.exitCode, markdown.exitCode]).toEqual([2, 2, 2]);
+    expect(JSON.parse(full.stdout)).toMatchObject({
+      schemaVersion: 1,
+      command: "export",
+      type: "snapshot",
+      snapshot: { selection: { mode: "full" } },
+    });
+    expect(exportSession).toHaveBeenCalledExactlyOnceWith({
+      identity: {
+        source: { kind: "synthetic", instanceId: "one" },
+        nativeId: "session",
+      },
+      full: true,
+    });
+  });
+
+  test("keeps query cursors reusable across human, JSON, and JSONL", async () => {
+    const list = vi.fn<ProgramOptions["list"]>(async () => ({ sessions: [] }));
+
+    for (const format of ["human", "json", "jsonl"] as const) {
+      const invocation = await invoke(["list", "--cursor", "opaque", "--format", format], {
+        list,
+      });
+      expect(invocation.exitCode).toBe(0);
+    }
+    expect(list.mock.calls.map(([input]) => input)).toEqual([
+      { cursor: "opaque" },
+      { cursor: "opaque" },
+      { cursor: "opaque" },
+    ]);
+  });
+
+  test("keeps operational formats narrow and reports structured overflow before stdout", async () => {
+    const invalidDoctor = await invoke(["doctor", "--format", "jsonl"]);
+    const invalidList = await invoke(["list", "--format", "yaml"]);
+    const overflow = await invoke(["list", "--format", "jsonl"], {
+      list: async () => {
+        throw new StructuredOutputTooLargeError();
+      },
+    });
+
+    expect(invalidDoctor.exitCode).toBe(2);
+    expect(invalidList.exitCode).toBe(2);
+    expect(overflow).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: "sessions: structured-output-too-large: narrow list/search or use export --full\n",
+    });
   });
 
   test("requires the option delimiter for leading-dash search text", async () => {
@@ -454,6 +618,9 @@ async function invoke(
     show: async () => {
       throw new Error("show fixture was not configured");
     },
+    export: async () => {
+      throw new Error("export fixture was not configured");
+    },
     forget: async () => forgetReport(),
     clearData: async () => clearReport(),
     compactData: async () => compactReport(),
@@ -485,6 +652,93 @@ function emptySearch() {
       unknownLineageSessions: 0,
     },
   } as const;
+}
+
+function selectedSnapshot(mode: "bounded" | "full" = "bounded"): ShowSessionResult {
+  const title = "Synthetic title";
+  const body = "Synthetic body";
+  const titleBytes = Buffer.byteLength(title, "utf8");
+  const bodyBytes = Buffer.byteLength(body, "utf8");
+
+  return {
+    snapshot: {
+      identity: {
+        source: { kind: "synthetic", instanceId: "one" },
+        nativeId: "session",
+      },
+      documentDigest: {
+        scheme: "sha256-sessions-document-jcs-v1",
+        digest: "a".repeat(64),
+      },
+      title: {
+        text: title,
+        truncated: false,
+        originalUtf8Bytes: titleBytes,
+        emittedUtf8Bytes: titleBytes,
+      },
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:01:00.000Z",
+      capturedAt: "2026-07-14T00:02:00.000Z",
+      sourceState: "present",
+      sourceObservedAt: "2026-07-14T00:02:00.000Z",
+      adapterVersion: "synthetic-v1",
+      freshness: "current",
+      lineageCoverage: "complete",
+      selection: {
+        mode,
+        relations: { selected: 1, total: 1, truncated: false },
+        entries: {
+          selected: 1,
+          total: 1,
+          truncated: false,
+          firstOrdinal: 0,
+          lastOrdinal: 0,
+        },
+        segments: { selected: 1, total: 1, truncated: false },
+        segmentText: {
+          emittedUtf8Bytes: bodyBytes,
+          originalUtf8Bytes: bodyBytes,
+          truncated: false,
+        },
+        canonicalOmittedSegments: 0,
+        truncatedTextSegments: 0,
+      },
+    },
+    relations: [
+      {
+        ordinal: 0,
+        kind: "parent",
+        target: {
+          source: { kind: "synthetic", instanceId: "parent" },
+          nativeId: "parent",
+        },
+        confidence: "high",
+      },
+    ],
+    entries: [
+      {
+        ordinal: 0,
+        kind: "message",
+        actor: "human",
+        content: [
+          {
+            ordinal: 0,
+            kind: "text",
+            origin: "human",
+            originConfidence: "high",
+            text: {
+              text: body,
+              truncated: false,
+              originalUtf8Bytes: bodyBytes,
+              emittedUtf8Bytes: bodyBytes,
+            },
+            contentHash: { scheme: "sha256-utf8-v1", digest: "b".repeat(64) },
+          },
+        ],
+        omittedSegmentCount: 0,
+      },
+    ],
+  };
 }
 
 function passingDoctor(): DoctorReport {

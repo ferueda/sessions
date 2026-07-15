@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import type { SelectedText, TranscriptSelection } from "../src/application/session-presentation.ts";
 import type { ShowSessionResult } from "../src/application/show-session.ts";
 import {
   renderDataCompact,
@@ -23,6 +24,48 @@ const retainedAttribution = {
     digest: "0".repeat(64),
   },
 } as const;
+
+function selectedText(
+  text: string,
+  options: { readonly truncated?: boolean; readonly originalUtf8Bytes?: number } = {},
+): SelectedText {
+  const emittedUtf8Bytes = Buffer.byteLength(text, "utf8");
+  return {
+    text,
+    truncated: options.truncated ?? false,
+    originalUtf8Bytes: options.originalUtf8Bytes ?? emittedUtf8Bytes,
+    emittedUtf8Bytes,
+  };
+}
+
+function transcriptSelection(input: {
+  readonly entries: number;
+  readonly segments: number;
+  readonly textBytes: number;
+  readonly originalTextBytes?: number;
+  readonly canonicalOmittedSegments?: number;
+  readonly truncatedTextSegments?: number;
+}): TranscriptSelection {
+  return {
+    mode: "bounded",
+    relations: { selected: 0, total: 0, truncated: false },
+    entries: {
+      selected: input.entries,
+      total: input.entries,
+      truncated: false,
+      firstOrdinal: input.entries === 0 ? null : 0,
+      lastOrdinal: input.entries === 0 ? null : input.entries - 1,
+    },
+    segments: { selected: input.segments, total: input.segments, truncated: false },
+    segmentText: {
+      emittedUtf8Bytes: input.textBytes,
+      originalUtf8Bytes: input.originalTextBytes ?? input.textBytes,
+      truncated: (input.originalTextBytes ?? input.textBytes) > input.textBytes,
+    },
+    canonicalOmittedSegments: input.canonicalOmittedSegments ?? 0,
+    truncatedTextSegments: input.truncatedTextSegments ?? 0,
+  };
+}
 
 describe("human CLI rendering", () => {
   test.each([
@@ -96,13 +139,21 @@ describe("human CLI rendering", () => {
 
   test("shows capture and source state while escaping untrusted scalars", () => {
     const result: ShowSessionResult = {
-      summary: {
+      snapshot: {
         identity,
         ...retainedAttribution,
-        title: "title\u001b[31m",
+        title: selectedText("title\u001b[31m"),
         freshness: "current",
         sourceState: "missing",
+        lineageCoverage: "complete",
+        selection: transcriptSelection({
+          entries: 1,
+          segments: 2,
+          textBytes: Buffer.byteLength("payload\u001b[2J", "utf8"),
+          canonicalOmittedSegments: 1,
+        }),
       },
+      relations: [],
       entries: [
         {
           ordinal: 0,
@@ -112,16 +163,14 @@ describe("human CLI rendering", () => {
           toolNamespace: "local",
           toolCallId: "call\u0007",
           relatedEntryOrdinal: 1,
-          sourceLocator: { uri: "synthetic://hidden" },
           content: [
             {
               ordinal: 0,
               kind: "text",
-              text: "payload\u001b[2J",
+              text: selectedText("payload\u001b[2J"),
               contentHash: { scheme: "sha256-utf8-v1", digest: "0".repeat(64) },
               origin: "tool",
               originConfidence: "high",
-              sourceMetadata: { hidden: "value" },
             },
             {
               ordinal: 1,
@@ -130,14 +179,11 @@ describe("human CLI rendering", () => {
               sourceType: "input-image",
               origin: "tool",
               originConfidence: "high",
-              sourceMetadata: { hidden: "value" },
             },
           ],
+          omittedSegmentCount: 0,
         },
       ],
-      firstEntry: 0,
-      lastEntry: 0,
-      totalEntries: 1,
     };
 
     const output = renderShow(result);
@@ -154,52 +200,106 @@ describe("human CLI rendering", () => {
 
   test("bounds untrusted list and transcript scalars by UTF-8 bytes", () => {
     const oversized = "é".repeat(10_000);
+    const bounded = selectedText("é".repeat(4_096), {
+      truncated: true,
+      originalUtf8Bytes: Buffer.byteLength(oversized, "utf8"),
+    });
     const list = renderList({
       sessions: [
         {
           identity,
           ...retainedAttribution,
-          title: oversized,
+          title: bounded,
           freshness: "current",
           sourceState: "present",
         },
       ],
     });
     const show = renderShow({
-      summary: {
+      snapshot: {
         identity,
         ...retainedAttribution,
         freshness: "current",
         sourceState: "present",
+        lineageCoverage: "complete",
+        selection: transcriptSelection({
+          entries: 1,
+          segments: 1,
+          textBytes: bounded.emittedUtf8Bytes,
+          originalTextBytes: bounded.originalUtf8Bytes,
+          truncatedTextSegments: 1,
+        }),
       },
+      relations: [],
       entries: [
         {
           ordinal: 0,
           actor: "human",
           kind: "message",
-          sourceLocator: { uri: "synthetic://hidden" },
           content: [
             {
               ordinal: 0,
               kind: "text",
-              text: oversized,
+              text: bounded,
               contentHash: { scheme: "sha256-utf8-v1", digest: "0".repeat(64) },
               origin: "human",
               originConfidence: "high",
-              sourceMetadata: {},
             },
           ],
+          omittedSegmentCount: 0,
         },
       ],
-      firstEntry: 0,
-      lastEntry: 0,
-      totalEntries: 1,
     });
 
     expect(list).toContain("… [truncated]");
     expect(show).toContain("… [truncated]");
     expect(Buffer.byteLength(list, "utf8")).toBeLessThan(9_000);
     expect(Buffer.byteLength(show, "utf8")).toBeLessThan(9_000);
+  });
+
+  test("bounds terminal-escape expansion and displays presentation omissions", () => {
+    const controls = "\u001b".repeat(8_192);
+    const selected = selectedText(controls);
+    const output = renderShow({
+      snapshot: {
+        identity,
+        ...retainedAttribution,
+        freshness: "current",
+        sourceState: "present",
+        lineageCoverage: "complete",
+        selection: transcriptSelection({
+          entries: 1,
+          segments: 1,
+          textBytes: selected.emittedUtf8Bytes,
+          originalTextBytes: selected.emittedUtf8Bytes + 1,
+        }),
+      },
+      relations: [],
+      entries: [
+        {
+          ordinal: 0,
+          actor: "human",
+          kind: "message",
+          content: [
+            {
+              ordinal: 0,
+              kind: "text",
+              text: selected,
+              contentHash: { scheme: "sha256-utf8-v1", digest: "0".repeat(64) },
+              origin: "human",
+              originConfidence: "high",
+            },
+          ],
+          omittedSegmentCount: 1,
+        },
+      ],
+    });
+
+    const body = output.split("\n")[5]!;
+    expect(body).toContain("… [truncated]");
+    expect(body).not.toContain("\u001b");
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(8 * 1_024);
+    expect(output).toContain("segment(s) omitted by output limits");
   });
 
   test("renders bounded search evidence, linked context, support, and continuation", () => {
@@ -209,7 +309,7 @@ describe("human CLI rendering", () => {
           session: {
             identity,
             ...retainedAttribution,
-            title: "match\u001b[31m",
+            title: selectedText("match\u001b[31m"),
             freshness: "current",
             sourceState: "present",
             capturedAt: "2026-07-14T12:00:00.000Z",
@@ -226,6 +326,7 @@ describe("human CLI rendering", () => {
             segmentOrdinal: 1,
             origin: "tool",
             originConfidence: "high",
+            contentHash: { scheme: "sha256-utf8-v1", digest: "0".repeat(64) },
             text: `${"é".repeat(400)}\u001b[2J`,
             truncated: true,
             additionalMatchingSegments: 2,

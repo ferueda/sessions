@@ -24,7 +24,8 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 6 are complete. M7 is the current implementation milestone.
+Milestones 0 through 7 are complete. M8 Cursor parity is the next implementation
+milestone.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -50,11 +51,13 @@ The repository now includes:
 - one closed public session-document projection, fragment-fed RFC 8785/JCS
   digest, atomic digest/body persistence, canonical verification, and required
   same-snapshot retained attribution;
+- one shared bounded/full public transcript selection plus closed schema-1 JSON
+  and independently attributable JSONL for list, search, show, and export;
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- public `index`, `list`, `search`, `show`, `forget`, `data repair-orphans`,
-  `data compact`, and `data clear` workflows
+- public `index`, `list`, `search`, `show`, `export`, `forget`,
+  `data repair-orphans`, `data compact`, and `data clear` workflows
   backed only by the provider-neutral application and storage layers;
 - filtered/cursored retained-session list plus literal lexical search over one
   immutable canonical-library snapshot, with provider-neutral query values and
@@ -72,11 +75,10 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have portable export or transcript-bearing JSON/JSONL DTOs, the
-Cursor adapter, the packaged Agent Skill, release automation, or the pinned
-Harness integration. The remaining M7 delivery builds stable machine schemas and
-export over the implemented public projection without changing adapter
-responsibilities.
+It does not yet have the Cursor adapter, Markdown presentation, the packaged
+Agent Skill, release automation, or the pinned Harness integration. M8 now adds
+the second adapter without changing the complete provider-neutral query/export
+engine. Markdown follows M8 and remains a pre-M9/V1 gate.
 
 ## Execution rules
 
@@ -110,8 +112,8 @@ flowchart TD
   M3 --> M4["M4 Indexing and reconciliation — complete"]
   M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine — complete"]
-  M6 --> M7["M7 Export and CLI schemas — current"]
-  M7 --> M8["M8 Cursor parity"]
+  M6 --> M7["M7 Export and CLI schemas — complete"]
+  M7 --> M8["M8 Cursor parity — next"]
   M8 --> M9["M9 Packaged Agent Skill"]
   M9 --> M10["M10 Release qualification"]
   M10 --> M11["M11 Parity, Harness cutover, V1"]
@@ -424,7 +426,7 @@ Required behavior:
   `missing`, and full canonical identity refs; forget/data-clear; paths with
   durable-library and sanitized probe outcomes; doctor
   with `library-state`, `source-codex`, canonical-versus-FTS health, remediation,
-  and lease state. M7 still owns transcript/query/export DTOs.
+  and lease state. M7 now owns transcript/query/export DTOs.
 
 - Before Codex normalization depends on it, extend the generic entry model and
   storage projection with `tool-call`/`tool-result` kinds, an optional exact
@@ -640,7 +642,8 @@ Required behavior:
 - Continuation cursors bind the normalized query/order contract, a persistent
   library instance identity, and the current writer generation. Query mismatch is
   invalid usage; library recreation or a later admitted writer makes the cursor
-  stale. M6 keeps list/search/show human-facing; M7 owns versioned machine DTOs.
+  stale. M6 left list/search/show human-facing; M7 adds the versioned machine
+  DTOs without changing those query contracts.
 
 Exit gate:
 
@@ -679,22 +682,22 @@ Exit gate:
   preserves canonical/FTS evidence, and is safely rerunnable after partial
   durable progress.
 
-### M7 — Complete export and stabilize CLI/structured output (current)
+### M7 — Complete export and stabilize CLI/structured output (complete)
 
 Outcome: the entire planned V1 command surface is scriptable and bounded, and one
 retained session can be extracted as portable provider-neutral context without
 Sessions delivering it.
 
-Execution is split into one completed foundation, one active delivery plan, and
-deferred Markdown presentation work:
+Execution completed the foundation and JSON/JSONL delivery, with Markdown kept
+as separate deferred presentation work:
 
 1. **Complete:** build the canonical public projection, persisted document digest,
    and same-snapshot attribution;
-2. **Next:** deliver bounded JSON/JSONL for list, search, show, and export;
+2. **Complete:** deliver bounded JSON/JSONL for list, search, show, and export;
 3. **Deferred:** add Markdown over the same projection after M8 and before M9/V1.
 
-The first two steps complete the provider-neutral export engine required to begin
-M8. Deferring Markdown changes sequencing, not V1 scope; it remains a pre-M9 gate
+The first two steps complete the provider-neutral export engine, so M8 may begin.
+Deferring Markdown changes sequencing, not V1 scope; it remains a pre-M9 gate
 unless the product contract is explicitly revised.
 
 The completed foundation field-by-field projects only export-eligible canonical
@@ -716,7 +719,14 @@ fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
 directory before reindexing; current `data clear` does not accept that
 incompatible baseline.
 
-Primary change areas:
+The delivered presentation layer selects once before human or machine rendering.
+Default export and show retain fixed title/relation/entry/segment/raw-text bounds;
+JSON and JSONL encode equivalent eligible evidence. Every bounded machine result
+is validated and fully encoded before stdout under an exact 16 MiB cap.
+`export --full` alone removes those presentation limits for the one retained
+snapshot. It does not broaden the canonical public projection.
+
+Delivered change areas:
 
 - `src/application/export-session.ts`;
 - focused command, renderer, and versioned DTO modules under `src/cli/`;
@@ -726,7 +736,7 @@ Primary change areas:
 
 Required behavior:
 
-- First support JSON and independently parseable JSONL export from retained
+- Support JSON and independently parseable JSONL export from retained
   canonical documents only, including when source state is missing or unknown.
   Export never probes or reopens provider histories. Add Markdown later over the
   exact same projection without changing eligible evidence or digest semantics.
@@ -734,9 +744,11 @@ Required behavior:
   state and observation time, adapter version, versioned document digest,
   freshness, lineage metadata, omissions, and truncation. The digest is stable
   across output formats and later source-state observations.
-- Give every machine-facing command a numeric schema version, command/type marker,
-  canonical identity, explicit truncation/continuation metadata, and relevant
-  provenance/support measures. Entry-bearing output includes entry ordinal, kind,
+- Give every transcript-bearing record a numeric schema version and command/type
+  marker. Every session/evidence-bearing record carries canonical identity and
+  document digest; page/envelope records carry explicit
+  truncation/continuation metadata and relevant provenance/support measures.
+  Entry-bearing output includes entry ordinal, kind,
   available exact tool name/namespace, provider call ID, and canonical relation.
   Emitted segments include segment ordinal/kind, origin, and origin confidence;
   text includes canonical content hash and omitted non-text content includes only
@@ -746,7 +758,7 @@ Required behavior:
   text itself is not automatically secret- or path-redacted. Changing field
   meaning requires a new version.
 - Make JSON one versioned bundle and JSONL its equivalent independently
-  attributable streaming projection. Known relations are metadata only; export
+  attributable record projection. Known relations are metadata only; export
   never traverses related session bodies. Add structurally framed Markdown later
   without changing the projection or digest.
 - Keep requested data on stdout and diagnostics/progress on stderr. Empty success
@@ -783,7 +795,7 @@ Exit gate:
 - Generated help and all current/planned labels match implemented behavior.
 - `pnpm check` passes on all CI operating systems.
 
-### M8 — Add Cursor and prove adapter equivalence
+### M8 — Add Cursor and prove adapter equivalence (next)
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.

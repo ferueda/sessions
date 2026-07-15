@@ -29,9 +29,12 @@ describe("listSessions", () => {
     expect(lifecycle.openReader).not.toHaveBeenCalled();
   });
 
-  test("forwards one validated query and preserves the atomic repository page", async () => {
+  test("forwards one validated query and selects safe immutable summaries", async () => {
     const page = {
-      sessions: [summary("z"), summary("a")],
+      sessions: [
+        { ...summary("z"), title: `${"é".repeat(4_096)}tail`, workspace: "/private/workspace" },
+        summary("a"),
+      ],
       nextCursor: createSessionQueryCursor("next-page"),
     } satisfies SessionListPage;
     const lifecycle = lifecycleWith(page);
@@ -44,6 +47,15 @@ describe("listSessions", () => {
     });
 
     expect(result.sessions.map(({ identity }) => identity.nativeId)).toEqual(["z", "a"]);
+    expect(result.sessions[0]!.title).toEqual({
+      text: "é".repeat(4_096),
+      truncated: true,
+      originalUtf8Bytes: 8_196,
+      emittedUtf8Bytes: 8_192,
+    });
+    expect(result.sessions[0]).not.toHaveProperty("workspace");
+    expect(Object.isFrozen(result.sessions[0])).toBe(true);
+    expect(Object.isFrozen(result.sessions[0]!.identity.source)).toBe(true);
     expect(result.nextCursor).toBe("next-page");
     const reader = await lifecycle.openReader.mock.results[0]!.value;
     expect(reader.query.list).toHaveBeenCalledWith({
