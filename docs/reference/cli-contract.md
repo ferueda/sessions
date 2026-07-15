@@ -420,8 +420,10 @@ time are never substituted.
 Search splits well-formed input on Unicode whitespace, quotes every non-empty
 term as literal FTS data, and joins terms with logical AND. Quotes, FTS keywords,
 paths, opaque IDs, operators, and punctuation are never interpreted as public
-FTS syntax. Blank input is invalid usage. Non-blank input that yields no tokens
-under the fixed FTS5 `unicode61` tokenizer succeeds with no matches.
+FTS syntax. CLI argument parsing happens first: use `sessions search -- "-term"`
+when search text begins with a dash. Without the delimiter, a leading-dash token
+is an unknown option and invalid usage. Blank input is invalid usage. Non-blank
+input that yields no tokens under the fixed FTS5 `unicode61` tokenizer succeeds with no matches.
 Lexical case/diacritic behavior follows that tokenizer; it is distinct from the
 case-sensitive exact filters below.
 

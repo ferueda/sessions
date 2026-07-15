@@ -87,6 +87,23 @@ describe("sessions CLI", () => {
     expect(invocation).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
   });
 
+  test("requires the option delimiter for leading-dash search text", async () => {
+    const search = vi.fn<ProgramOptions["search"]>(async () => emptySearch());
+
+    const delimited = await invoke(["search", "--", "---"], { search });
+
+    expect(delimited).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
+    expect(search).toHaveBeenCalledExactlyOnceWith({ text: "---" });
+
+    search.mockClear();
+    const unknownOption = await invoke(["search", "---"], { search });
+
+    expect(unknownOption.exitCode).toBe(2);
+    expect(unknownOption.stdout).toBe("");
+    expect(unknownOption.stderr).toContain("unknown option '---'");
+    expect(search).not.toHaveBeenCalled();
+  });
+
   test("maps shared and search-only filters into provider-neutral input", async () => {
     const search = vi.fn<ProgramOptions["search"]>(async () => emptySearch());
 
