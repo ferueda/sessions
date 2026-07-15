@@ -28,7 +28,7 @@ import { createCodexSourceInstance } from "./source-instance.ts";
 import { CodexStateSchemaError, materializeCodexState, type CodexThreadState } from "./state-db.ts";
 import { CodexStateSnapshotError, materializeCodexStateSnapshot } from "./state-snapshot.ts";
 
-export const CODEX_ADAPTER_VERSION = "codex-v2";
+export const CODEX_ADAPTER_VERSION = "codex-v3";
 
 const STATE_THREAD_URI = "codex://state/thread";
 const STATE_PARENT_EDGE_URI = "codex://state/parent-edge";

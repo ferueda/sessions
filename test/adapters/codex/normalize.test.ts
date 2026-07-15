@@ -104,6 +104,33 @@ const SKIPPED_EVENTS = [
 ] as const;
 
 describe("Codex rollout normalization", () => {
+  test("accepts a distinct group identity without projecting it or changing lineage", () => {
+    const groupId = "shared-root-group";
+    const document = normalize(
+      [
+        sessionMeta({
+          session_id: groupId,
+          parent_thread_id: "state-parent",
+          forked_from_id: "state-parent",
+        }),
+      ],
+      { spawnEdgeCoverage: "complete", stateParentNativeId: "state-parent" },
+    );
+
+    expect(document).toMatchObject({
+      identity: IDENTITY,
+      lineageCoverage: "complete",
+      relations: [
+        {
+          kind: "parent",
+          target: { source: IDENTITY.source, nativeId: "state-parent" },
+          confidence: "high",
+        },
+      ],
+    });
+    expect(JSON.stringify(document)).not.toContain(groupId);
+  });
+
   test("retains current metadata, ordered instructions, timestamps, and explicit lineage", () => {
     const document = normalize(
       [
@@ -227,7 +254,11 @@ describe("Codex rollout normalization", () => {
       spawnEdgeCoverage: "unknown",
       stateParentNativeId: "state-parent",
     });
-    expectMalformedSequence([sessionMeta({ session_id: "different" })]);
+    expectMalformedSequence([sessionMeta({ session_id: "" })]);
+    const privateGroupMarker = "synthetic-private-group-marker";
+    expectMalformedSequence([sessionMeta({ session_id: { raw: privateGroupMarker } })], {}, [
+      privateGroupMarker,
+    ]);
     expectMalformedSequence([sessionMeta({ parent_thread_id: IDENTITY.nativeId })]);
   });
 
@@ -787,6 +818,7 @@ function normalize(
 function expectMalformedSequence(
   records: readonly unknown[],
   overrides: Partial<CodexRolloutNormalizationOptions> = {},
+  redactedValues: readonly string[] = [],
 ): void {
   const error = (() => {
     try {
@@ -801,7 +833,10 @@ function expectMalformedSequence(
     kind: "malformed",
     message: "Codex rollout could not be read",
   });
-  expect(JSON.stringify(error)).not.toContain("metadata-parent");
+  const serialized = JSON.stringify(error);
+  for (const value of ["metadata-parent", ...redactedValues]) {
+    expect(serialized).not.toContain(value);
+  }
 }
 
 function sessionMeta(

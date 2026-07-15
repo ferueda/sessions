@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -28,6 +29,7 @@ const CHILD_ID = "child-thread";
 const TARGET_ROLLOUT = "sessions/rollout-2026-target-thread.jsonl";
 const CHILD_ROLLOUT = "sessions/rollout-2026-child-thread.jsonl";
 const PARENT_ID = "external-parent";
+const GROUP_ID = "shared-root-group";
 
 let fixture: CodexSourceFixture | undefined;
 
@@ -53,11 +55,11 @@ describe("Codex durable vertical slice", () => {
 
     await fixture.writeRollout(
       TARGET_ROLLOUT,
-      codexRolloutRecords(TARGET_ID, "Shared synthetic evidence", PARENT_ID),
+      codexRolloutRecords(TARGET_ID, "Shared synthetic evidence", PARENT_ID, GROUP_ID),
     );
     await fixture.writeRollout(
       CHILD_ROLLOUT,
-      codexRolloutRecords(CHILD_ID, "Shared synthetic evidence", TARGET_ID),
+      codexRolloutRecords(CHILD_ID, "Shared synthetic evidence", TARGET_ID, GROUP_ID),
     );
     fixture.writeState(providerThreads(), providerEdges());
 
@@ -87,6 +89,7 @@ describe("Codex durable vertical slice", () => {
       incompleteSources: 0,
     });
     await expectNoProviderRootInLibrary(paths, fixture.codexHome);
+    await expectNoValueInLibrary(paths, GROUP_ID);
     const initialList = await list();
     expect(initialList.sessions).toHaveLength(2);
     expect(summary(initialList.sessions, TARGET_ID)).toMatchObject({
@@ -97,9 +100,29 @@ describe("Codex durable vertical slice", () => {
     const beforeAdapterUpgrade = await show(targetIdentity);
     expect(beforeAdapterUpgrade.entries).toHaveLength(1);
 
-    // A retained V1 observation is normalized again under V2, then stabilizes.
-    setStoredAdapterVersion(paths.database, "codex-v1");
-    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v1"]);
+    const reader = await lifecycle.openReader(paths);
+    try {
+      await expect(reader.sessions.getSession(targetIdentity)).resolves.toMatchObject({
+        document: {
+          identity: targetIdentity,
+          lineageCoverage: "complete",
+          relations: [{ kind: "parent", target: { nativeId: PARENT_ID } }],
+        },
+      });
+      await expect(reader.sessions.getSession(childIdentity)).resolves.toMatchObject({
+        document: {
+          identity: childIdentity,
+          lineageCoverage: "complete",
+          relations: [{ kind: "parent", target: { nativeId: TARGET_ID } }],
+        },
+      });
+    } finally {
+      await reader.close();
+    }
+
+    // A retained V2 observation is normalized again under V3, then stabilizes.
+    setStoredAdapterVersion(paths.database, "codex-v2");
+    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v2"]);
     const adapterUpgrade = await index();
     expect(adapterUpgrade.counts).toMatchObject({
       discovered: 2,
@@ -107,7 +130,7 @@ describe("Codex durable vertical slice", () => {
       updated: 2,
       failed: 0,
     });
-    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v2"]);
+    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v3"]);
     const adapterStable = await index();
     expect(adapterStable.counts).toMatchObject({
       discovered: 2,
@@ -115,6 +138,7 @@ describe("Codex durable vertical slice", () => {
       updated: 0,
       failed: 0,
     });
+    expect(storedAdapterVersions(paths.database)).toEqual(["codex-v3"]);
     const initialTarget = await show(targetIdentity);
     expect(initialTarget.entries).toEqual(beforeAdapterUpgrade.entries);
     const initialCapture = initialTarget.summary.capturedAt;
@@ -159,7 +183,7 @@ describe("Codex durable vertical slice", () => {
 
     await fixture.writeRollout(
       TARGET_ROLLOUT,
-      codexRolloutRecords(TARGET_ID, "Changed synthetic evidence", PARENT_ID),
+      codexRolloutRecords(TARGET_ID, "Changed synthetic evidence", PARENT_ID, GROUP_ID),
     );
     fixture.writeState(providerThreads(true, "Target v2", 4_000), providerEdges());
     const changed = await index();
@@ -208,7 +232,7 @@ describe("Codex durable vertical slice", () => {
 
     await fixture.writeRollout(
       TARGET_ROLLOUT,
-      codexRolloutRecords(TARGET_ID, "Recovered synthetic evidence", PARENT_ID),
+      codexRolloutRecords(TARGET_ID, "Recovered synthetic evidence", PARENT_ID, GROUP_ID),
     );
     const recovered = await index();
     expect(recovered.counts).toMatchObject({ discovered: 2, unchanged: 1, updated: 1, failed: 0 });
@@ -318,7 +342,7 @@ function tokenFactory(prefix: string): () => string {
   return () => `${prefix}-${++sequence}`;
 }
 
-function setStoredAdapterVersion(databaseFile: string, version: "codex-v1"): void {
+function setStoredAdapterVersion(databaseFile: string, version: "codex-v2"): void {
   const database = new DatabaseSync(databaseFile);
   try {
     const result = database
@@ -335,7 +359,10 @@ function setStoredAdapterVersion(databaseFile: string, version: "codex-v1"): voi
 }
 
 function storedAdapterVersions(databaseFile: string): readonly string[] {
-  const database = new DatabaseSync(databaseFile, { readOnly: true });
+  const url = pathToFileURL(databaseFile);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  const database = new DatabaseSync(url.href, { readOnly: true });
   try {
     const rows = database
       .prepare(
@@ -375,7 +402,11 @@ async function expectNoProviderRootInLibrary(
   paths: IndexPaths,
   providerRoot: string,
 ): Promise<void> {
-  const needle = Buffer.from(providerRoot);
+  await expectNoValueInLibrary(paths, providerRoot);
+}
+
+async function expectNoValueInLibrary(paths: IndexPaths, value: string): Promise<void> {
+  const needle = Buffer.from(value);
   for (const file of [paths.database, paths.wal, paths.shm]) {
     if (!existsSync(file)) continue;
     expect((await readFile(file)).indexOf(needle)).toBe(-1);
