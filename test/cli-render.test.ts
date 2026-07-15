@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { ShowSessionResult } from "../src/application/show-session.ts";
 import {
   renderDataCompact,
+  renderDataRepairOrphans,
   renderList,
   renderPaths,
   renderSearch,
@@ -35,6 +36,27 @@ describe("human CLI rendering", () => {
         `Compaction outcome: ${outcome}. Database bytes before: ${String(before)}; after: ${String(after)}; reclaimed: ${String(reclaimed)}.\n`,
       );
       expect(renderDataCompact(report, "json")).toBe(`${JSON.stringify(report, null, 2)}\n`);
+    },
+  );
+
+  test.each([
+    ["unchanged", "0", "0"],
+    ["repaired", "9007199254740993", "9223372036854775807"],
+  ] as const)(
+    "renders exact aggregate logical deletion for %s orphan repair",
+    (outcome, rows, bytes) => {
+      const report = {
+        schemaVersion: 1,
+        command: "data-repair-orphans",
+        outcome,
+        deletedContentRows: rows,
+        deletedContentBytes: bytes,
+      } as const;
+
+      expect(renderDataRepairOrphans(report, "human")).toBe(
+        `Orphan repair outcome: ${outcome}. Deleted canonical content rows: ${rows}; deleted logical UTF-8 bytes: ${bytes}.\n`,
+      );
+      expect(renderDataRepairOrphans(report, "json")).toBe(`${JSON.stringify(report, null, 2)}\n`);
     },
   );
 

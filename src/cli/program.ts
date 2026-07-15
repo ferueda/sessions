@@ -2,6 +2,7 @@ import { Command, CommanderError, InvalidArgumentError, Option } from "commander
 
 import type { DataClearReport } from "../application/clear-index.ts";
 import type { DataCompactReport } from "../application/compact-index.ts";
+import type { DataRepairOrphansReport } from "../application/repair-orphaned-content.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
@@ -24,6 +25,7 @@ import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import {
   renderDataClear,
   renderDataCompact,
+  renderDataRepairOrphans,
   renderDoctor,
   renderForget,
   renderIndex,
@@ -66,6 +68,7 @@ export interface ProgramOptions {
   readonly forget: (identity: SessionIdentity) => Promise<ForgetSessionReport>;
   readonly clearData: () => Promise<DataClearReport>;
   readonly compactData: () => Promise<DataCompactReport>;
+  readonly repairOrphanedData: () => Promise<DataRepairOrphansReport>;
 }
 
 export class OperationalExit extends Error {
@@ -213,6 +216,13 @@ export function createProgram(options: ProgramOptions): Command {
     });
 
   const data = program.command("data").description("Manage Sessions-owned local data");
+  data
+    .command("repair-orphans")
+    .description("Delete unreachable canonical content from Sessions-owned local data")
+    .addOption(formatOption())
+    .action(async ({ format }: { format: OutputFormat }) => {
+      options.output.writeOut(renderDataRepairOrphans(await options.repairOrphanedData(), format));
+    });
   data
     .command("compact")
     .description("Reclaim reusable whole pages from Sessions-owned local data")

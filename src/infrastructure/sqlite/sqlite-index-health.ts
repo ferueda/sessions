@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import type {
+  IndexContentReachabilityHealth,
   IndexHealthCheck,
   IndexFtsSecureDeleteHealth,
   IndexWriterLeaseHealth,
@@ -61,9 +62,10 @@ function inspectDatabaseHealth(
 ): ReadyIndexHealth {
   const canonicalIntegrity = check(() => canonicalIntegrityIsValid(database));
   const foreignKeys = check(() => foreignKeysAreValid(database));
+  const contentReachability = inspectContentReachability(database);
   const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
   const ftsContent = check(() => ftsProjectionContentIsValid(database));
-  const ftsSecureDelete = inspectFtsSecureDelete(database, fts5SecureDeleteRequired);
+  const ftsSecureDelete = inspectFtsSecureDeleteHealth(database, fts5SecureDeleteRequired);
   const pageReclamation = inspectSqlitePageReclamation(database);
   const ftsRemediation =
     ftsStructure === "ok" && ftsContent === "ok" && ftsSecureDelete.healthy
@@ -75,6 +77,7 @@ function inspectDatabaseHealth(
   const ok =
     canonicalIntegrity === "ok" &&
     foreignKeys === "ok" &&
+    contentReachability.status === "ok" &&
     ftsStructure === "ok" &&
     ftsContent === "ok" &&
     ftsSecureDelete.healthy &&
@@ -87,6 +90,9 @@ function inspectDatabaseHealth(
     ok,
     canonicalIntegrity,
     foreignKeys,
+    contentReachability: contentReachability.status,
+    orphanContentRows: contentReachability.rows,
+    orphanContentBytes: contentReachability.bytes,
     ftsStructure,
     ftsContent,
     ftsSecureDelete: ftsSecureDelete.status,
@@ -209,10 +215,15 @@ export function foreignKeysAreValid(database: DatabaseSync): boolean {
   return database.prepare("PRAGMA foreign_key_check").get() === undefined;
 }
 
-function inspectFtsSecureDelete(
+export interface SqliteFtsSecureDeleteHealth {
+  readonly healthy: boolean;
+  readonly status: IndexFtsSecureDeleteHealth;
+}
+
+export function inspectFtsSecureDeleteHealth(
   database: DatabaseSync,
   required: boolean,
-): { readonly healthy: boolean; readonly status: IndexFtsSecureDeleteHealth } {
+): SqliteFtsSecureDeleteHealth {
   try {
     const row = database
       .prepare("SELECT v FROM sessions_content_fts_config WHERE k = 'secure-delete'")
@@ -278,10 +289,43 @@ function readLeaseHealth(database: DatabaseSync, clock: () => Date): IndexWriter
     if (health.status === "expired") return "expired";
     if (health.purpose === "index") return "index-live";
     if (health.purpose === "forget") return "forget-live";
+    if (health.purpose === "repair") return "repair-live";
     if (health.purpose === "compact") return "compact-live";
     return "clear-live";
   } catch {
     return "invalid";
+  }
+}
+
+interface ContentReachability {
+  readonly status: IndexContentReachabilityHealth;
+  readonly rows: string;
+  readonly bytes: string;
+}
+
+function inspectContentReachability(database: DatabaseSync): ContentReachability {
+  try {
+    const statement = database.prepare(
+      `SELECT COUNT(*) AS orphan_rows,
+              COALESCE(SUM(length(CAST(content.text AS BLOB))), 0) AS orphan_bytes
+       FROM sessions_content_values AS content
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM sessions_content_occurrences AS occurrence
+         WHERE occurrence.content_id = content.content_id
+       )`,
+    );
+    statement.setReadBigInts(true);
+    const row = statement.get() as Record<string, unknown> | undefined;
+    const rows = nonNegativeBigInt(row?.orphan_rows);
+    const bytes = nonNegativeBigInt(row?.orphan_bytes);
+    return {
+      status: rows === 0n ? "ok" : "orphaned",
+      rows: rows.toString(),
+      bytes: bytes.toString(),
+    };
+  } catch {
+    return { status: "inspection-failed", rows: "unknown", bytes: "unknown" };
   }
 }
 
@@ -300,6 +344,11 @@ function nonNegativeInteger(value: unknown): number {
   }
   if (Number.isSafeInteger(value) && Number(value) >= 0) return Number(value);
   throw new TypeError("Invalid SQLite count");
+}
+
+function nonNegativeBigInt(value: unknown): bigint {
+  if (typeof value !== "bigint" || value < 0n) throw new TypeError("Invalid SQLite aggregate");
+  return value;
 }
 
 function now(): Date {

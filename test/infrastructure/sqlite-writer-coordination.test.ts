@@ -36,56 +36,59 @@ afterEach(async () => {
 });
 
 describe("SQLite writer coordination", () => {
-  test("coordinates compact ownership, heartbeat, contention, and expired takeover", () => {
-    const database = migratedDatabase();
-    const clock = fakeClock("2026-07-13T12:00:00.000Z");
-    const scheduler = fakeScheduler();
-    try {
-      const first = acquireWriterLease(database, "compact", {
-        now: clock.now,
-        token: () => "first-compact-owner",
-      });
-      const heartbeat = startWriterLeaseHeartbeat(database, first, {
-        now: clock.now,
-        scheduler,
-      });
-      expect(readWriterLeaseHealth(database, { now: clock.now })).toMatchObject({
-        status: "live",
-        purpose: "compact",
-        generation: 1,
-      });
-      expect(() =>
-        acquireWriterLease(database, "index", {
+  test.each(["compact", "repair"] as const)(
+    "coordinates %s ownership, heartbeat, contention, and expired takeover",
+    (purpose) => {
+      const database = migratedDatabase();
+      const clock = fakeClock("2026-07-13T12:00:00.000Z");
+      const scheduler = fakeScheduler();
+      try {
+        const first = acquireWriterLease(database, purpose, {
           now: clock.now,
-          token: () => "blocked-index-owner",
-        }),
-      ).toThrow(expect.objectContaining({ code: "writer-busy" }));
+          token: () => `first-${purpose}-owner`,
+        });
+        const heartbeat = startWriterLeaseHeartbeat(database, first, {
+          now: clock.now,
+          scheduler,
+        });
+        expect(readWriterLeaseHealth(database, { now: clock.now })).toMatchObject({
+          status: "live",
+          purpose,
+          generation: 1,
+        });
+        expect(() =>
+          acquireWriterLease(database, "index", {
+            now: clock.now,
+            token: () => "blocked-index-owner",
+          }),
+        ).toThrow(expect.objectContaining({ code: "writer-busy" }));
 
-      clock.set("2026-07-13T12:00:10.000Z");
-      scheduler.tick();
-      expect(readWriterLeaseHealth(database, { now: clock.now })).toMatchObject({
-        heartbeatAt: "2026-07-13T12:00:10.000Z",
-        expiresAt: "2026-07-13T12:00:40.000Z",
-      });
-      heartbeat.stop();
+        clock.set("2026-07-13T12:00:10.000Z");
+        scheduler.tick();
+        expect(readWriterLeaseHealth(database, { now: clock.now })).toMatchObject({
+          heartbeatAt: "2026-07-13T12:00:10.000Z",
+          expiresAt: "2026-07-13T12:00:40.000Z",
+        });
+        heartbeat.stop();
 
-      clock.set("2026-07-13T12:01:00.000Z");
-      const replacement = acquireWriterLease(database, "compact", {
-        now: clock.now,
-        token: () => "replacement-compact-owner",
-      });
-      expect(replacement.generation).toBe(first.generation + 1);
-      expect(() =>
-        runLeasedImmediateTransaction(database, first, { now: clock.now }, () => undefined),
-      ).toThrow(expect.objectContaining({ code: "writer-lease-lost" }));
-      expect(
-        interruptOwnedRunsAndReleaseWriterLease(database, replacement, { now: clock.now }),
-      ).toBe(true);
-      expect(scheduler.clear).toHaveBeenCalledOnce();
-    } finally {
-      database.close();
-    }
-  });
+        clock.set("2026-07-13T12:01:00.000Z");
+        const replacement = acquireWriterLease(database, purpose, {
+          now: clock.now,
+          token: () => `replacement-${purpose}-owner`,
+        });
+        expect(replacement.generation).toBe(first.generation + 1);
+        expect(() =>
+          runLeasedImmediateTransaction(database, first, { now: clock.now }, () => undefined),
+        ).toThrow(expect.objectContaining({ code: "writer-lease-lost" }));
+        expect(
+          interruptOwnedRunsAndReleaseWriterLease(database, replacement, { now: clock.now }),
+        ).toBe(true);
+        expect(scheduler.clear).toHaveBeenCalledOnce();
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   test("admits one live writer and exposes no owner token in health", () => {
     const database = migratedDatabase();

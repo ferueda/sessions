@@ -11,6 +11,7 @@ import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
+import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -34,6 +35,9 @@ describe("SQLite ready-index health", () => {
       ok: true,
       canonicalIntegrity: "ok",
       foreignKeys: "ok",
+      contentReachability: "ok",
+      orphanContentRows: "0",
+      orphanContentBytes: "0",
       ftsStructure: "ok",
       ftsContent: "ok",
       ftsSecureDelete: "enabled",
@@ -46,6 +50,67 @@ describe("SQLite ready-index health", () => {
     });
 
     expect(await persistenceSnapshot(paths)).toEqual(before);
+  });
+
+  test("reports exact orphan rows and UTF-8 bytes without exposing or mutating content", async () => {
+    const paths = await initializedPaths();
+    const text = "generic orphan café";
+    const contentHash = hashContent(text);
+    mutateDatabase(paths.database, (database) => {
+      database
+        .prepare(
+          `INSERT INTO sessions_content_values (digest, text)
+           VALUES (?, ?)`,
+        )
+        .run(encodeSqliteContentDigest(contentHash.digest), text);
+    });
+    const before = await persistenceSnapshot(paths);
+
+    const health = await createSqliteIndexLifecycle().inspectHealth(paths);
+
+    expect(health).toMatchObject({
+      ok: false,
+      canonicalIntegrity: "ok",
+      foreignKeys: "ok",
+      contentReachability: "orphaned",
+      orphanContentRows: "1",
+      orphanContentBytes: String(Buffer.byteLength(text, "utf8")),
+      ftsStructure: "ok",
+      ftsContent: "ok",
+      ftsRemediation: "not-needed",
+    });
+    const serialized = JSON.stringify(health);
+    expect(serialized).not.toContain(text);
+    expect(serialized).not.toContain(contentHash.digest);
+    expect(serialized).not.toContain(paths.database);
+    expect(await persistenceSnapshot(paths)).toEqual(before);
+  });
+
+  test("reports unavailable reachability aggregates instead of manufacturing zero", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      database.exec("DROP TABLE sessions_content_occurrences");
+    });
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: false,
+      contentReachability: "inspection-failed",
+      orphanContentRows: "unknown",
+      orphanContentBytes: "unknown",
+    });
+  });
+
+  test("reports repair ownership without exposing its token", async () => {
+    const paths = await initializedPaths();
+    const now = () => new Date("2026-07-14T12:00:00.000Z");
+    mutateDatabase(paths.database, (database) => {
+      acquireWriterLease(database, "repair", { now, token: () => "private-repair-token" });
+    });
+
+    const health = await createSqliteIndexLifecycle({ now }).inspectHealth(paths);
+
+    expect(health).toMatchObject({ ok: true, writerLease: "repair-live" });
+    expect(JSON.stringify(health)).not.toContain("private-repair-token");
   });
 
   test("reports a recognized wrong page mode as typed unhealthy state without mutation", async () => {

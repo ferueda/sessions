@@ -45,7 +45,7 @@ export function validateWriterSchemaCatalog(migrations: readonly SqliteMigration
 /** Bootstrap the current baseline for index, then acquire its writer lease. */
 export function acquireWriterSchema(
   database: DatabaseSync,
-  purpose: Extract<WriterLeasePurpose, "index" | "forget">,
+  purpose: Extract<WriterLeasePurpose, "index" | "forget" | "repair">,
   migrations: readonly SqliteMigration[],
   options: WriterSchemaOptions,
 ): AcquiredWriterSchema {
@@ -73,8 +73,8 @@ export function applyWriterMigrations(
   lease: WriterLeaseIdentity,
   options: Pick<WriterSchemaOptions, "now">,
 ): MigrationHistory {
-  if (lease.purpose !== "index" && lease.purpose !== "forget") {
-    throw new TypeError("Writer migrations require index or forget ownership");
+  if (lease.purpose !== "index" && lease.purpose !== "forget" && lease.purpose !== "repair") {
+    throw new TypeError("Writer migrations require index, forget, or repair ownership");
   }
 
   let history = readMigrationHistory(database, migrations);

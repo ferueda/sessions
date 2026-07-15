@@ -20,10 +20,19 @@ export interface CompactIndexResult {
   readonly reclaimedDatabaseBytes: number;
 }
 
+export type RepairOrphansOutcome = "repaired" | "unchanged";
+
+export interface RepairOrphansResult {
+  readonly outcome: RepairOrphansOutcome;
+  readonly deletedContentRows: string;
+  readonly deletedContentBytes: string;
+}
+
 export interface IndexMaintenance {
   clear(paths: IndexPaths): Promise<ClearIndexResult>;
   compact(paths: IndexPaths): Promise<CompactIndexResult>;
   forget(paths: IndexPaths, identity: SessionIdentity): Promise<"forgotten" | "absent">;
+  repairOrphans(paths: IndexPaths): Promise<RepairOrphansResult>;
 }
 
 export type IndexMaintenanceErrorCode =
@@ -33,6 +42,7 @@ export type IndexMaintenanceErrorCode =
   | "corrupt-data"
   | "forget-failed"
   | "library-busy"
+  | "repair-failed"
   | "recovery-required"
   | "unsafe-index";
 

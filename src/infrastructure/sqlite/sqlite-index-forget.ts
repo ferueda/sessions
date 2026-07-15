@@ -9,6 +9,10 @@ import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity } from "../../domain/session.ts";
 import { MigrationHistoryError, readMigrationHistory, type SqliteMigration } from "./migrations.ts";
 import {
+  deleteUnreferencedContentCandidates,
+  readSessionContentCandidates,
+} from "./sqlite-content-maintenance.ts";
+import {
   assertCanonicalIndexPaths,
   inspectIndexPathSafety,
   secureIndexFiles,
@@ -267,6 +271,7 @@ function forgetInTransaction(
       return "absent";
     }
     const sessionId = integer(row.session_id);
+    const contentCandidates = readSessionContentCandidates(database, sessionId);
 
     database
       .prepare(
@@ -291,14 +296,7 @@ function forgetInTransaction(
       .run(sessionId);
     if (deleted.changes !== 1) throw new IndexMaintenanceError("corrupt-data");
 
-    database.exec(
-      `DELETE FROM sessions_content_values
-       WHERE NOT EXISTS (
-         SELECT 1
-         FROM sessions_content_occurrences AS occurrence
-         WHERE occurrence.content_id = sessions_content_values.content_id
-       )`,
-    );
+    deleteUnreferencedContentCandidates(database, contentCandidates);
     assertWriterLease(database, lease, { now });
     return "forgotten";
   });

@@ -142,5 +142,6 @@ function fixtureMaintenance(result?: CompactIndexResult, failure?: unknown): Ind
     clear: vi.fn<IndexMaintenance["clear"]>(),
     compact,
     forget: vi.fn<IndexMaintenance["forget"]>(),
+    repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
   };
 }

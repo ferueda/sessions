@@ -27,6 +27,7 @@ describe("clearData", () => {
       }),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(clearData(paths, maintenance)).resolves.toEqual({
@@ -52,6 +53,7 @@ describe("clearData", () => {
       }),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(clearData(paths, maintenance)).resolves.toEqual({
@@ -71,6 +73,7 @@ describe("clearData", () => {
       clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(failure),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(clearData(paths, maintenance)).rejects.toBe(failure);
@@ -82,6 +85,7 @@ describe("clearData", () => {
       clear: vi.fn<IndexMaintenance["clear"]>().mockRejectedValue(busy),
       compact: vi.fn<IndexMaintenance["compact"]>(),
       forget: vi.fn<IndexMaintenance["forget"]>(),
+      repairOrphans: vi.fn<IndexMaintenance["repairOrphans"]>(),
     };
 
     await expect(clearData(paths, maintenance)).rejects.toMatchObject({

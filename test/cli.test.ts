@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import type { DataClearReport } from "../src/application/clear-index.ts";
 import type { DataCompactReport } from "../src/application/compact-index.ts";
+import type { DataRepairOrphansReport } from "../src/application/repair-orphaned-content.ts";
 import type { ForgetSessionReport } from "../src/application/forget-session.ts";
 import type { PathsReport } from "../src/application/get-paths.ts";
 import type { IndexReport } from "../src/application/index-report.ts";
@@ -298,10 +299,11 @@ describe("sessions CLI", () => {
     expect(JSON.parse(confirmed.stdout)).toEqual(clearReport());
   });
 
-  test("lists compact beside clear in data help", async () => {
+  test("lists orphan repair and compact beside clear in data help", async () => {
     const invocation = await invoke(["data", "--help"]);
 
     expect(invocation.exitCode).toBe(0);
+    expect(invocation.stdout).toContain("repair-orphans");
     expect(invocation.stdout).toContain("compact");
     expect(invocation.stdout).toContain("clear");
     expect(invocation.stderr).toBe("");
@@ -360,6 +362,67 @@ describe("sessions CLI", () => {
     });
   });
 
+  test("repairs orphans without confirmation and emits the exact JSON report", async () => {
+    const report: DataRepairOrphansReport = {
+      schemaVersion: 1,
+      command: "data-repair-orphans",
+      outcome: "repaired",
+      deletedContentRows: "9007199254740993",
+      deletedContentBytes: "9223372036854775807",
+    };
+    const repairOrphanedData = vi.fn<ProgramOptions["repairOrphanedData"]>(async () => report);
+
+    const invocation = await invoke(["data", "repair-orphans", "--format", "json"], {
+      repairOrphanedData,
+    });
+
+    expect(invocation).toEqual({
+      exitCode: 0,
+      stdout: `${JSON.stringify(report, null, 2)}\n`,
+      stderr: "",
+    });
+    expect(repairOrphanedData).toHaveBeenCalledOnce();
+  });
+
+  test("rejects every unsupported orphan-repair option before calling the handler", async () => {
+    const repairOrphanedData = vi.fn<ProgramOptions["repairOrphanedData"]>();
+
+    const confirmation = await invoke(["data", "repair-orphans", "--yes"], {
+      repairOrphanedData,
+    });
+    const limit = await invoke(["data", "repair-orphans", "--limit", "1"], {
+      repairOrphanedData,
+    });
+    const cursor = await invoke(["data", "repair-orphans", "--cursor", "opaque"], {
+      repairOrphanedData,
+    });
+    const invalidFormat = await invoke(["data", "repair-orphans", "--format", "yaml"], {
+      repairOrphanedData,
+    });
+
+    expect([confirmation, limit, cursor, invalidFormat].map(({ exitCode }) => exitCode)).toEqual([
+      2, 2, 2, 2,
+    ]);
+    expect(repairOrphanedData).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    new SessionLibraryError("library-busy"),
+    new Error("Session library maintenance failed: repair-failed"),
+  ])("reports orphan-repair operational failures on stderr only", async (failure) => {
+    const invocation = await invoke(["data", "repair-orphans"], {
+      repairOrphanedData: async () => {
+        throw failure;
+      },
+    });
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: `sessions: ${failure.message}\n`,
+    });
+  });
+
   test("maps unexpected operational failures to stderr", async () => {
     const invocation = await invoke(["doctor"], {
       doctor: async () => {
@@ -394,6 +457,7 @@ async function invoke(
     forget: async () => forgetReport(),
     clearData: async () => clearReport(),
     compactData: async () => compactReport(),
+    repairOrphanedData: async () => repairOrphansReport(),
   };
   const exitCode = await runCli(argv, {
     version: "1.2.3",
@@ -497,5 +561,15 @@ function compactReport(): DataCompactReport {
     databaseBytesBefore: 0,
     databaseBytesAfter: 0,
     reclaimedDatabaseBytes: 0,
+  };
+}
+
+function repairOrphansReport(): DataRepairOrphansReport {
+  return {
+    schemaVersion: 1,
+    command: "data-repair-orphans",
+    outcome: "unchanged",
+    deletedContentRows: "0",
+    deletedContentBytes: "0",
   };
 }

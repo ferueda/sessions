@@ -361,6 +361,20 @@ export async function runM6SmokeWorkflow(options: M6SmokeWorkflowOptions): Promi
     assertCommand(repeatedForget, 0, "repeat forget");
     assert.equal(parseJson(repeatedForget.stdout).outcome, "absent");
 
+    const repairOrphans = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "data",
+      "repair-orphans",
+      "--format",
+      "json",
+    ]);
+    assertCommand(repairOrphans, 0, "data repair-orphans");
+    const repairOrphansReport = parseJson(repairOrphans.stdout);
+    assert.equal(repairOrphansReport.schemaVersion, 1);
+    assert.equal(repairOrphansReport.command, "data-repair-orphans");
+    assert.equal(repairOrphansReport.outcome, "unchanged");
+    assert.equal(repairOrphansReport.deletedContentRows, "0");
+    assert.equal(repairOrphansReport.deletedContentBytes, "0");
+
     const compact = await stableProviderCommand(options, fixture.codexHome, environment, [
       "data",
       "compact",

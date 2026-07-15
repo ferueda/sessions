@@ -25,6 +25,11 @@ import {
 import { forgetSqliteSession } from "./sqlite-index-forget.ts";
 import { compactSqliteIndex, type SqliteCompactObserver } from "./sqlite-index-compact.ts";
 import {
+  repairSqliteOrphanedContent,
+  type SqliteRepairObserver,
+} from "./sqlite-index-repair-orphans.ts";
+import { probeFts5Security, type Fts5SecurityCapability } from "./fts5-security.ts";
+import {
   acquireWriterLeaseInTransaction,
   assertWriterLease,
   heartbeatWriterLease,
@@ -43,9 +48,13 @@ export interface SqliteIndexMaintenanceOptions {
   readonly busyTimeoutMs?: number;
   readonly compactBatchPageBudgetBytes?: number;
   readonly compactObserver?: SqliteCompactObserver;
+  readonly fts5Probe?: () => Fts5SecurityCapability;
   readonly migrations?: readonly SqliteMigration[];
   readonly now?: () => Date;
   readonly platform?: NodeJS.Platform;
+  readonly repairObserver?: SqliteRepairObserver;
+  readonly repairPayloadByteLimit?: number;
+  readonly repairScanLimit?: number;
   readonly supportedSchemaVersion?: number;
   readonly token?: () => string;
   readonly unlinkFile?: (file: string) => Promise<void>;
@@ -67,6 +76,7 @@ export function createSqliteIndexMaintenance(
   }
   const platform = options.platform ?? process.platform;
   const now = options.now ?? currentTime;
+  const fts5Probe = options.fts5Probe ?? probeFts5Security;
 
   return {
     async clear(paths) {
@@ -110,6 +120,25 @@ export function createSqliteIndexMaintenance(
         now,
         platform,
         supportedSchemaVersion,
+        ...(options.token === undefined ? {} : { token: options.token }),
+        ...(options.writerScheduler === undefined
+          ? {}
+          : { writerScheduler: options.writerScheduler }),
+      });
+    },
+    async repairOrphans(paths) {
+      return repairSqliteOrphanedContent(paths, {
+        busyTimeoutMs,
+        fts5SecureDeleteRequired: () => fts5Probe().secureDelete,
+        migrations,
+        now,
+        platform,
+        supportedSchemaVersion,
+        ...(options.repairObserver === undefined ? {} : { observer: options.repairObserver }),
+        ...(options.repairPayloadByteLimit === undefined
+          ? {}
+          : { payloadByteLimit: options.repairPayloadByteLimit }),
+        ...(options.repairScanLimit === undefined ? {} : { scanLimit: options.repairScanLimit }),
         ...(options.token === undefined ? {} : { token: options.token }),
         ...(options.writerScheduler === undefined
           ? {}
