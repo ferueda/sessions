@@ -135,12 +135,24 @@ CREATE TABLE sessions_entries (
 
 CREATE TABLE sessions_content_values (
   content_id INTEGER PRIMARY KEY,
-  hash_scheme TEXT NOT NULL CHECK (hash_scheme = 'sha256-utf8-v1'),
-  digest TEXT NOT NULL
-    CHECK (length(digest) = 64 AND digest NOT GLOB '*[^a-f0-9]*'),
-  text TEXT NOT NULL COLLATE BINARY,
-  UNIQUE (hash_scheme, digest, text)
+  digest BLOB NOT NULL CHECK (length(digest) = 32),
+  text TEXT NOT NULL COLLATE BINARY
 ) STRICT;
+
+CREATE INDEX sessions_content_values_digest_idx
+  ON sessions_content_values(digest);
+
+CREATE TRIGGER sessions_content_values_duplicate_guard
+BEFORE INSERT ON sessions_content_values
+WHEN EXISTS (
+  SELECT 1
+  FROM sessions_content_values AS existing
+  WHERE existing.digest = new.digest
+    AND existing.text = new.text COLLATE BINARY
+)
+BEGIN
+  SELECT RAISE(ABORT, 'duplicate sessions content value');
+END;
 
 ${FTS_PROJECTION_SCHEMA_SQL}
 

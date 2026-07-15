@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -235,22 +236,77 @@ describe("SQLite ready-index health", () => {
     mutateDatabase(paths.database, (database) => {
       const inserted = database
         .prepare(
-          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-           VALUES (?, ?, ?)`,
+          `INSERT INTO sessions_content_values (digest, text)
+           VALUES (?, ?)
+           RETURNING content_id`,
         )
-        .run(contentHash.scheme, contentHash.digest, text);
+        .get(encodeSqliteContentDigest(contentHash.digest), text) as {
+        readonly content_id: number | bigint;
+      };
       database
         .prepare(
           `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
            VALUES ('delete', ?, ?)`,
         )
-        .run(inserted.lastInsertRowid, text);
+        .run(inserted.content_id, text);
     });
 
     await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
       ok: false,
       ftsContent: "failed",
     });
+  });
+
+  test("detects a referenced malformed stored digest", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      database
+        .prepare(
+          `UPDATE sessions_session_tracking
+           SET last_good_fingerprint_scheme = latest_fingerprint_scheme,
+               last_good_fingerprint_digest = latest_fingerprint_digest,
+               last_good_adapter_version = latest_adapter_version,
+               latest_outcome = 'indexed',
+               latest_failure_code = NULL
+           WHERE session_id = ?`,
+        )
+        .run(fixture.sessionId);
+      database
+        .prepare(
+          `INSERT INTO sessions_canonical_sessions (session_id, lineage_coverage)
+           VALUES (?, 'unknown')`,
+        )
+        .run(fixture.sessionId);
+      database
+        .prepare(
+          `INSERT INTO sessions_entries (
+             session_id, ordinal, kind, actor, source_locator_uri
+           ) VALUES (?, 0, 'message', 'human', 'memory://mismatched-digest')`,
+        )
+        .run(fixture.sessionId);
+      database.exec("PRAGMA ignore_check_constraints = ON");
+      const inserted = database
+        .prepare(
+          `INSERT INTO sessions_content_values (digest, text)
+           VALUES (?, 'canonical text')
+           RETURNING content_id`,
+        )
+        .get(new Uint8Array(31)) as {
+        readonly content_id: number | bigint;
+      };
+      database
+        .prepare(
+          `INSERT INTO sessions_content_occurrences (
+             session_id, entry_ordinal, segment_ordinal, content_id,
+             origin, confidence, source_metadata_json
+           ) VALUES (?, 0, 0, ?, 'human', 'high', '{}')`,
+        )
+        .run(fixture.sessionId, inserted.content_id);
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
   });
 
   test("detects foreign-key violations without exposing the violating row", async () => {

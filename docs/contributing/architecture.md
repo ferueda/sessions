@@ -107,9 +107,12 @@ The current baseline creates canonical text/omitted segments, exact tool identit
 and linkage, complete/unknown lineage coverage, source instances, latest
 successful fingerprints/documents, capture timestamps, source presence/coverage,
 bounded run evidence, a random library identity, derived external-content FTS,
-and writer coordination directly. Only text enters interning and FTS. Omitted
-content stores class, source type, ordinal, and provenance—never media bytes or
-references.
+and writer coordination directly. Only text enters interning and FTS. Canonical
+text keeps a stable integer content ID, stores the fixed SHA-256 digest as a
+32-byte BLOB, and narrows interning through a non-unique digest index before
+requiring exact binary text equality. A canonical insert guard rejects duplicate
+digest-and-text rows without preventing unequal collision members. Omitted content
+stores class, source type, ordinal, and provenance—never media bytes or references.
 
 Canonical replacement captures the prior document's distinct content IDs before
 cascade deletion, then prunes only those still unreferenced after insertion in

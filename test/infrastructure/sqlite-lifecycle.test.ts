@@ -37,6 +37,9 @@ import {
   type SqliteMigration,
 } from "../../src/infrastructure/sqlite/migrations.ts";
 
+const LEGACY_BOOTSTRAP_CHECKSUM =
+  "sha256-utf8-v1:be63645c8bcb17699fba78674153d9fa04603e0915497f6f9b6c194fdd58593c";
+
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -199,7 +202,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     mutateDatabase(checksumPaths.database, (database) => {
       database
         .prepare("UPDATE sessions_schema_migrations SET checksum = ? WHERE version = 1")
-        .run("sha256-utf8-v1:".padEnd(79, "0"));
+        .run(LEGACY_BOOTSTRAP_CHECKSUM);
     });
     const obsoleteBytes = await readFile(checksumPaths.database);
     await expect(lifecycle.inspect(checksumPaths)).resolves.toMatchObject({
@@ -208,6 +211,9 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
       schemaVersion: 1,
     });
     await expect(lifecycle.openWriter(checksumPaths)).rejects.toMatchObject({
+      state: { status: "incompatible", reason: "migration-checksum-mismatch" },
+    });
+    await expect(lifecycle.openReader(checksumPaths)).rejects.toMatchObject({
       state: { status: "incompatible", reason: "migration-checksum-mismatch" },
     });
     await expect(readFile(checksumPaths.database)).resolves.toEqual(obsoleteBytes);

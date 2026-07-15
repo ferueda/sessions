@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
@@ -27,18 +28,13 @@ describe("SQLite FTS projection repair", () => {
     const text = "retained indexed evidence";
     const contentHash = hashContent(text);
     mutateDatabase(paths.database, (database) => {
-      const inserted = database
-        .prepare(
-          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-           VALUES (?, ?, ?)`,
-        )
-        .run(contentHash.scheme, contentHash.digest, text);
+      const contentId = insertContent(database, contentHash.digest, text);
       database
         .prepare(
           `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
            VALUES ('delete', ?, ?)`,
         )
-        .run(inserted.lastInsertRowid, text);
+        .run(contentId, text);
       database.exec("DROP TRIGGER sessions_content_values_ai");
     });
     const canonicalBefore = readCanonicalRows(paths.database);
@@ -74,6 +70,7 @@ describe("SQLite FTS projection repair", () => {
     await writer.close();
 
     expect(readCanonicalRows(paths.database)).toEqual(canonicalBefore);
+    expectCanonicalDuplicateGuard(paths.database, contentHash.digest, text);
     await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
       ok: true,
       canonicalIntegrity: "ok",
@@ -103,21 +100,16 @@ describe("SQLite FTS projection repair", () => {
     const text = "canonical alpha";
     const contentHash = hashContent(text);
     mutateDatabase(paths.database, (database) => {
-      const inserted = database
-        .prepare(
-          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-           VALUES (?, ?, ?)`,
-        )
-        .run(contentHash.scheme, contentHash.digest, text);
+      const contentId = insertContent(database, contentHash.digest, text);
       database
         .prepare(
           `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
            VALUES ('delete', ?, ?)`,
         )
-        .run(inserted.lastInsertRowid, text);
+        .run(contentId, text);
       database
         .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
-        .run(inserted.lastInsertRowid, "poison beta");
+        .run(contentId, "poison beta");
 
       expect(
         database.prepare("SELECT count(*) AS count FROM sessions_content_values").get(),
@@ -177,12 +169,7 @@ BEFORE UPDATE ON sessions_content_values
 BEGIN
   SELECT RAISE(ABORT, 'sessions content values are immutable');
 END;`);
-      database
-        .prepare(
-          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-           VALUES (?, ?, ?)`,
-        )
-        .run(contentHash.scheme, contentHash.digest, text);
+      insertContent(database, contentHash.digest, text);
     });
     const alternateDefinition = readFtsTableDefinition(paths.database);
     const canonicalBefore = readCanonicalRows(paths.database);
@@ -220,18 +207,13 @@ END;`);
     const contentHash = hashContent(text);
     mutateDatabase(paths.database, (database) => {
       database.exec("PRAGMA foreign_keys = OFF");
-      const inserted = database
-        .prepare(
-          `INSERT INTO sessions_content_values (hash_scheme, digest, text)
-           VALUES (?, ?, ?)`,
-        )
-        .run(contentHash.scheme, contentHash.digest, text);
+      const contentId = insertContent(database, contentHash.digest, text);
       database
         .prepare(
           `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
            VALUES ('delete', ?, ?)`,
         )
-        .run(inserted.lastInsertRowid, text);
+        .run(contentId, text);
       database.exec("DROP TRIGGER sessions_content_values_ai");
       database
         .prepare(
@@ -289,6 +271,30 @@ function readCanonicalRows(file: string): Readonly<Record<string, readonly unkno
         table,
         database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
       ]),
+    );
+  } finally {
+    database.close();
+  }
+}
+
+function insertContent(database: DatabaseSync, digest: string, text: string): number | bigint {
+  const row = database
+    .prepare(
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
+       RETURNING content_id`,
+    )
+    .get(encodeSqliteContentDigest(digest), text) as {
+    readonly content_id: number | bigint;
+  };
+  return row.content_id;
+}
+
+function expectCanonicalDuplicateGuard(file: string, digest: string, text: string): void {
+  const database = new DatabaseSync(file);
+  try {
+    expect(() => insertContent(database, digest, text)).toThrow(
+      /duplicate sessions content value/u,
     );
   } finally {
     database.close();

@@ -248,7 +248,8 @@ Initial schema responsibilities:
 - migration metadata, source instances, index runs and run items;
 - sessions and provider-neutral relations;
 - ordered entries;
-- unique content values keyed collision-safely by hash scheme, digest, and text;
+- collision-safe content values with stable integer identity, compact fixed-scheme
+  digest buckets, and exact binary text equality guarded at canonical insertion;
 - content occurrences retaining session, entry, segment ordinal, actor, origin,
   confidence, timestamp, and diagnostic source metadata;
 - an external-content FTS5 table maintained as derived search state.
