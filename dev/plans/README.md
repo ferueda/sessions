@@ -9,8 +9,8 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. M10 capture truth and all-tracked
-reconciliation are complete. Bounded source-change recovery is next, followed by
-indexing instrumentation and a separately planned measured optimization. M11
+There are no active executor plans. M10 capture truth, all-tracked
+reconciliation, and bounded source-change recovery are complete. Indexing
+instrumentation and a separately planned measured optimization are next. M11
 then proves Cursor equivalence. Markdown presentation remains deferred beyond
 V1.

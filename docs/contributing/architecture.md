@@ -119,9 +119,12 @@ gate.
 
 The source port is `probe` / `discover(workspace)` / `read`. The application
 engine selects sources, admits a complete discovery set, compares fingerprints,
-owns last-good behavior, records coverage/presence, and reconciles unseen
-sessions. Adapters only turn provider evidence into candidates and canonical
-documents.
+owns last-good behavior, and holds first-attempt `source-changed` outcomes until
+the primary pass finishes. It then performs at most one fresh rediscovery per
+source, retries only affected original identities, records their terminal
+outcomes, and uses the primary discovery as the sole coverage and
+missing-reconciliation snapshot. Adapters only turn provider evidence into
+candidates and canonical documents; they do not own retry policy.
 
 Codex discovery snapshots `state_5.sqlite` and any active WAL bytes into a random
 private child of the Sessions `.scratch` workspace. The adapter never opens the

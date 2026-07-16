@@ -19,19 +19,30 @@ never writes to the provider.
    is recorded as unchanged without reading its transcript again.
 5. Read and validate each changed candidate. Replace its canonical document,
    public-document digest, tracking state, interned text, and FTS rows in one
-   leased transaction.
-6. Only after complete discovery, mark every tracked identity absent from that
-   exact source instance as `missing`. This includes a failed first capture that
-   has tracking evidence but no canonical document. Finish the run with
-   `complete` coverage.
+   leased transaction. Record ordinary typed failures immediately, but hold a
+   first-attempt `source-changed` outcome until the primary pass finishes.
+6. If any source-change outcomes were held, perform one fresh complete
+   rediscovery for that source and retry only those original identities, in
+   their primary order. A fresh last-good revision becomes unchanged without a
+   transcript read. Ignore identities found only by rediscovery.
+7. Using only the primary discovery's `seen` set, mark every tracked identity
+   absent from that exact source instance as `missing`. This includes a failed
+   first capture that has tracking evidence but no canonical document. Finish
+   the run with `complete` coverage.
 
 ## Guarantees and failures
 
-- An incomplete probe or discovery never proves that a retained session is
-  missing. Coverage stays `unknown`, and canonical documents remain available.
-- A candidate read failure is recorded and processing continues. An existing
-  canonical document remains the last good copy and becomes `stale`; a
-  first-read failure remains `unindexed`.
+- An incomplete probe or primary discovery never proves that a retained session
+  is missing. Coverage stays `unknown`, and canonical documents remain
+  available.
+- A first-attempt `source-changed` failure receives at most one fresh retry per
+  source run. Incomplete rediscovery, a vanished original identity, or another
+  typed read failure records one terminal failure. Other candidate read failures
+  are recorded without retry. An existing canonical document remains the last
+  good copy and becomes `stale`; a first-read failure remains `unindexed`.
+- The primary discovery alone controls coverage, the `seen` set, and missing
+  reconciliation. A retry-only identity cannot change those decisions, and a
+  failed retry does not make an otherwise complete primary scan incomplete.
 - A replacement failure rolls back the replacement, records a
   `repository-write` failure when possible, and fails the indexing operation.
 - A complete scan may mark a session `missing`, but it does not delete its
@@ -51,8 +62,10 @@ matched or failed a canonical metadata or transcript filter.
 
 A run must fully discover a selected source before it can prove absence. Changed
 sessions are then read and replaced one at a time; unchanged fingerprints avoid
-that work. This favors deterministic results, bounded failure handling, and
-last-good retention over parallel write throughput.
+that work. Source-change recovery may add one complete rediscovery for the
+source, shared by every affected primary candidate. It never adds a per-candidate
+discovery, sleep, backoff, or retry loop. This favors deterministic results,
+bounded failure handling, and last-good retention over parallel write throughput.
 
 ## Code and proofs
 

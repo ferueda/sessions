@@ -322,19 +322,30 @@ sequence:
 3. Fully exhaust, snapshot, validate, deduplicate, and deterministically order discovery before session mutation.
 4. Compare identity, complete-input fingerprint, and adapter format version with repository freshness.
 5. Record unchanged candidates without calling `read()`.
-6. Read and validate changed candidates, atomically replacing the latest successful canonical snapshot and its derived search rows.
-7. Preserve the previous successful snapshot after typed read failure, mark the candidate present, and report staleness.
-8. Record discovered candidates as present without changing their capture time when their normalized document is unchanged.
-9. Only after a complete scan for that exact source instance, mark every unseen tracked session missing while retaining canonical snapshots and tracking-only failure evidence.
-10. Finalize provider-neutral counts and bounded ordered diagnostics from durable repository state.
+6. Read and validate changed candidates, atomically replacing the latest
+   successful canonical snapshot and its derived search rows while holding
+   first-attempt `source-changed` outcomes through the primary pass.
+7. If any source-change outcomes were held, perform at most one fresh complete
+   rediscovery for the source and retry only those affected original identities.
+8. Preserve the previous successful snapshot after a final typed read failure,
+   mark the candidate present, and report staleness.
+9. Record discovered candidates as present without changing their capture time
+   when their normalized document is unchanged.
+10. Only after a complete primary scan for that exact source instance, mark every
+    unseen tracked session missing while retaining canonical snapshots and
+    tracking-only failure evidence.
+11. Finalize provider-neutral counts and bounded ordered diagnostics from durable
+    repository state.
 
-The implemented reconciliation now covers canonical and tracking-only identities,
-so a failed first capture may honestly become `unindexed + missing` without losing
-its failure evidence or manufacturing a document. The remaining M10 recovery
-extension stays in the application layer: a first-attempt `source-changed`
-outcome will be held until at most one fresh complete rediscovery retries only the
-affected original identities. The primary discovery remains the sole coverage
-and missing-reconciliation snapshot.
+The implemented reconciliation covers canonical and tracking-only identities, so
+a failed first capture may honestly become `unindexed + missing` without losing
+its failure evidence or manufacturing a document. Bounded recovery also stays in
+the application layer: first-attempt `source-changed` outcomes are held through
+the primary pass, then at most one fresh complete rediscovery retries only the
+affected original identities. Retry-only identities are ignored. The primary
+discovery remains the sole coverage and missing-reconciliation snapshot, and an
+incomplete or vanished retry target records one final failure without changing
+that coverage result.
 
 Properties:
 
@@ -356,10 +367,11 @@ prevent later selected sources from running. A failed or incomplete source scan
 leaves current source coverage unknown and retained snapshots untouched.
 Repository, lease, or finalization failures abort the invocation because
 persistence trust is lost. Sources run sequentially; V1 adds no daemon or
-parallel indexing. The planned bounded fresh-candidate retry adds no sleep or
-backoff loop. Indexing and the two potentially long data-maintenance
-commands write only an interactive startup notice that they may take a couple of
-minutes; they expose no semantic work-count or continuation-progress contract.
+parallel indexing. The bounded fresh-candidate retry adds no separate
+application probe, sleep, backoff, per-candidate rediscovery, or retry loop.
+Indexing and the two potentially long data-maintenance commands write only an
+interactive startup notice that they may take a couple of minutes; they expose no
+semantic work-count or continuation-progress contract.
 
 List, search, and entries are self-describing about capture scope. One
 page-level aggregate reports tracked, retained-current, retained-stale,
@@ -969,9 +981,10 @@ smoke ownership are complete.
 
 ### Phase 6 — Core evidence hardening
 
-All-tracked complete-scan reconciliation and honest aggregate capture scope are
-implemented. Remaining work retries `source-changed` once from a fresh candidate
-and instruments routine indexing before optimizing its measured dominant phase.
+All-tracked complete-scan reconciliation, honest aggregate capture scope, and
+bounded fresh-candidate recovery after `source-changed` are implemented.
+Remaining work instruments routine indexing before optimizing its measured
+dominant phase.
 Preserve exact canonical/query behavior and keep interpretation in the Agent Skill.
 
 ### Phase 7 — Equivalent second adapter

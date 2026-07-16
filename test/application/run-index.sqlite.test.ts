@@ -106,6 +106,200 @@ describe("runIndex with SQLite", () => {
     await currentReader.close();
   });
 
+  test("recovers a first capture from one fresh discovery without persisting the transient failure", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const identity = sessionIdentity(source.instance, "session");
+    const primary = source.candidate("session", "revision-primary");
+    const fresh = source.candidate("session", "revision-fresh");
+    source.setDocument("session", document(identity, "fresh capture"));
+    source.queueDiscoveries({ candidates: [primary] }, { candidates: [fresh] });
+    source.failNextRead("session", "source-changed");
+
+    const report = await index(lifecycle, paths, source.selected);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: {
+        discovered: 1,
+        unchanged: 0,
+        updated: 1,
+        failed: 0,
+        missing: 0,
+        stale: 0,
+      },
+      items: [],
+      omittedItemCount: 0,
+    });
+    expect(source.probeCount).toBe(1);
+    expect(source.discoveryWorkspaces).toHaveLength(2);
+    expect(
+      source.readCandidates.map(({ aggregateFingerprint }) => aggregateFingerprint.digest),
+    ).toEqual([primary.aggregateFingerprint.digest, fresh.aggregateFingerprint.digest]);
+
+    const reader = await lifecycle.openReader(paths);
+    await expect(reader.sessions.getFreshness(identity)).resolves.toMatchObject({
+      status: "current",
+      lastGood: {
+        aggregateFingerprint: fresh.aggregateFingerprint,
+      },
+      latest: { outcome: "indexed" },
+    });
+    await expect(reader.sessions.getDocument(identity)).resolves.toMatchObject({
+      title: "fresh capture",
+    });
+    await reader.close();
+    expect(readTrackingState(paths, identity)).toMatchObject({
+      latest_fingerprint_digest: fresh.aggregateFingerprint.digest,
+      latest_outcome: "indexed",
+      latest_failure_code: null,
+      presence_status: "present",
+      has_document: 1,
+    });
+  });
+
+  test("replaces an existing last-good snapshot after one fresh discovery", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const identity = sessionIdentity(source.instance, "session");
+    const baseline = source.candidate("session", "revision-baseline");
+    const runClock = clock();
+    source.setDocument("session", document(identity, "old snapshot"));
+    source.setDiscovery([baseline]);
+    await runIndex({ paths, sources: [source.selected], lifecycle, clock: runClock });
+    const baselineTracking = readTrackingState(paths, identity);
+
+    const primary = source.candidate("session", "revision-primary");
+    const fresh = source.candidate("session", "revision-fresh");
+    source.setDocument("session", document(identity, "fresh snapshot"));
+    source.queueDiscoveries({ candidates: [primary] }, { candidates: [fresh] });
+    source.failNextRead("session", "source-changed");
+
+    const report = await runIndex({
+      paths,
+      sources: [source.selected],
+      lifecycle,
+      clock: runClock,
+    });
+
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: {
+        discovered: 1,
+        unchanged: 0,
+        updated: 1,
+        failed: 0,
+        missing: 0,
+        stale: 0,
+      },
+      items: [],
+      omittedItemCount: 0,
+    });
+    expect(source.probeCount).toBe(2);
+    expect(source.discoveryWorkspaces).toHaveLength(3);
+    expect(
+      source.readCandidates.map(({ aggregateFingerprint }) => aggregateFingerprint.digest),
+    ).toEqual([
+      baseline.aggregateFingerprint.digest,
+      primary.aggregateFingerprint.digest,
+      fresh.aggregateFingerprint.digest,
+    ]);
+
+    const reader = await lifecycle.openReader(paths);
+    await expect(reader.sessions.getFreshness(identity)).resolves.toMatchObject({
+      status: "current",
+      lastGood: { aggregateFingerprint: fresh.aggregateFingerprint },
+      latest: { outcome: "indexed" },
+    });
+    await expect(reader.sessions.getDocument(identity)).resolves.toMatchObject({
+      title: "fresh snapshot",
+    });
+    await reader.close();
+    const refreshedTracking = readTrackingState(paths, identity);
+    expect(refreshedTracking).toMatchObject({
+      latest_fingerprint_digest: fresh.aggregateFingerprint.digest,
+      latest_outcome: "indexed",
+      latest_failure_code: null,
+      presence_status: "present",
+      captured_at: expect.any(String),
+      has_document: 1,
+    });
+    expect(refreshedTracking.captured_at).not.toBe(baselineTracking.captured_at);
+  });
+
+  test("records one terminal fresh source-change while preserving the last-good document", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const identity = sessionIdentity(source.instance, "session");
+    const baseline = source.candidate("session", "revision-baseline");
+    source.setDocument("session", document(identity, "last good"));
+    source.setDiscovery([baseline]);
+    await index(lifecycle, paths, source.selected);
+    const baselineTracking = readTrackingState(paths, identity);
+
+    const primary = source.candidate("session", "revision-primary");
+    const fresh = source.candidate("session", "revision-fresh");
+    source.queueDiscoveries({ candidates: [primary] }, { candidates: [fresh] });
+    source.failRead("session", "source-changed");
+
+    const report = await index(lifecycle, paths, source.selected);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: {
+        discovered: 1,
+        unchanged: 0,
+        updated: 0,
+        failed: 1,
+        missing: 0,
+        stale: 1,
+      },
+      items: [
+        {
+          identity,
+          outcome: "failed",
+          failure: "source-changed",
+        },
+      ],
+      omittedItemCount: 0,
+    });
+    expect(source.probeCount).toBe(2);
+    expect(source.discoveryWorkspaces).toHaveLength(3);
+    expect(
+      source.readCandidates.map(({ aggregateFingerprint }) => aggregateFingerprint.digest),
+    ).toEqual([
+      baseline.aggregateFingerprint.digest,
+      primary.aggregateFingerprint.digest,
+      fresh.aggregateFingerprint.digest,
+    ]);
+
+    const reader = await lifecycle.openReader(paths);
+    await expect(reader.sessions.getFreshness(identity)).resolves.toMatchObject({
+      status: "stale",
+      lastGood: { aggregateFingerprint: baseline.aggregateFingerprint },
+      latest: {
+        outcome: "failed",
+        revision: { aggregateFingerprint: fresh.aggregateFingerprint },
+        failure: "source-changed",
+      },
+    });
+    await expect(reader.sessions.getDocument(identity)).resolves.toMatchObject({
+      title: "last good",
+    });
+    await reader.close();
+    expect(readTrackingState(paths, identity)).toMatchObject({
+      latest_fingerprint_digest: fresh.aggregateFingerprint.digest,
+      latest_outcome: "failed",
+      latest_failure_code: "source-changed",
+      presence_status: "present",
+      captured_at: baselineTracking.captured_at,
+      has_document: 1,
+    });
+  });
+
   test("reconciles a failed-first candidate as missing before a later successful read", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();

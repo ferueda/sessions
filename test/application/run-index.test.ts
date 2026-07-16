@@ -268,6 +268,245 @@ describe("runIndex", () => {
     });
   });
 
+  test("does not rediscover after a terminal non-source-change failure", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("session")]);
+    source.failNextRead("session", "malformed");
+    const harness = createIndexHarness();
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toEqual({
+      discovered: 1,
+      unchanged: 0,
+      updated: 0,
+      failed: 1,
+      missing: 0,
+      stale: 0,
+    });
+    expect(source.probeCount).toBe(1);
+    expect(source.discoveryWorkspaces).toEqual([syntheticDiscoveryWorkspace]);
+    expect(source.readNativeIds).toEqual(["session"]);
+  });
+
+  test("recovers multiple changed sessions through one ordered fresh discovery", async () => {
+    const source = createFakeIndexingSource();
+    const primaryA = source.candidate("a-session", "primary-a");
+    const primaryB = source.candidate("b-session", "primary-b");
+    const freshA = source.candidate("a-session", "fresh-a");
+    const freshB = source.candidate("b-session", "fresh-b");
+    const retryOnly = source.candidate("retry-only", "fresh-new");
+    source.queueDiscoveries(
+      { candidates: [primaryB, primaryA] },
+      { candidates: [retryOnly, freshB, freshA] },
+    );
+    source.failNextRead("a-session", "source-changed");
+    source.failNextRead("b-session", "source-changed");
+    const harness = createIndexHarness();
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toEqual({
+      discovered: 2,
+      unchanged: 0,
+      updated: 2,
+      failed: 0,
+      missing: 0,
+      stale: 0,
+    });
+    expect(report.sources[0]?.items).toEqual([]);
+    expect(source.probeCount).toBe(1);
+    expect(source.discoveryWorkspaces).toEqual([
+      syntheticDiscoveryWorkspace,
+      syntheticDiscoveryWorkspace,
+    ]);
+    expect(source.readNativeIds).toEqual(["a-session", "b-session", "a-session", "b-session"]);
+    await expect(harness.index.getFreshness(primaryA.identity)).resolves.toMatchObject({
+      status: "current",
+      latest: { revision: { aggregateFingerprint: freshA.aggregateFingerprint } },
+    });
+    await expect(harness.index.getFreshness(primaryB.identity)).resolves.toMatchObject({
+      status: "current",
+      latest: { revision: { aggregateFingerprint: freshB.aggregateFingerprint } },
+    });
+    await expect(harness.index.getFreshness(retryOnly.identity)).resolves.toMatchObject({
+      status: "untracked",
+    });
+    expect(harness.index.recordFailureCalls).toBe(0);
+  });
+
+  test("uses fresh last-good state while keeping retry-only identities out of coverage", async () => {
+    const source = createFakeIndexingSource();
+    const lastGood = source.candidate("kept", "revision-one");
+    const laterMissing = source.candidate("later-missing", "revision-one");
+    source.setDiscovery([laterMissing, lastGood]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const readsAfterBaseline = source.readNativeIds.length;
+
+    const primaryChanged = source.candidate("kept", "revision-two");
+    const retryOnlyMissing = source.candidate("later-missing", "revision-two");
+    const retryOnlyNew = source.candidate("new-session", "revision-one");
+    source.queueDiscoveries(
+      { candidates: [primaryChanged] },
+      { candidates: [retryOnlyNew, retryOnlyMissing, lastGood] },
+    );
+    source.failNextRead("kept", "source-changed");
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toEqual({
+      discovered: 1,
+      unchanged: 1,
+      updated: 0,
+      failed: 0,
+      missing: 1,
+      stale: 0,
+    });
+    expect(report.sources[0]?.items).toMatchObject([
+      { identity: { nativeId: "later-missing" }, outcome: "missing" },
+    ]);
+    expect(source.readNativeIds.slice(readsAfterBaseline)).toEqual(["kept"]);
+    await expect(harness.index.getFreshness(lastGood.identity)).resolves.toMatchObject({
+      status: "current",
+      latest: {
+        outcome: "unchanged",
+        revision: { aggregateFingerprint: lastGood.aggregateFingerprint },
+      },
+    });
+    await expect(harness.index.getFreshness(retryOnlyNew.identity)).resolves.toMatchObject({
+      status: "untracked",
+    });
+  });
+
+  test("discards partial retry discovery and reconciles missing from the primary snapshot", async () => {
+    const source = createFakeIndexingSource();
+    const laterMissing = source.candidate("later-missing", "revision-one");
+    source.setDiscovery([laterMissing]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const readsAfterBaseline = source.readNativeIds.length;
+
+    const primary = source.candidate("retry-target", "primary-revision");
+    const fresh = source.candidate("retry-target", "fresh-revision");
+    source.queueDiscoveries(
+      { candidates: [primary] },
+      {
+        candidates: [fresh],
+        failure: { error: new Error("private retry discovery failure"), afterCandidates: 1 },
+      },
+    );
+    source.failNextRead("retry-target", "source-changed");
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      coverage: { status: "complete" },
+      counts: { discovered: 1, failed: 1, missing: 1, stale: 0 },
+      items: [
+        {
+          identity: { nativeId: "retry-target" },
+          outcome: "failed",
+          failure: "source-changed",
+        },
+        { identity: { nativeId: "later-missing" }, outcome: "missing" },
+      ],
+    });
+    expect(source.readNativeIds.slice(readsAfterBaseline)).toEqual(["retry-target"]);
+    await expect(harness.index.getFreshness(primary.identity)).resolves.toMatchObject({
+      status: "unindexed",
+      latest: { revision: { aggregateFingerprint: primary.aggregateFingerprint } },
+    });
+  });
+
+  test("records one fresh terminal failure after an immediate primary failure", async () => {
+    const source = createFakeIndexingSource();
+    const lastGood = source.candidate("a-retry", "last-good");
+    source.setDiscovery([lastGood]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+
+    const primary = source.candidate("a-retry", "primary-revision");
+    const immediate = source.candidate("b-malformed", "primary-revision");
+    const fresh = source.candidate("a-retry", "fresh-revision");
+    source.queueDiscoveries({ candidates: [immediate, primary] }, { candidates: [fresh] });
+    source.failNextRead("a-retry", "source-changed");
+    source.failNextRead("a-retry", "source-changed");
+    source.failNextRead("b-malformed", "malformed");
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toEqual({
+      discovered: 2,
+      unchanged: 0,
+      updated: 0,
+      failed: 2,
+      missing: 0,
+      stale: 1,
+    });
+    expect(report.sources[0]?.items).toMatchObject([
+      { identity: { nativeId: "b-malformed" }, outcome: "failed", failure: "malformed" },
+      { identity: { nativeId: "a-retry" }, outcome: "failed", failure: "source-changed" },
+    ]);
+    expect(harness.index.recordFailureCalls).toBe(2);
+    expect(source.readNativeIds).toEqual(["a-retry", "a-retry", "b-malformed", "a-retry"]);
+    await expect(harness.index.getFreshness(primary.identity)).resolves.toMatchObject({
+      status: "stale",
+      latest: { revision: { aggregateFingerprint: fresh.aggregateFingerprint } },
+    });
+  });
+
+  test("records a vanished retry target from its primary observation", async () => {
+    const source = createFakeIndexingSource();
+    const primary = source.candidate("vanished", "primary-revision");
+    source.queueDiscoveries({ candidates: [primary] }, { candidates: [] });
+    source.failNextRead("vanished", "source-changed");
+    const harness = createIndexHarness();
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: { discovered: 1, failed: 1, missing: 0, stale: 0 },
+      items: [
+        {
+          identity: { nativeId: "vanished" },
+          outcome: "failed",
+          failure: "source-changed",
+        },
+      ],
+    });
+    expect(source.discoveryWorkspaces).toHaveLength(2);
+    expect(source.readNativeIds).toEqual(["vanished"]);
+    await expect(harness.index.getFreshness(primary.identity)).resolves.toMatchObject({
+      status: "unindexed",
+      latest: { revision: { aggregateFingerprint: primary.aggregateFingerprint } },
+    });
+  });
+
+  test("does not rediscover a third time after a different final read failure", async () => {
+    const source = createFakeIndexingSource();
+    const primary = source.candidate("session", "primary-revision");
+    const fresh = source.candidate("session", "fresh-revision");
+    source.queueDiscoveries({ candidates: [primary] }, { candidates: [fresh] });
+    source.failNextRead("session", "source-changed");
+    source.failNextRead("session", "unreadable");
+    const harness = createIndexHarness();
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toMatchObject({ discovered: 1, failed: 1, stale: 0 });
+    expect(report.sources[0]?.items).toMatchObject([
+      { identity: { nativeId: "session" }, outcome: "failed", failure: "unreadable" },
+    ]);
+    expect(source.discoveryWorkspaces).toHaveLength(2);
+    expect(source.readNativeIds).toEqual(["session", "session"]);
+    await expect(harness.index.getFreshness(primary.identity)).resolves.toMatchObject({
+      latest: { revision: { aggregateFingerprint: fresh.aggregateFingerprint } },
+    });
+  });
+
   test("performs no candidate mutation or reconciliation after incomplete discovery", async () => {
     const source = createFakeIndexingSource();
     source.setDiscovery([
