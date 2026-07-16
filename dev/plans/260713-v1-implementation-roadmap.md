@@ -24,8 +24,9 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 7 are complete. M8 agent analysis retrieval is the next
-implementation milestone.
+Milestones 0 through 7 are complete. M8 agent analysis retrieval is in progress:
+query-scoped lineage resolution is complete and bounded show/export ranges are
+next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -65,8 +66,8 @@ The repository now includes:
 - deterministic entry-level ranking, bounded adjacent/direct tool context,
   query-wide occurrence/content/root/unknown-lineage support, and opaque cursors
   bound to query, library identity, and writer generation;
-- explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and an
-  iterative provider-neutral root resolver;
+- explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and a
+  query-scoped iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
   doctor remains read-only;
 - aggregate orphan-content reachability in doctor plus explicit provider-free,
@@ -802,8 +803,9 @@ transcript export.
 
 Execution sequence:
 
-1. optimize query-scoped lineage resolution and prove the broad-search cost;
-2. expose bounded show/export ranges through the existing selector;
+1. **Complete:** optimize query-scoped lineage resolution and prove the
+   broad-search cost;
+2. **Next:** expose bounded show/export ranges through the existing selector;
 3. add the textless entry inventory and its structured contract;
 4. add literal-any search, per-result root attribution, and activity bounds.
 

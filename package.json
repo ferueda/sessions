@@ -47,6 +47,7 @@
     "lint": "oxlint -c .oxlintrc.json src scripts test vitest.config.ts",
     "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
     "measure:content-storage": "node scripts/measure-content-storage.ts",
+    "measure:query-lineage": "node scripts/measure-query-lineage.ts",
     "prepack": "pnpm build",
     "prepare": "simple-git-hooks",
     "smoke:dist": "node scripts/smoke-dist.ts",

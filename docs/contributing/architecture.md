@@ -1,6 +1,7 @@
 # Current architecture
 
-Status: M7 JSON/JSONL delivery complete; M8 agent analysis retrieval is next.
+Status: M8 agent analysis retrieval is in progress; query-scoped lineage
+resolution is complete and bounded show/export ranges are next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.

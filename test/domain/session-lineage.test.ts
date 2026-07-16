@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  resolveSessionRoot,
+  createSessionRootResolver,
   type SessionLineageEvidence,
 } from "../../src/domain/session-lineage.ts";
 import type {
@@ -129,7 +129,90 @@ describe("resolveSessionRoot", () => {
     expect(resolveSessionRoot(identity("missing"), [first])).toEqual({ kind: "unknown" });
     expect(resolveSessionRoot(first.identity, [first, duplicate])).toEqual({ kind: "unknown" });
   });
+
+  test("indexes retained evidence once and reuses finalized shared ancestry", () => {
+    let retainedIterations = 0;
+    let rootRelationIterations = 0;
+    const root = evidence(
+      "root",
+      countedArray([], () => (rootRelationIterations += 1)),
+    );
+    const left = evidence("left", [relation("parent", root.identity)]);
+    const right = evidence("right", [relation("continuation", root.identity)]);
+    const retained = countedArray([left, right, root], () => (retainedIterations += 1));
+
+    const resolveRoot = createSessionRootResolver(retained);
+    expect(retainedIterations).toBe(1);
+
+    const leftResolution = resolveRoot(left.identity);
+    expect(leftResolution).toEqual({ kind: "known", root: root.identity });
+    expect(resolveRoot(right.identity)).toEqual({ kind: "known", root: root.identity });
+    expect(resolveRoot(root.identity)).toEqual({ kind: "known", root: root.identity });
+    expect(resolveRoot(left.identity)).toBe(leftResolution);
+    expect(retainedIterations).toBe(1);
+    expect(rootRelationIterations).toBe(1);
+  });
+
+  test("keeps shared memo results independent of resolution order", () => {
+    const root = evidence("root");
+    const convergentLeft = evidence("convergent-left", [relation("parent", root.identity)]);
+    const convergentRight = evidence("convergent-right", [relation("continuation", root.identity)]);
+    const convergent = evidence("convergent", [
+      relation("parent", convergentLeft.identity),
+      relation("fork", convergentRight.identity),
+    ]);
+    const divergent = evidence("divergent", [
+      relation("parent", root.identity),
+      relation("fork", identity("other-root")),
+    ]);
+    const otherRoot = evidence("other-root");
+    const cycleLeft = evidence("cycle-left", [relation("parent", identity("cycle-right"))]);
+    const cycleRight = evidence("cycle-right", [relation("parent", cycleLeft.identity)]);
+    const sessions = [
+      root,
+      convergentLeft,
+      convergentRight,
+      convergent,
+      divergent,
+      otherRoot,
+      cycleLeft,
+      cycleRight,
+    ];
+
+    const forward = resolutionsByNativeId(sessions, sessions);
+    const reverse = resolutionsByNativeId([...sessions].reverse(), sessions);
+
+    expect(reverse).toEqual(forward);
+    expect(forward.get("convergent")).toEqual({ kind: "known", root: root.identity });
+    expect(forward.get("divergent")).toEqual({ kind: "unknown" });
+    expect(forward.get("cycle-left")).toEqual({ kind: "unknown" });
+    expect(forward.get("cycle-right")).toEqual({ kind: "unknown" });
+  });
 });
+
+function resolveSessionRoot(start: SessionIdentity, sessions: readonly SessionLineageEvidence[]) {
+  return createSessionRootResolver(sessions)(start);
+}
+
+function resolutionsByNativeId(
+  order: readonly SessionLineageEvidence[],
+  retained: readonly SessionLineageEvidence[],
+) {
+  const resolveRoot = createSessionRootResolver(retained);
+  return new Map(order.map(({ identity: session }) => [session.nativeId, resolveRoot(session)]));
+}
+
+function countedArray<T>(values: readonly T[], onIterate: () => void): readonly T[] {
+  const result = [...values];
+  const iterator = result[Symbol.iterator].bind(result);
+  Object.defineProperty(result, Symbol.iterator, {
+    value: () => {
+      onIterate();
+      return iterator();
+    },
+  });
+  return result;
+}
 
 function evidence(
   nativeId: string,
