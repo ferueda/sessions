@@ -15,7 +15,7 @@ import {
   type SessionEntryQuery,
   type SessionQuerySummary,
 } from "../../domain/session-query.ts";
-import { formatSessionIdentity, isSessionIdentity } from "../../domain/session-identity.ts";
+import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import {
   decodeQueryCursor,
@@ -78,7 +78,7 @@ function readEntryRows(
   offset: number,
 ): readonly EntryCoordinateRow[] {
   const outer = entryInventoryWhere(query.filter);
-  const selection = selectionClause(query, outer);
+  const selection = selectionClause(query);
   return database
     .prepare(
       `SELECT canonical.session_id,
@@ -115,7 +115,7 @@ function readEntryRows(
     ) as unknown as readonly EntryCoordinateRow[];
 }
 
-function selectionClause(query: SessionEntryQuery, _outer: SqliteQueryWhere): SqliteQueryWhere {
+function selectionClause(query: SessionEntryQuery): SqliteQueryWhere {
   if (query.selection === "all") return { sql: "", parameters: [] };
   const selected = entrySelectionWhere(query.filter, "selected_entry");
   return {
@@ -142,7 +142,6 @@ function hydrateEntries(
   const counts = readContentCounts(database, coordinates);
   const previews = readPreviews(database, coordinates, query.filter.origin);
   const resolveRoot = createRetainedSessionRootResolver(database);
-  const rootCache = new Map<string, ReturnType<typeof resolveRoot>>();
   const summaryCache = new Map<number, SessionQuerySummary>();
 
   return rows.map((row, index) => {
@@ -156,12 +155,7 @@ function hydrateEntries(
       summary = freezeSummary(stored);
       summaryCache.set(coordinate.sessionId, summary);
     }
-    const identityKey = formatSessionIdentity(identity);
-    let root = rootCache.get(identityKey);
-    if (root === undefined) {
-      root = resolveRoot(identity);
-      rootCache.set(identityKey, root);
-    }
+    const root = resolveRoot(identity);
     const coordinateKey = contentKey(coordinate.sessionId, coordinate.entryOrdinal);
     const count = counts.get(coordinateKey);
     if (count === undefined) throw new SqliteSessionIndexError("corrupt-data");

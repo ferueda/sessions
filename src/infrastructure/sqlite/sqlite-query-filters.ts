@@ -49,7 +49,7 @@ export function entryInventoryWhere(filter: SessionEntryFilter): SqliteQueryWher
   const conditions: string[] = [];
   const parameters: string[] = [];
   appendCommonFilters(conditions, parameters, filter);
-  appendEntryFilters(conditions, parameters, filter, "entry", true);
+  appendEntryFilters(conditions, parameters, filter, "entry");
   return where(conditions, parameters);
 }
 
@@ -59,7 +59,7 @@ export function entrySelectionWhere(
 ): SqliteQueryWhere {
   const conditions: string[] = [];
   const parameters: string[] = [];
-  appendEntryFilters(conditions, parameters, filter, entryAlias, true);
+  appendEntryFilters(conditions, parameters, filter, entryAlias);
   return where(conditions, parameters);
 }
 
@@ -68,12 +68,11 @@ function appendEntryFilters(
   parameters: string[],
   filter: SessionEntryFilter,
   entryAlias: string,
-  originExists: boolean,
 ): void {
   appendExclusiveBound(conditions, parameters, `${entryAlias}.timestamp`, ">", filter.entryAfter);
   appendExclusiveBound(conditions, parameters, `${entryAlias}.timestamp`, "<", filter.entryBefore);
   appendExact(conditions, parameters, `${entryAlias}.actor`, filter.actor);
-  if (filter.origin !== undefined && originExists) {
+  if (filter.origin !== undefined) {
     conditions.push(
       `EXISTS (
         SELECT 1
