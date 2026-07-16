@@ -397,14 +397,21 @@ describe("sessions CLI", () => {
         throw new StructuredOutputTooLargeError();
       },
     });
+    const entriesOverflow = await invoke(["entries", "--format", "json"], {
+      entries: async () => {
+        throw new StructuredOutputTooLargeError();
+      },
+    });
 
     expect(invalidDoctor.exitCode).toBe(2);
     expect(invalidList.exitCode).toBe(2);
     expect(overflow).toEqual({
       exitCode: 1,
       stdout: "",
-      stderr: "sessions: structured-output-too-large: narrow list/search or use export --full\n",
+      stderr:
+        "sessions: structured-output-too-large: narrow list/search/entries or use export --full\n",
     });
+    expect(entriesOverflow).toEqual(overflow);
   });
 
   test("requires the option delimiter for leading-dash search text", async () => {
