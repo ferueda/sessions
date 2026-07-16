@@ -37,6 +37,19 @@ sessions search <text> [--source SOURCE] [--instance INSTANCE]
                        [--tool-name NAME] [--tool-namespace NAMESPACE]
                        [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
+sessions entries [--source SOURCE] [--instance INSTANCE]
+                 [--native-id NATIVE-ID]
+                 [--source-state present|missing|unknown]
+                 [--workspace WORKSPACE]
+                 [--captured-after TIME] [--captured-before TIME]
+                 [--observed-after TIME] [--observed-before TIME]
+                 [--session CANONICAL-ID]
+                 [--entry-after TIME] [--entry-before TIME]
+                 [--actor ACTOR] [--origin ORIGIN] [--kind KIND]
+                 [--tool-name NAME] [--tool-namespace NAMESPACE]
+                 [--select all|first|last]
+                 [--limit N] [--cursor TOKEN]
+                 [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
@@ -51,7 +64,7 @@ The bare command prints help. `index` is the only ordinary command that reads
 rollout content or initializes the durable library. `forget` mutates only a
 current initialized library. `data repair-orphans` and `data compact` are
 provider-free maintenance over an existing current library; neither resolves a
-source. List, search, show, and export are provider-free reads of the retained
+source. List, search, entries, show, and export are provider-free reads of the retained
 library. `doctor` and `paths` inspect runtime, library, and registered-source
 readiness without indexing or creating state.
 
@@ -73,9 +86,18 @@ resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
 `search` requires non-blank text, defaults to 20 primary hits, and accepts 1
 through 200. `--context` defaults to 0 and accepts 0 through 10 adjacent entries
 on each side. A no-match result renders exactly `No matches found.` plus a
-newline and exits `0`. Search, list, and show read one immutable retained-library
+newline and exits `0`. Search, list, entries, and show read one immutable retained-library
 snapshot per operation and never resolve or reopen Codex. JSON emits an empty
 page bundle; JSONL emits one page record.
+
+`entries` requires no search text. It defaults to `--select all` and 50 records,
+and accepts 1 through 200. `all` returns every qualifying entry. `first` and
+`last` return the minimum or maximum canonical entry ordinal per session after
+all filters are applied. Every mode orders by binary source kind, source
+instance, native ID, then entry ordinal ascending; timestamps never reorder
+evidence. A fresh library renders exactly `No entries found.` plus a newline,
+exits `0`, and creates no state or provider object. JSON emits an empty page;
+JSONL emits one page record.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
@@ -86,7 +108,7 @@ including either range endpoint outside the retained document, are operational
 failures; ranges are never clamped.
 Incomplete, reversed, oversized, or conflicting ranges exit `2` before library
 inspection.
-List/search/show default to human and accept JSON or JSONL. Human output escapes
+List/search/entries/show default to human and accept JSON or JSONL. Human output escapes
 and bounds untrusted terminal content. Machine output uses the exact closed
 schema-1 records in the
 [structured output contract](structured-output.md). All formats report
@@ -197,12 +219,11 @@ then index again. `data clear` does not claim that incompatible database.
 
 ```text
 sessions index --source cursor
-sessions entries [filters] [--limit N] [--cursor TOKEN]
-                 [--format human|json|jsonl]
 ```
 
-M8 also adds literal-any search, per-result root attribution, and activity
-bounds. Bounded show/export ranges are current. Markdown is deferred beyond V1
+M8 also adds literal-any search, list/search root attribution, and activity
+bounds. Textless entry inventory and bounded show/export ranges are current.
+Markdown is deferred beyond V1
 and `--format md` is not accepted today. Planned routes are added to generated
 help only when implemented and contract-tested.
 
@@ -249,8 +270,8 @@ committed batch is durable; a later failure emits no success report and rerunnin
 is safe. It reclaims whole free pages only, never repacks partially used pages,
 and reports observed main-database file lengths rather than guaranteed savings.
 
-On a fresh uninitialized library, `sessions list` and a cursor-free
-`sessions search` exit `0`, write their format-specific empty result to stdout,
+On a fresh uninitialized library, `sessions list`, cursor-free `sessions search`,
+and cursor-free `sessions entries` exit `0`, write their format-specific empty result to stdout,
 and leave stderr empty. Human uses the exact messages above; JSON uses an empty
 page bundle; JSONL uses one page record. They do not create storage, run
 migrations, open a reader, or resolve/probe an adapter. Initialized-but-empty
@@ -263,7 +284,7 @@ uninitialized library, remain sanitized not-found operational failures.
 
 The current pre-alpha operational reports are exact test-backed contracts. The
 separate [structured output contract](structured-output.md) owns
-transcript-bearing list/search/show/export JSON and JSONL.
+transcript-bearing list/search/entries/show/export JSON and JSONL.
 
 `sessions index --format json` emits the current schema-1 report. A complete
 representative report is:
@@ -498,7 +519,7 @@ Canonical printable IDs use
 native IDs are case-sensitive opaque values; delimiters are escaped and values
 are never Unicode-normalized.
 
-### Shared list/search filters
+### Shared session filters
 
 Each filter accepts one value; different filters combine with AND. Exact values
 use their case-sensitive canonical representation:
@@ -535,6 +556,49 @@ the source coverage observation while coverage is unknown, otherwise use the
 session presence observation. `lastSeenAt`, capture time, and provider activity
 time are never substituted.
 
+### Entry filters
+
+Search and entries share exact entry filters:
+
+- exclusive `--entry-after` / `--entry-before` canonical entry timestamps;
+- exact `--actor` values `human`, `model`, `tool`, `system`, or `unknown`;
+- exact `--origin` values `human`, `injected`, `delegated`, `replayed-copied`,
+  `model`, `tool`, `system`, or `unknown`;
+- exact `--kind`, `--tool-name`, and `--tool-namespace` values.
+
+Entry time, actor, kind, and tool fields apply to the canonical entry. Tool name
+and namespace combine with AND and select observed `tool-call` entries only. A
+call without a namespace does not match a namespace filter. Text mentions,
+injected catalogs, and agent claims never manufacture a call or prove a named
+skill or workflow ran.
+
+Origin applies to canonical segments. For entries, any matching segment qualifies,
+including an omitted segment; an empty entry does not. Search requires a matching
+text occurrence, so omitted content cannot be a primary search match. All exact
+filters combine with AND.
+
+### Entry inventory
+
+`sessions entries` selects entry structure without a text predicate or FTS. The
+selection is applied after every session and entry filter. `first` and `last`
+choose the lowest or highest qualifying canonical ordinal in each session, not
+the earliest or latest timestamp.
+
+Each result includes its retained session summary, exact entry coordinate and
+observed tool/linkage fields, exact text and omitted-segment counts, one optional
+preview, and root attribution. Without `--origin`, the lowest-ordinal text
+segment supplies the preview. With `--origin`, only the lowest-ordinal matching
+text segment can supply it. If only omitted content matches, the result has no
+preview rather than showing unrelated text. A preview is bounded to 512 UTF-8
+bytes and keeps the full text content hash. The unpreviewed count is the number
+of retained text segments not represented by that one preview.
+
+Root attribution is either one known retained session reference or `unknown`,
+using the lineage rules below. It is query-derived evidence only and does not
+change canonical documents, document digests, exports, filters, or ordering.
+Human output prints the escaped session/entry heading, root, preview or
+`(no text preview)`, content counts, and any next cursor.
+
 ### Search text, filters, and hits
 
 Search splits well-formed input on Unicode whitespace, quotes every non-empty
@@ -547,20 +611,8 @@ input that yields no tokens under the fixed FTS5 `unicode61` tokenizer succeeds 
 Lexical case/diacritic behavior follows that tokenizer; it is distinct from the
 case-sensitive exact filters below.
 
-Search-only filters are:
-
-- exclusive `--entry-after` / `--entry-before` canonical entry timestamps;
-- exact `--actor` values `human`, `model`, `tool`, `system`, or `unknown`;
-- exact `--origin` values `human`, `injected`, `delegated`, `replayed-copied`,
-  `model`, `tool`, `system`, or `unknown`;
-- exact `--kind`, `--tool-name`, and `--tool-namespace` values.
-
 Filters constrain the primary matching occurrence/entry; returned context need
-not satisfy them. Origin applies to the matching text occurrence. Tool-name and
-namespace are separate observed fields, combine with AND, and select canonical
-`tool-call` entries only. A call without a namespace does not match a namespace
-filter. Text mentions, injected catalogs, and agent claims never manufacture a
-call or prove a named skill/workflow ran.
+not satisfy them. Origin applies to the matching text occurrence.
 
 Qualifying text occurrences group by canonical session identity and entry
 ordinal, yielding one primary hit per entry. The best-ranked matching segment,
@@ -605,7 +657,7 @@ lineage, and one support unit is never substituted for another.
 
 ### Continuation cursors
 
-List and search expose an opaque next cursor only when more primary rows exist.
+List, search, and entries expose an opaque next cursor only when more primary rows exist.
 The token binds its command, the complete normalized query/order contract, a
 random library instance identity, the current writer generation, and the next
 offset. Changing query text, filters, bounds, limit, or context makes the cursor
@@ -636,7 +688,7 @@ details are never rendered.
 
 ## Structured output and portable export
 
-Every list/search/show/export JSON/JSONL record has numeric `schemaVersion: 1`, a
+Every list/search/entries/show/export JSON/JSONL record has numeric `schemaVersion: 1`, a
 command, a record type, and `disposition: "untrusted-history"`. JSON is one
 bundle. JSONL is an ordered set of compact, independently attributable records. The exact closed DTOs,
 optional/null rules, record order, UTF-8 selection accounting, examples, and
@@ -653,7 +705,7 @@ document digest.
 
 JSON/JSONL never mixes progress or warnings into stdout. The complete encoded
 result is validated before the first write. Every bounded machine result at or
-below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search can be
+below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search/entries can be
 narrowed. Show is always bounded. Default export is bounded, while explicit
 `export --full` is the sole structured route exempt from the aggregate cap.
 

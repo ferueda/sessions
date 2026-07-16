@@ -27,7 +27,8 @@ plan and independently reviewable pull request before work starts. The accepted
 Milestones 0 through 7 are complete. M8 agent analysis retrieval is in progress:
 query-scoped lineage resolution and rank-first bounded search hydration are
 complete, bounded show/export ranges are complete, and the textless entry
-inventory is next.
+inventory is complete. Literal-any search, list/search root attribution, and
+activity bounds are next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -117,7 +118,7 @@ flowchart TD
   M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine — complete"]
   M6 --> M7["M7 Export and CLI schemas — complete"]
-  M7 --> M8["M8 Agent analysis retrieval — next"]
+  M7 --> M8["M8 Agent analysis retrieval — in progress"]
   M8 --> M9["M9 Packaged Agent Skill"]
   M9 --> M10["M10 Cursor parity"]
   M10 --> M11["M11 Release qualification"]
@@ -796,7 +797,7 @@ Exit gate:
 - Generated help and all current/planned labels match implemented behavior.
 - `pnpm check` passes on all CI operating systems.
 
-### M8 — Improve agent-led corpus analysis (next)
+### M8 — Improve agent-led corpus analysis (in progress)
 
 Outcome: agents can efficiently discover, group, and extract bounded evidence
 across retained sessions without provider-specific analysis logic or full-library
@@ -808,8 +809,9 @@ Execution sequence:
 2. **Complete:** rank compact search coordinates before bounded text, digest,
    and snippet hydration, with exact output and measured broad-search proof;
 3. **Complete:** expose bounded show/export ranges through the existing selector;
-4. **Next:** add the textless entry inventory and its structured contract;
-5. add literal-any search, per-result root attribution, and activity bounds.
+4. **Complete:** add the textless entry inventory and its structured contract;
+5. **Next:** add literal-any search, list/search root attribution, and activity
+   bounds.
 
 Each item may use its own executor plan and pull request. Later items rebase on
 the accepted earlier query contract; none may move analysis policy into adapters.

@@ -37,17 +37,17 @@ link here. [`package.json`](../../package.json) owns executable commands, and
 All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 `src/**/*.test.ts`. Smokes live in `scripts/`, outside default discovery.
 
-| Layer                 | Current placement                                                               | Proves                                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds           |
-| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/show/export/forget/repair, selection, failures |
-| Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation           |
-| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows     |
-| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, filters, rank/ties, cursors, context, lineage, support units                              |
-| CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects               |
-| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                     |
-| Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                | Compiled binary plus synthetic indexing/query/show/export, orphan repair, compaction, and deletion     |
-| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | The same workflow through an offline-installed tarball, plus allowlist and independence checks         |
+| Layer                 | Current placement                                                               | Proves                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds                   |
+| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/entries/show/export/forget/repair, selection, failures |
+| Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation                   |
+| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows             |
+| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, textless entries, filters, rank/ties, cursors, context, lineage, support units                    |
+| CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects                       |
+| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                             |
+| Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                | Compiled binary plus synthetic indexing/query/entries/show/export, orphan repair, compaction, deletion         |
+| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | The same workflow through an offline-installed tarball, plus allowlist and independence checks                 |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
 or authenticated live command today. JSON/JSONL delivery and export are current
@@ -55,18 +55,18 @@ coverage; Cursor and the packaged Agent Skill remain planned.
 
 ## Choosing proof
 
-| Change                                    | Preferred proof                                                            | Focused command                                              | Handoff                                                   |
-| ----------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| Domain value, validator, projection/hash  | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                       | `pnpm check`                                              |
-| Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                  | `pnpm check`                                              |
-| Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`               | `pnpm check`                                              |
-| Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`               | `pnpm check`                                              |
-| Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | `pnpm test test/application/search-sessions.test.ts`         | `pnpm check`                                              |
-| Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                      | `pnpm check`                                              |
-| CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                 | `pnpm check`                                              |
-| Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                            | `pnpm check`                                              |
-| Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                            | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
-| Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package` | `pnpm check`                                              |
+| Change                                    | Preferred proof                                                            | Focused command                                                | Handoff                                                   |
+| ----------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------- |
+| Domain value, validator, projection/hash  | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                         | `pnpm check`                                              |
+| Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                    | `pnpm check`                                              |
+| Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`                 | `pnpm check`                                              |
+| Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`                 | `pnpm check`                                              |
+| Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | Focused search or entry-query application/infrastructure tests | `pnpm check`                                              |
+| Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                        | `pnpm check`                                              |
+| CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                   | `pnpm check`                                              |
+| Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                              | `pnpm check`                                              |
+| Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                              | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
+| Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package`   | `pnpm check`                                              |
 
 Do not repeat one acceptance criterion at every layer.
 
@@ -87,7 +87,7 @@ hash before excerpting. CLI tests lock every exact schema-1 JSON object and JSON
 record, optional/null rules, order, equivalent evidence, recursive forbidden
 fields, trust labels, format-neutral cursors, strict usage, streams/exits, and
 the injected encoded-size boundary. The one shared dist/package workflow adds
-only a representative JSON list/search/show and line-by-line JSONL export
+only a representative JSON list/search/entries/show and line-by-line JSONL export
 journey; focused tests own the edge-case matrix.
 
 The V1 bounds are grounded in privacy-safe aggregate evidence, not committed
@@ -117,7 +117,8 @@ or transcript values.
 
 The current dist and package smokes spawn production-built entrypoints against
 generated Codex state and isolated Sessions data. The shared workflow proves
-JSON query commands and parses JSONL export one physical line at a time, while
+JSON query commands, one namespaced-tool entry inventory, and JSONL export one
+physical line at a time, while
 preserving provider-tree immutability and the existing lifecycle journey. The
 package smoke installs offline from the populated pnpm store. Both clean
 temporary roots in `finally` and capture command/assertion context on failure.

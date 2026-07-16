@@ -11,6 +11,7 @@
 | `pnpm lint` / `pnpm lint:fix`    | Check or fix source/test lint                                           | Fix variant only                | No                                  |
 | `pnpm measure:content-storage`   | Compare legacy and current canonical-content layouts with fixed corpora | Temporary directory, removed    | No                                  |
 | `pnpm measure:query-lineage`     | Compare repeated and query-scoped lineage resolution                    | No                              | No                                  |
+| `pnpm measure:entry-query`       | Measure fixed textless entry queries through production SQLite seams    | In-memory database, removed     | No                                  |
 | `pnpm measure:search-query`      | Measure a fixed broad first-page search through production SQLite seams | In-memory database, removed     | No                                  |
 | `pnpm deps:check`                | Enforce production import graph                                         | No                              | No                                  |
 | `pnpm typecheck`                 | Strict TypeScript check                                                 | No                              | No                                  |
@@ -38,6 +39,12 @@ rebuilding lineage state per resolution with one query-scoped resolver over a
 deterministic generic in-memory corpus. Exact result equality is required;
 elapsed time and speedup are report-only and vary by machine and runtime.
 
+`pnpm measure:entry-query` is opt-in and outside `pnpm check`. It indexes 2,000
+generic sessions with five entries each through the production storage seam,
+then repeats broad, first, last, and tool inventory queries. Exact records,
+order, roots, counts, previews, and cursors must agree; aggregate elapsed time is
+report-only.
+
 `pnpm measure:search-query` is opt-in and outside `pnpm check`. It indexes a
 fixed generic in-memory corpus through the production SQLite storage seam, then
 runs the same broad first-page query twice through the production query seam.
@@ -49,7 +56,7 @@ Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
 but create no directories, files, migrations, or rollout reads. Index explicitly
 creates/updates the durable library from read-only provider inputs;
-list/search/show/export are library-only reads, and export never writes a
+list/search/entries/show/export are library-only reads, and export never writes a
 destination or resolves a provider;
 forget/data-repair-orphans/data-clear delete only Sessions-owned state.
 `data repair-orphans` is provider-free logical maintenance over an existing

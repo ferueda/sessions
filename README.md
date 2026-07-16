@@ -9,7 +9,8 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > search with evidence context and support counts, show, scoped forget, all-data
 > clear, explicit orphan-content diagnosis/repair, explicit SQLite page
 > reclamation, source diagnostics, versioned JSON/JSONL query output, and
-> portable retained-session export. Agent-efficient corpus selection, the
+> portable retained-session export. Textless entry inventory is also current.
+> Literal-any search, activity bounds, list/search root attribution, the
 > packaged Agent Skill, Cursor, and npm release remain planned; Markdown
 > presentation is deferred beyond V1.
 
@@ -44,6 +45,7 @@ node dist/bin/sessions.js list
 node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
 node dist/bin/sessions.js search 'query engine' --context 2
 node dist/bin/sessions.js search -- '-term'
+node dist/bin/sessions.js entries --actor human --select last --format jsonl
 node dist/bin/sessions.js show '<canonical-id>'
 node dist/bin/sessions.js show '<canonical-id>' --from-entry 120 --to-entry 139
 node dist/bin/sessions.js export '<canonical-id>' --format jsonl
@@ -58,6 +60,8 @@ sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
+sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
+                           [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
@@ -78,7 +82,7 @@ unambiguous canonical ID returned by list.
 `index` is the only ordinary command that reads Codex transcripts or initializes
 the library. It copies normalized evidence into Sessions-owned application data;
 a later complete scan that no longer sees a provider thread marks it missing but
-retains its content. `list`, `search`, and `show` read only that durable library,
+retains its content. `list`, `search`, `entries`, and `show` read only that durable library,
 so they continue working when Codex data changes or disappears. They support
 human, JSON, and independently attributable JSONL output. List defaults to 50
 sessions; search defaults to 20 entry hits and zero adjacent context; both accept
@@ -98,6 +102,15 @@ reports matching segment occurrences, distinct canonical content, distinct known
 lineage roots, and matching sessions whose root remains unknown. Shared filters,
 exclusive time bounds, ranking, cursor invalidation, and exact output rules are in
 the [CLI contract](docs/reference/cli-contract.md).
+
+`entries` inventories retained entry structure without requiring search text.
+It can return all matching entries or the first/last canonical ordinal per
+session after exact entry filters. Results stay in binary source identity and
+entry-ordinal order, include one bounded origin-aware text preview when
+available, exact text/omission counts, observed tool/linkage fields, and a known
+or unknown retained root. Pagination is opaque and stable for one library
+generation. See [entry inventory](docs/contributing/entries.md) for the query
+flow and cost.
 
 `export` extracts one retained canonical snapshot as JSON or JSONL without
 reopening Codex, following relations, or delivering it anywhere. Default
@@ -149,10 +162,9 @@ supported state and rollout shapes.
 
 ```text
 sessions index --source cursor
-sessions entries [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 ```
 
-M7 JSON/JSONL delivery is complete. M8 adds provider-neutral analysis retrieval,
+M7 JSON/JSONL delivery is complete. M8 continues provider-neutral analysis retrieval,
 M9 packages the Agent Skill, and M10 proves Cursor parity. Markdown remains
 deferred beyond V1; `--format md` is not accepted today.
 
