@@ -9,9 +9,6 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
-
-- [Reuse lineage resolution across each query](260715-query-scoped-lineage-resolution.md)
-
-This is the first M8 change. M9 packages the Agent Skill, M10 proves Cursor
-equivalence, and Markdown presentation remains deferred beyond V1.
+There are no active executor plans. M8 bounded show/export ranges are next. M9
+packages the Agent Skill, M10 proves Cursor equivalence, and Markdown
+presentation remains deferred beyond V1.
