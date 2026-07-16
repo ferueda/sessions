@@ -1,11 +1,13 @@
 import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
 import type { ContentHash } from "./content-hash.ts";
 import type { SessionDocumentDigest } from "./public-session-document.ts";
+import type { SessionRootResolution } from "./session-lineage.ts";
 import { isSessionIdentity } from "./session-identity.ts";
 import type { Actor, ContentOrigin, OriginConfidence, SessionIdentity } from "./session.ts";
 import { splitUnicodeWhitespaceTerms } from "./unicode-whitespace.ts";
 
 export const MAX_SESSION_QUERY_LIMIT = 200;
+export const MAX_ENTRY_LIST_LIMIT = MAX_SESSION_QUERY_LIMIT;
 export const MAX_SESSION_SEARCH_CONTEXT = 10;
 export const MAX_SESSION_SEARCH_BODY_BYTES = 512;
 export const MAX_SESSION_SEARCH_LINKED_CONTEXT = 20;
@@ -14,6 +16,7 @@ export const MAX_SESSION_QUERY_CURSOR_LENGTH = 2_048;
 declare const sessionQueryCursorBrand: unique symbol;
 declare const sessionListQueryBrand: unique symbol;
 declare const sessionSearchQueryBrand: unique symbol;
+declare const sessionEntryQueryBrand: unique symbol;
 
 export type SessionQueryCursor = string & {
   readonly [sessionQueryCursorBrand]: "SessionQueryCursor";
@@ -38,7 +41,7 @@ export interface SessionFilter extends SessionFilterInput {
   readonly session?: SessionIdentity;
 }
 
-export interface SessionSearchFilterInput extends SessionFilterInput {
+export interface SessionEntryFilterInput extends SessionFilterInput {
   readonly entryAfter?: string;
   readonly entryBefore?: string;
   readonly actor?: Actor;
@@ -48,7 +51,13 @@ export interface SessionSearchFilterInput extends SessionFilterInput {
   readonly toolNamespace?: string;
 }
 
-export interface SessionSearchFilter extends SessionFilter, SessionSearchFilterInput {}
+export interface SessionEntryFilter extends SessionFilter, SessionEntryFilterInput {}
+
+export interface SessionSearchFilterInput extends SessionEntryFilterInput {}
+
+export interface SessionSearchFilter extends SessionEntryFilter {}
+
+export type SessionEntrySelection = "all" | "first" | "last";
 
 export interface SessionListQueryInput {
   readonly filter?: SessionFilterInput;
@@ -77,6 +86,21 @@ export interface SessionSearchQuery {
   readonly filter: SessionSearchFilter;
   readonly limit: number;
   readonly context: number;
+  readonly cursor?: SessionQueryCursor;
+}
+
+export interface SessionEntryQueryInput {
+  readonly filter?: SessionEntryFilterInput;
+  readonly selection?: SessionEntrySelection;
+  readonly limit: number;
+  readonly cursor?: string;
+}
+
+export interface SessionEntryQuery {
+  readonly [sessionEntryQueryBrand]: "SessionEntryQuery";
+  readonly filter: SessionEntryFilter;
+  readonly selection: SessionEntrySelection;
+  readonly limit: number;
   readonly cursor?: SessionQueryCursor;
 }
 
@@ -148,6 +172,34 @@ export interface SessionSearchPage {
   readonly nextCursor?: SessionQueryCursor;
 }
 
+export interface SessionEntryPreview {
+  readonly segmentOrdinal: number;
+  readonly origin: ContentOrigin;
+  readonly originConfidence: OriginConfidence;
+  readonly contentHash: ContentHash;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+export interface SessionEntryContentSummary {
+  readonly textSegmentCount: number;
+  readonly omittedSegmentCount: number;
+  readonly unpreviewedTextSegmentCount: number;
+  readonly preview?: SessionEntryPreview;
+}
+
+export interface SessionEntryInventoryItem {
+  readonly session: SessionQuerySummary;
+  readonly entry: SessionSearchEntry;
+  readonly root: SessionRootResolution;
+  readonly content: SessionEntryContentSummary;
+}
+
+export interface SessionEntryPage {
+  readonly entries: readonly SessionEntryInventoryItem[];
+  readonly nextCursor?: SessionQueryCursor;
+}
+
 const SOURCE_KIND_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const ACTORS = new Set<Actor>(["human", "model", "tool", "system", "unknown"]);
 const ORIGINS = new Set<ContentOrigin>([
@@ -161,6 +213,7 @@ const ORIGINS = new Set<ContentOrigin>([
   "unknown",
 ]);
 const SOURCE_STATES = new Set<SessionSourceState>(["present", "missing", "unknown"]);
+const ENTRY_SELECTIONS = new Set<SessionEntrySelection>(["all", "first", "last"]);
 
 export function createSessionQueryCursor(value: unknown): SessionQueryCursor {
   if (
@@ -181,6 +234,10 @@ export function createSessionFilter(input: SessionFilterInput = {}): SessionFilt
 export function createSessionSearchFilter(
   input: SessionSearchFilterInput = {},
 ): SessionSearchFilter {
+  return createFilter(input, true);
+}
+
+export function createSessionEntryFilter(input: SessionEntryFilterInput = {}): SessionEntryFilter {
   return createFilter(input, true);
 }
 
@@ -210,9 +267,22 @@ export function createSessionSearchQuery(input: SessionSearchQueryInput): Sessio
   }) as SessionSearchQuery;
 }
 
+export function createSessionEntryQuery(input: SessionEntryQueryInput): SessionEntryQuery {
+  const filter = createSessionEntryFilter(input.filter);
+  const selection = optionalLiteral(input.selection, ENTRY_SELECTIONS, "Entry selection") ?? "all";
+  const limit = boundedInteger(input.limit, 1, MAX_ENTRY_LIST_LIMIT, "Entry limit");
+  const cursor = input.cursor === undefined ? undefined : createSessionQueryCursor(input.cursor);
+  return Object.freeze({
+    filter,
+    selection,
+    limit,
+    ...(cursor === undefined ? {} : { cursor }),
+  }) as SessionEntryQuery;
+}
+
 /** Stable, cursor-independent material for binding a continuation to query semantics. */
 export function sessionQueryFingerprintMaterial(
-  query: SessionListQuery | SessionSearchQuery,
+  query: SessionListQuery | SessionSearchQuery | SessionEntryQuery,
 ): string {
   const filter = query.filter;
   const common = [
@@ -229,6 +299,22 @@ export function sessionQueryFingerprintMaterial(
     filter.session?.source.instanceId ?? null,
     filter.session?.nativeId ?? null,
   ];
+  if ("selection" in query) {
+    return JSON.stringify([
+      "sessions-query-v1",
+      "entries",
+      query.selection,
+      query.limit,
+      ...common,
+      query.filter.entryAfter ?? null,
+      query.filter.entryBefore ?? null,
+      query.filter.actor ?? null,
+      query.filter.origin ?? null,
+      query.filter.entryKind ?? null,
+      query.filter.toolName ?? null,
+      query.filter.toolNamespace ?? null,
+    ]);
+  }
   if (!("text" in query)) {
     return JSON.stringify(["sessions-query-v1", "list", query.limit, ...common]);
   }
@@ -249,12 +335,12 @@ export function sessionQueryFingerprintMaterial(
   ]);
 }
 
-function createFilter(input: SessionSearchFilterInput, search: true): SessionSearchFilter;
+function createFilter(input: SessionEntryFilterInput, search: true): SessionEntryFilter;
 function createFilter(input: SessionFilterInput, search: false): SessionFilter;
 function createFilter(
-  input: SessionFilterInput | SessionSearchFilterInput,
+  input: SessionFilterInput | SessionEntryFilterInput,
   search: boolean,
-): SessionFilter | SessionSearchFilter {
+): SessionFilter | SessionEntryFilter {
   const source = optionalSource(input.source);
   const instance = optionalOpaque(input.instance, "Source instance");
   if (instance !== undefined && source === undefined) {
@@ -285,7 +371,7 @@ function createFilter(
   };
   if (!search) return Object.freeze(common);
 
-  const searchInput = input as SessionSearchFilterInput;
+  const searchInput = input as SessionEntryFilterInput;
   const entryAfter = optionalTimestamp(searchInput.entryAfter, "Entry-after");
   const entryBefore = optionalTimestamp(searchInput.entryBefore, "Entry-before");
   validateBounds(entryAfter, entryBefore, "Entry");

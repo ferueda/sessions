@@ -79,7 +79,10 @@ async function seedContractCorpus(database: DatabaseSync): Promise<void> {
     });
 
     await replaceCompleted(index, corpus.pageable, SESSION_QUERY_CONTRACT_TIMES.pageable);
-    for (const documents of groupBySource(corpus.ranking.documents)) {
+    for (const documents of groupBySource([
+      ...corpus.inventory.documents,
+      ...corpus.ranking.documents,
+    ])) {
       await replaceCompleted(index, documents, "2026-07-14T13:30:00.000Z");
     }
   } finally {

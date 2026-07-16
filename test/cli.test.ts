@@ -8,6 +8,7 @@ import type { DataRepairOrphansReport } from "../src/application/repair-orphaned
 import type { ForgetSessionReport } from "../src/application/forget-session.ts";
 import type { PathsReport } from "../src/application/get-paths.ts";
 import type { IndexReport } from "../src/application/index-report.ts";
+import type { ListSessionEntriesResult } from "../src/application/list-session-entries.ts";
 import type { ShowSessionResult } from "../src/application/show-session.ts";
 import type { DoctorReport } from "../src/application/run-doctor.ts";
 import { SessionLibraryError } from "../src/application/library-error.ts";
@@ -83,6 +84,7 @@ describe("sessions CLI", () => {
     for (const command of [
       "index",
       "list",
+      "entries",
       "search",
       "show",
       "export",
@@ -150,11 +152,19 @@ describe("sessions CLI", () => {
     expect(invocation).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
   });
 
+  test("renders the exact empty-entries result", async () => {
+    const invocation = await invoke(["entries"]);
+
+    expect(invocation).toEqual({ exitCode: 0, stdout: "No entries found.\n", stderr: "" });
+  });
+
   test("renders explicit empty JSON and JSONL query pages", async () => {
     const listJson = await invoke(["list", "--format", "json"]);
     const listJsonl = await invoke(["list", "--format", "jsonl"]);
     const searchJson = await invoke(["search", "missing", "--format", "json"]);
     const searchJsonl = await invoke(["search", "missing", "--format", "jsonl"]);
+    const entriesJson = await invoke(["entries", "--format", "json"]);
+    const entriesJsonl = await invoke(["entries", "--format", "jsonl"]);
 
     expect(JSON.parse(listJson.stdout)).toEqual({
       schemaVersion: 1,
@@ -203,8 +213,33 @@ describe("sessions CLI", () => {
         support: emptySearch().support,
       },
     ]);
+    expect(JSON.parse(entriesJson.stdout)).toEqual({
+      schemaVersion: 1,
+      command: "entries",
+      type: "page",
+      disposition: "untrusted-history",
+      nextCursor: null,
+      entries: [],
+    });
     expect(
-      [listJson, listJsonl, searchJson, searchJsonl].every(({ exitCode }) => exitCode === 0),
+      entriesJsonl.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        command: "entries",
+        type: "page",
+        disposition: "untrusted-history",
+        entryCount: 0,
+        nextCursor: null,
+      },
+    ]);
+    expect(
+      [listJson, listJsonl, searchJson, searchJsonl, entriesJson, entriesJsonl].every(
+        ({ exitCode }) => exitCode === 0,
+      ),
     ).toBe(true);
   });
 
@@ -469,6 +504,128 @@ describe("sessions CLI", () => {
       context: 2,
       cursor: "opaque",
     });
+  });
+
+  test("maps shared and entry filters with selection into provider-neutral input", async () => {
+    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({ entries: [] }));
+
+    const invocation = await invoke(
+      [
+        "entries",
+        "--source",
+        "codex",
+        "--instance",
+        "local",
+        "--native-id",
+        "provider-thread",
+        "--source-state",
+        "missing",
+        "--workspace",
+        "/repo",
+        "--captured-after",
+        "2026-07-14T00:00:00.000Z",
+        "--captured-before",
+        "2026-07-15T00:00:00.000Z",
+        "--observed-after",
+        "2026-07-14T01:00:00.000Z",
+        "--observed-before",
+        "2026-07-14T23:00:00.000Z",
+        "--session",
+        "synthetic@one:session",
+        "--entry-after",
+        "2026-07-14T02:00:00.000Z",
+        "--entry-before",
+        "2026-07-14T22:00:00.000Z",
+        "--actor",
+        "tool",
+        "--origin",
+        "tool",
+        "--kind",
+        "tool-call",
+        "--tool-name",
+        "exec",
+        "--tool-namespace",
+        "shell",
+        "--select",
+        "last",
+        "--limit",
+        "7",
+        "--cursor",
+        "opaque",
+      ],
+      { entries },
+    );
+
+    expect(invocation.exitCode).toBe(0);
+    expect(entries).toHaveBeenCalledExactlyOnceWith({
+      filter: {
+        source: "codex",
+        instance: "local",
+        nativeId: "provider-thread",
+        sourceState: "missing",
+        workspace: "/repo",
+        capturedAfter: "2026-07-14T00:00:00.000Z",
+        capturedBefore: "2026-07-15T00:00:00.000Z",
+        observedAfter: "2026-07-14T01:00:00.000Z",
+        observedBefore: "2026-07-14T23:00:00.000Z",
+        session: {
+          source: { kind: "synthetic", instanceId: "one" },
+          nativeId: "session",
+        },
+        entryAfter: "2026-07-14T02:00:00.000Z",
+        entryBefore: "2026-07-14T22:00:00.000Z",
+        actor: "tool",
+        origin: "tool",
+        entryKind: "tool-call",
+        toolName: "exec",
+        toolNamespace: "shell",
+      },
+      selection: "last",
+      limit: 7,
+      cursor: "opaque",
+    });
+  });
+
+  test("uses the default all entry selection and rejects invalid entry inventory options", async () => {
+    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({ entries: [] }));
+
+    const success = await invoke(["entries"], { entries });
+    const invalidSelection = await invoke(["entries", "--select", "middle"], { entries });
+    const invalidLimit = await invoke(["entries", "--limit", "201"], { entries });
+    const invalidBounds = await invoke(
+      [
+        "entries",
+        "--entry-after",
+        "2026-07-14T00:00:00.000Z",
+        "--entry-before",
+        "2026-07-14T00:00:00.000Z",
+      ],
+      { entries },
+    );
+
+    expect(success.exitCode).toBe(0);
+    expect(entries).toHaveBeenCalledExactlyOnceWith({ selection: "all" });
+    expect([invalidSelection, invalidLimit, invalidBounds].map(({ exitCode }) => exitCode)).toEqual(
+      [2, 2, 2],
+    );
+  });
+
+  test("renders equivalent attributable entries JSON and JSONL", async () => {
+    const result = entryInventoryResult();
+    const entries = vi.fn<ProgramOptions["entries"]>(async () => result);
+
+    const json = await invoke(["entries", "--format", "json"], { entries });
+    const jsonl = await invoke(["entries", "--format", "jsonl"], { entries });
+    const page = JSON.parse(json.stdout);
+    const records = jsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    expect([json.exitCode, jsonl.exitCode]).toEqual([0, 0]);
+    expect(records.map(({ type }) => type)).toEqual(["page", "entry"]);
+    expect(records[0]).toMatchObject({ entryCount: 1, nextCursor: "next-entry-page" });
+    expect(records[1].entry).toEqual(page.entries[0]);
   });
 
   test("rejects invalid query dependencies and bounds before handlers", async () => {
@@ -805,6 +962,7 @@ async function invoke(
     indexSources: ["codex"],
     index: async () => indexReport(false),
     list: async () => ({ sessions: [] }),
+    entries: async () => ({ entries: [] }),
     search: async () => emptySearch(),
     show: async () => {
       throw new Error("show fixture was not configured");
@@ -838,6 +996,46 @@ async function invoke(
     },
   });
   return { exitCode, stdout, stderr };
+}
+
+function entryInventoryResult(): ListSessionEntriesResult {
+  return {
+    entries: [
+      {
+        session: selectedSnapshot().snapshot,
+        entry: {
+          ordinal: 4,
+          kind: "tool-call",
+          actor: "tool",
+          toolName: "exec",
+          toolNamespace: "shell",
+          toolCallId: "call-1",
+          relatedEntryOrdinal: 5,
+        },
+        root: {
+          kind: "known",
+          root: {
+            source: { kind: "synthetic", instanceId: "root" },
+            nativeId: "root-session",
+          },
+        },
+        content: {
+          textSegmentCount: 2,
+          omittedSegmentCount: 1,
+          unpreviewedTextSegmentCount: 1,
+          preview: {
+            segmentOrdinal: 0,
+            origin: "tool",
+            originConfidence: "high",
+            text: "synthetic preview",
+            truncated: false,
+            contentHash: { scheme: "sha256-utf8-v1", digest: "c".repeat(64) },
+          },
+        },
+      },
+    ],
+    nextCursor: "next-entry-page" as never,
+  };
 }
 
 function emptySearch() {

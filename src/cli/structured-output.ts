@@ -1,10 +1,11 @@
 import { Buffer } from "node:buffer";
 
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
+import type { SessionRootResolution } from "../domain/session-lineage.ts";
 import { formatSessionIdentity, isSessionIdentity } from "../domain/session-identity.ts";
 import type { SessionIdentity } from "../domain/session.ts";
 
-export type StructuredCommandV1 = "list" | "search" | "show" | "export";
+export type StructuredCommandV1 = "list" | "search" | "entries" | "show" | "export";
 
 export interface StructuredHeaderV1<Command extends StructuredCommandV1, Type extends string> {
   readonly schemaVersion: 1;
@@ -154,6 +155,30 @@ export interface SearchSupportV1 {
   readonly unknownLineageSessions: number;
 }
 
+export type PublicEntryRootV1 =
+  | { readonly kind: "known"; readonly session: SessionRefV1 }
+  | { readonly kind: "unknown" };
+
+export interface PublicEntryPreviewV1 {
+  readonly segmentOrdinal: number;
+  readonly origin: ContentOriginV1;
+  readonly originConfidence: ConfidenceV1;
+  readonly excerpt: SearchExcerptV1;
+  readonly contentHash: ContentHashV1;
+}
+
+export interface PublicEntryInventoryV1 {
+  readonly session: PublicSessionSummaryV1;
+  readonly root: PublicEntryRootV1;
+  readonly coordinate: PublicEntryCoordinateV1;
+  readonly content: {
+    readonly textSegmentCount: number;
+    readonly omittedSegmentCount: number;
+    readonly unpreviewedTextSegmentCount: number;
+    readonly preview?: PublicEntryPreviewV1;
+  };
+}
+
 export type ListJsonV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
   readonly sessions: readonly PublicSessionSummaryV1[];
@@ -163,6 +188,11 @@ export type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
   readonly nextCursor: string | null;
   readonly support: SearchSupportV1;
   readonly hits: readonly PublicSearchHitV1[];
+};
+
+export type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
+  readonly nextCursor: string | null;
+  readonly entries: readonly PublicEntryInventoryV1[];
 };
 
 export type ShowJsonV1 = SnapshotJsonV1<"show">;
@@ -185,6 +215,15 @@ export type SearchPageJsonlV1 = StructuredHeaderV1<"search", "page"> & {
 
 export type SearchHitJsonlV1 = StructuredHeaderV1<"search", "hit"> & {
   readonly hit: PublicSearchHitV1;
+};
+
+export type EntriesPageJsonlV1 = StructuredHeaderV1<"entries", "page"> & {
+  readonly entryCount: number;
+  readonly nextCursor: string | null;
+};
+
+export type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
+  readonly entry: PublicEntryInventoryV1;
 };
 
 export type SnapshotSessionJsonlV1<Command extends "show" | "export"> = StructuredHeaderV1<
@@ -212,12 +251,19 @@ export type SnapshotEntryJsonlV1<Command extends "show" | "export"> = Structured
   readonly entry: PublicSelectedEntryV1;
 };
 
-export type StructuredJsonV1 = ListJsonV1 | SearchJsonV1 | ShowJsonV1 | ExportJsonV1;
+export type StructuredJsonV1 =
+  | ListJsonV1
+  | SearchJsonV1
+  | EntriesJsonV1
+  | ShowJsonV1
+  | ExportJsonV1;
 export type StructuredJsonlRecordV1 =
   | ListPageJsonlV1
   | ListSessionJsonlV1
   | SearchPageJsonlV1
   | SearchHitJsonlV1
+  | EntriesPageJsonlV1
+  | EntriesEntryJsonlV1
   | SnapshotSessionJsonlV1<"show" | "export">
   | SnapshotRelationJsonlV1<"show" | "export">
   | SnapshotEntryJsonlV1<"show" | "export">;
@@ -269,6 +315,30 @@ export interface StructuredSearchContextInputV1 extends PublicEntryCoordinateV1 
   readonly bodyTruncated: boolean;
   readonly adjacent: boolean;
   readonly linked: boolean;
+}
+
+export interface StructuredEntriesInputV1 {
+  readonly entries: readonly StructuredEntryInventoryInputV1[];
+  readonly nextCursor?: string;
+}
+
+export interface StructuredEntryInventoryInputV1 {
+  readonly session: StructuredSessionSummaryInputV1;
+  readonly root: SessionRootResolution;
+  readonly entry: PublicEntryCoordinateV1;
+  readonly content: {
+    readonly textSegmentCount: number;
+    readonly omittedSegmentCount: number;
+    readonly unpreviewedTextSegmentCount: number;
+    readonly preview?: {
+      readonly segmentOrdinal: number;
+      readonly origin: ContentOriginV1;
+      readonly originConfidence: ConfidenceV1;
+      readonly text: string;
+      readonly truncated: boolean;
+      readonly contentHash: ContentHashV1;
+    };
+  };
 }
 
 export interface StructuredSnapshotInputV1 {
@@ -353,6 +423,26 @@ export function buildSearchJsonlV1(input: StructuredSearchInputV1): StructuredJs
       support,
     },
     ...hits.map((hit) => ({ ...header("search", "hit"), hit })),
+  ]);
+}
+
+export function buildEntriesJsonV1(input: StructuredEntriesInputV1): EntriesJsonV1 {
+  return finalizeStructuredOutput({
+    ...header("entries", "page"),
+    nextCursor: copyCursor(input.nextCursor),
+    entries: input.entries.map(copyEntryInventory),
+  });
+}
+
+export function buildEntriesJsonlV1(input: StructuredEntriesInputV1): StructuredJsonlV1 {
+  const entries = input.entries.map(copyEntryInventory);
+  return finalizeStructuredOutput([
+    {
+      ...header("entries", "page"),
+      entryCount: entries.length,
+      nextCursor: copyCursor(input.nextCursor),
+    },
+    ...entries.map((entry) => ({ ...header("entries", "entry"), entry })),
   ]);
 }
 
@@ -555,6 +645,40 @@ function copySearchHit(input: StructuredSearchHitInputV1): PublicSearchHitV1 {
       linked: boolean(context.linked),
     })),
     linkedContextTruncated: boolean(input.linkedContextTruncated),
+  };
+}
+
+function copyEntryInventory(input: StructuredEntryInventoryInputV1): PublicEntryInventoryV1 {
+  const preview = input.content.preview;
+  const textSegmentCount = nonNegativeInteger(input.content.textSegmentCount);
+  const omittedSegmentCount = nonNegativeInteger(input.content.omittedSegmentCount);
+  const unpreviewedTextSegmentCount = nonNegativeInteger(input.content.unpreviewedTextSegmentCount);
+  if (unpreviewedTextSegmentCount !== textSegmentCount - (preview === undefined ? 0 : 1)) {
+    throw new TypeError("Structured entry content counts are inconsistent");
+  }
+  return {
+    session: copySummary(input.session),
+    root:
+      input.root.kind === "known"
+        ? { kind: "known", session: copySessionRef(input.root.root) }
+        : { kind: "unknown" },
+    coordinate: copyEntryCoordinate(input.entry),
+    content: {
+      textSegmentCount,
+      omittedSegmentCount,
+      unpreviewedTextSegmentCount,
+      ...(preview === undefined
+        ? {}
+        : {
+            preview: {
+              segmentOrdinal: nonNegativeInteger(preview.segmentOrdinal),
+              origin: copyOrigin(preview.origin),
+              originConfidence: copyConfidence(preview.originConfidence),
+              excerpt: copyExcerpt(preview.text, preview.truncated),
+              contentHash: copyContentHash(preview.contentHash),
+            },
+          }),
+    },
   };
 }
 

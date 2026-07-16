@@ -36,6 +36,12 @@ describe("SQLite query primitives", () => {
         revision,
         offset: 20,
       });
+      const entriesCursor = encodeQueryCursor({
+        command: "entries",
+        fingerprint,
+        revision,
+        offset: 40,
+      });
 
       expect(decodeQueryCursor(cursor, { command: "search", fingerprint, revision })).toEqual({
         ok: true,
@@ -47,6 +53,12 @@ describe("SQLite query primitives", () => {
           fingerprint,
           revision,
         }),
+      ).toEqual({ ok: false, reason: "mismatch" });
+      expect(
+        decodeQueryCursor(entriesCursor, { command: "entries", fingerprint, revision }),
+      ).toEqual({ ok: true, offset: 40 });
+      expect(
+        decodeQueryCursor(entriesCursor, { command: "search", fingerprint, revision }),
       ).toEqual({ ok: false, reason: "mismatch" });
       expect(
         decodeQueryCursor(cursor, {

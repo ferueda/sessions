@@ -140,6 +140,7 @@ describe("searchSessions", () => {
 
 function lifecycleWith(page: SessionSearchPage, state: "ready" | "uninitialized" = "ready") {
   const query = {
+    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({ entries: [] })),
     list: vi.fn<SessionQueryRepository["list"]>(async () => ({ sessions: [] })),
     search: vi.fn<SessionQueryRepository["search"]>(async () => page),
   } satisfies SessionQueryRepository;

@@ -99,6 +99,7 @@ describe("listSessions", () => {
 function lifecycleWith(page: SessionListPage, state: "ready" | "uninitialized" = "ready") {
   const sessions = {} as SessionIndexReader;
   const query = {
+    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({ entries: [] })),
     list: vi.fn<SessionQueryRepository["list"]>(async () => page),
     search: vi.fn<SessionQueryRepository["search"]>(async () => ({
       hits: [],

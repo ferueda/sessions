@@ -6,7 +6,7 @@ const MAX_CURSOR_BYTES = 2_048;
 const INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/u;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/u;
 
-export type QueryCommand = "list" | "search";
+export type QueryCommand = "entries" | "list" | "search";
 
 export interface QueryRevision {
   readonly libraryInstanceId: string;
@@ -129,7 +129,7 @@ function isCursorPayload(value: unknown): value is CursorPayload {
   }
   return (
     record.v === CURSOR_VERSION &&
-    (record.c === "list" || record.c === "search") &&
+    (record.c === "entries" || record.c === "list" || record.c === "search") &&
     typeof record.q === "string" &&
     FINGERPRINT_PATTERN.test(record.q) &&
     typeof record.l === "string" &&
@@ -149,7 +149,9 @@ function assertRevision(revision: QueryRevision): void {
 }
 
 function assertCommand(command: string): asserts command is QueryCommand {
-  if (command !== "list" && command !== "search") throw new TypeError("Invalid query command");
+  if (command !== "entries" && command !== "list" && command !== "search") {
+    throw new TypeError("Invalid query command");
+  }
 }
 
 function assertOffset(value: number): void {

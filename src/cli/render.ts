@@ -7,6 +7,7 @@ import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
+import type { ListSessionEntriesResult } from "../application/list-session-entries.ts";
 import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { SelectedText } from "../application/session-presentation.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
@@ -156,6 +157,33 @@ export function renderSearch(result: SearchSessionsResult): string {
   );
   if (result.nextCursor !== undefined) {
     lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderEntries(result: ListSessionEntriesResult): string {
+  if (result.entries.length === 0) return "No entries found.\n";
+
+  const lines: string[] = [];
+  for (const [index, item] of result.entries.entries()) {
+    if (index > 0) lines.push("");
+    const identity = renderScalar(formatSessionIdentity(item.session.identity));
+    const title =
+      item.session.title === undefined ? "(untitled)" : renderSelectedText(item.session.title);
+    lines.push(
+      `${identity}  ${title}  [${item.session.freshness}; ${item.session.sourceState}; ${item.session.capturedAt}]`,
+      renderEntryHeading(item.entry),
+      item.root.kind === "known"
+        ? `Root: ${renderScalar(formatSessionIdentity(item.root.root))}`
+        : "Root: unknown",
+      item.content.preview === undefined
+        ? "(no text preview)"
+        : renderSearchBody(item.content.preview.text, item.content.preview.truncated),
+      `Content: ${String(item.content.textSegmentCount)} text segment(s); ${String(item.content.omittedSegmentCount)} omitted segment(s); ${String(item.content.unpreviewedTextSegmentCount)} unpreviewed text segment(s)`,
+    );
+  }
+  if (result.nextCursor !== undefined) {
+    lines.push("", `Next cursor: ${renderScalar(result.nextCursor)}`);
   }
   return `${lines.join("\n")}\n`;
 }

@@ -283,6 +283,53 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assert.equal(structuredSession.nativeId, NATIVE_ID);
     assertDocumentDigest(structuredDigest);
 
+    const structuredEntries = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "entries",
+      "--native-id",
+      NATIVE_ID,
+      "--kind",
+      "tool-call",
+      "--tool-name",
+      NAMESPACED_TOOL_NAME,
+      "--tool-namespace",
+      TOOL_NAMESPACE,
+      "--limit",
+      "1",
+      "--format",
+      "jsonl",
+    ]);
+    assertCommand(structuredEntries, 0, "structured entries");
+    assertNoPrivateFixtureMarkers(structuredEntries.stdout, "structured entries");
+    assert.doesNotMatch(structuredEntries.stdout, new RegExp(escapePattern(TOOL_MENTION), "u"));
+    const entryRecords = parseJsonLines(structuredEntries.stdout);
+    assert.equal(entryRecords.length, 2, "structured entries returned unexpected records");
+    const entryPage = entryRecords[0]!;
+    assertStructuredHeader(entryPage, "entries", "page");
+    assert.equal(entryPage.entryCount, 1);
+    assert.equal(entryPage.nextCursor, null);
+    const entryRecord = entryRecords[1]!;
+    assertStructuredHeader(entryRecord, "entries", "entry");
+    const inventoryEntry = readObject(entryRecord.entry);
+    const entrySummary = readObject(inventoryEntry.session);
+    assertSameAttribution(entrySummary, structuredSession, structuredDigest, "structured entries");
+    assert.deepEqual(readObject(inventoryEntry.coordinate), {
+      ordinal: 3,
+      kind: "tool-call",
+      actor: "model",
+      timestamp: "2026-07-14T12:03:00.000Z",
+      toolCallId: "namespaced-tool-call",
+      toolName: NAMESPACED_TOOL_NAME,
+      toolNamespace: TOOL_NAMESPACE,
+    });
+    assert.deepEqual(readObject(inventoryEntry.root), {
+      kind: "known",
+      session: {
+        canonicalId: structuredSession.canonicalId,
+        source: structuredSession.source,
+        nativeId: structuredSession.nativeId,
+      },
+    });
+
     const structuredSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
       "search",
       "distribution smoke",
@@ -686,7 +733,7 @@ function parseJsonLines(output: string): readonly Record<string, unknown>[] {
 
 function assertStructuredHeader(
   record: Record<string, unknown>,
-  command: "list" | "search" | "show" | "export",
+  command: "list" | "search" | "entries" | "show" | "export",
   type: string,
 ): void {
   assert.equal(record.schemaVersion, 1);

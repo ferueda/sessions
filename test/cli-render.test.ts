@@ -2,9 +2,11 @@ import { describe, expect, test } from "vitest";
 
 import type { SelectedText, TranscriptSelection } from "../src/application/session-presentation.ts";
 import type { ShowSessionResult } from "../src/application/show-session.ts";
+import type { ListSessionEntriesResult } from "../src/application/list-session-entries.ts";
 import {
   renderDataCompact,
   renderDataRepairOrphans,
+  renderEntries,
   renderList,
   renderPaths,
   renderSearch,
@@ -367,4 +369,81 @@ describe("human CLI rendering", () => {
     expect(output).not.toContain("\u001b");
     expect(Buffer.byteLength(output.split("\n")[2]!, "utf8")).toBeLessThanOrEqual(512);
   });
+
+  test("renders escaped entry inventory evidence, counts, root, and continuation", () => {
+    const output = renderEntries(entryInventoryResult());
+
+    expect(output).toContain("synthetic@one:session");
+    expect(output).toContain("#4 tool tool-call tool=shell/exec\\u{1b}");
+    expect(output).toContain("Root: synthetic@root:root-session");
+    expect(output).toContain("preview\\u{07}");
+    expect(output).toContain(
+      "Content: 2 text segment(s); 1 omitted segment(s); 1 unpreviewed text segment(s)",
+    );
+    expect(output).toContain("Next cursor: next-entry-page");
+    expect(output).not.toContain("\u001b");
+  });
+
+  test("renders empty and textless entry inventory states exactly", () => {
+    expect(renderEntries({ entries: [] })).toBe("No entries found.\n");
+    expect(
+      renderEntries({
+        entries: [
+          {
+            ...entryInventoryResult().entries[0]!,
+            root: { kind: "unknown" },
+            content: {
+              textSegmentCount: 0,
+              omittedSegmentCount: 1,
+              unpreviewedTextSegmentCount: 0,
+            },
+          },
+        ],
+      }),
+    ).toContain("Root: unknown\n(no text preview)\nContent: 0 text segment(s)");
+  });
 });
+
+function entryInventoryResult(): ListSessionEntriesResult {
+  return {
+    entries: [
+      {
+        session: {
+          identity,
+          ...retainedAttribution,
+          title: selectedText("title\u001b"),
+          freshness: "current",
+          sourceState: "present",
+        },
+        entry: {
+          ordinal: 4,
+          kind: "tool-call",
+          actor: "tool",
+          toolName: "exec\u001b",
+          toolNamespace: "shell",
+        },
+        root: {
+          kind: "known",
+          root: {
+            source: { kind: "synthetic", instanceId: "root" },
+            nativeId: "root-session",
+          },
+        },
+        content: {
+          textSegmentCount: 2,
+          omittedSegmentCount: 1,
+          unpreviewedTextSegmentCount: 1,
+          preview: {
+            segmentOrdinal: 0,
+            origin: "tool",
+            originConfidence: "high",
+            text: "preview\u0007",
+            truncated: false,
+            contentHash: { scheme: "sha256-utf8-v1", digest: "1".repeat(64) },
+          },
+        },
+      },
+    ],
+    nextCursor: "next-entry-page" as never,
+  };
+}

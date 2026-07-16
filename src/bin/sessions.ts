@@ -11,6 +11,7 @@ import { repairOrphanedContent } from "../application/repair-orphaned-content.ts
 import { forgetSession } from "../application/forget-session.ts";
 import { getPaths } from "../application/get-paths.ts";
 import { listSessions } from "../application/list-sessions.ts";
+import { listSessionEntries } from "../application/list-session-entries.ts";
 import { runDoctor } from "../application/run-doctor.ts";
 import { runIndex } from "../application/run-index.ts";
 import { searchSessions } from "../application/search-sessions.ts";
@@ -80,6 +81,15 @@ const exitCode = await runCli(process.argv.slice(2), {
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       ...(filter === undefined ? {} : { filter }),
+      ...(limit === undefined ? {} : { limit }),
+      ...(cursor === undefined ? {} : { cursor }),
+    }),
+  entries: ({ filter, selection, limit, cursor }) =>
+    listSessionEntries({
+      paths: resolvePaths(),
+      lifecycle: indexLifecycle,
+      ...(filter === undefined ? {} : { filter }),
+      ...(selection === undefined ? {} : { selection }),
       ...(limit === undefined ? {} : { limit }),
       ...(cursor === undefined ? {} : { cursor }),
     }),

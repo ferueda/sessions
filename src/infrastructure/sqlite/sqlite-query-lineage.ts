@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   createSessionRootResolver,
   type SessionLineageEvidence,
+  type SessionRootResolver,
 } from "../../domain/session-lineage.ts";
 import { formatSessionIdentity, isSessionIdentity } from "../../domain/session-identity.ts";
 import type {
@@ -34,8 +35,7 @@ export function countRootSupport(
   if (matchingSessions.length === 0) {
     return { uniqueKnownRoots: 0, unknownLineageSessions: 0 };
   }
-  const retained = readLineageEvidence(database);
-  const resolveRoot = createSessionRootResolver(retained);
+  const resolveRoot = createRetainedSessionRootResolver(database);
   const roots = new Set<string>();
   let unknownLineageSessions = 0;
   for (const identity of matchingSessions) {
@@ -44,6 +44,10 @@ export function countRootSupport(
     else unknownLineageSessions += 1;
   }
   return { uniqueKnownRoots: roots.size, unknownLineageSessions };
+}
+
+export function createRetainedSessionRootResolver(database: DatabaseSync): SessionRootResolver {
+  return createSessionRootResolver(readLineageEvidence(database));
 }
 
 function readLineageEvidence(database: DatabaseSync): readonly SessionLineageEvidence[] {

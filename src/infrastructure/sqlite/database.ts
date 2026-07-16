@@ -320,6 +320,9 @@ function createReader(snapshot: SqliteReadSnapshot, state: ReadyIndexState): Sql
     },
   };
   const query: SessionQueryRepository = {
+    entries(input) {
+      return snapshot.run((database) => createSqliteSessionQuery(database).entries(input));
+    },
     list(input) {
       return snapshot.run((database) => createSqliteSessionQuery(database).list(input));
     },

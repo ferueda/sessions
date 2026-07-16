@@ -1,4 +1,8 @@
-import type { SessionFilter, SessionSearchFilter } from "../../domain/session-query.ts";
+import type {
+  SessionEntryFilter,
+  SessionFilter,
+  SessionSearchFilter,
+} from "../../domain/session-query.ts";
 
 export interface SqliteQueryWhere {
   readonly sql: string;
@@ -39,6 +43,54 @@ export function searchWhere(filter: SessionSearchFilter): SqliteQueryWhere {
   appendExact(conditions, parameters, "entry.tool_name", filter.toolName);
   appendExact(conditions, parameters, "entry.tool_namespace", filter.toolNamespace);
   return where(conditions, parameters);
+}
+
+export function entryInventoryWhere(filter: SessionEntryFilter): SqliteQueryWhere {
+  const conditions: string[] = [];
+  const parameters: string[] = [];
+  appendCommonFilters(conditions, parameters, filter);
+  appendEntryFilters(conditions, parameters, filter, "entry", true);
+  return where(conditions, parameters);
+}
+
+export function entrySelectionWhere(
+  filter: SessionEntryFilter,
+  entryAlias: string,
+): SqliteQueryWhere {
+  const conditions: string[] = [];
+  const parameters: string[] = [];
+  appendEntryFilters(conditions, parameters, filter, entryAlias, true);
+  return where(conditions, parameters);
+}
+
+function appendEntryFilters(
+  conditions: string[],
+  parameters: string[],
+  filter: SessionEntryFilter,
+  entryAlias: string,
+  originExists: boolean,
+): void {
+  appendExclusiveBound(conditions, parameters, `${entryAlias}.timestamp`, ">", filter.entryAfter);
+  appendExclusiveBound(conditions, parameters, `${entryAlias}.timestamp`, "<", filter.entryBefore);
+  appendExact(conditions, parameters, `${entryAlias}.actor`, filter.actor);
+  if (filter.origin !== undefined && originExists) {
+    conditions.push(
+      `EXISTS (
+        SELECT 1
+        FROM sessions_content_occurrences AS origin_occurrence
+        WHERE origin_occurrence.session_id = ${entryAlias}.session_id
+          AND origin_occurrence.entry_ordinal = ${entryAlias}.ordinal
+          AND origin_occurrence.origin = ?
+      )`,
+    );
+    parameters.push(filter.origin);
+  }
+  appendExact(conditions, parameters, `${entryAlias}.kind`, filter.entryKind);
+  if (filter.toolName !== undefined || filter.toolNamespace !== undefined) {
+    conditions.push(`${entryAlias}.kind = 'tool-call'`);
+  }
+  appendExact(conditions, parameters, `${entryAlias}.tool_name`, filter.toolName);
+  appendExact(conditions, parameters, `${entryAlias}.tool_namespace`, filter.toolNamespace);
 }
 
 function appendCommonFilters(
