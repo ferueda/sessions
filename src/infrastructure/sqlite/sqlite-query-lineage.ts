@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 
-import { resolveSessionRoot, type SessionLineageEvidence } from "../../domain/session-lineage.ts";
+import {
+  createSessionRootResolver,
+  type SessionLineageEvidence,
+} from "../../domain/session-lineage.ts";
 import { formatSessionIdentity, isSessionIdentity } from "../../domain/session-identity.ts";
 import type {
   LineageCoverage,
@@ -32,10 +35,11 @@ export function countRootSupport(
     return { uniqueKnownRoots: 0, unknownLineageSessions: 0 };
   }
   const retained = readLineageEvidence(database);
+  const resolveRoot = createSessionRootResolver(retained);
   const roots = new Set<string>();
   let unknownLineageSessions = 0;
   for (const identity of matchingSessions) {
-    const resolution = resolveSessionRoot(identity, retained);
+    const resolution = resolveRoot(identity);
     if (resolution.kind === "known") roots.add(formatSessionIdentity(resolution.root));
     else unknownLineageSessions += 1;
   }

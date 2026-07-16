@@ -11,6 +11,8 @@ export type SessionRootResolution =
   | { readonly kind: "known"; readonly root: SessionIdentity }
   | { readonly kind: "unknown" };
 
+export type SessionRootResolver = (start: SessionIdentity) => SessionRootResolution;
+
 interface Frame {
   readonly key: string;
   readonly evidence: SessionLineageEvidence;
@@ -22,22 +24,37 @@ interface Frame {
 
 const UNKNOWN_ROOT: SessionRootResolution = Object.freeze({ kind: "unknown" });
 
-/** Resolve retained ancestry without inferring inverse or content-based relations. */
-export function resolveSessionRoot(
-  start: SessionIdentity,
+/** Build one resolver for an immutable retained-library snapshot. */
+export function createSessionRootResolver(
   retainedSessions: readonly SessionLineageEvidence[],
-): SessionRootResolution {
+): SessionRootResolver {
   const sessions = indexSessions(retainedSessions);
+  const memo = new Map<string, SessionRootResolution>();
+
+  return (start) => resolveSessionRoot(start, sessions, memo);
+}
+
+/** Resolve retained ancestry without inferring inverse or content-based relations. */
+function resolveSessionRoot(
+  start: SessionIdentity,
+  sessions: ReadonlyMap<string, SessionLineageEvidence>,
+  memo: Map<string, SessionRootResolution>,
+): SessionRootResolution {
   const startKey = formatSessionIdentity(start);
   const startEvidence = sessions.get(startKey);
   if (startEvidence === undefined || !sameSessionIdentity(startEvidence.identity, start)) {
     return UNKNOWN_ROOT;
   }
 
-  const memo = new Map<string, SessionRootResolution>();
+  const retainedResolution = memo.get(startKey);
+  if (retainedResolution !== undefined) return retainedResolution;
+
   const visiting = new Set<string>();
   const first = createFrame(startKey, startEvidence);
-  if (first === undefined) return UNKNOWN_ROOT;
+  if (first === undefined) {
+    memo.set(startKey, UNKNOWN_ROOT);
+    return UNKNOWN_ROOT;
+  }
   const stack: Frame[] = [first];
   visiting.add(startKey);
 

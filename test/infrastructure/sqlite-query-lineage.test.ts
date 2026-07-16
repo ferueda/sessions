@@ -65,13 +65,13 @@ describe("SQLite query lineage support", () => {
         now: () => new Date("2026-07-14T12:02:00.000Z"),
       });
 
-      const result = await createSqliteSessionQuery(database).search(
-        createSessionSearchQuery({
-          text: "lineage matrix evidence",
-          limit: 20,
-          context: 0,
-        }),
-      );
+      const query = createSessionSearchQuery({
+        text: "lineage matrix evidence",
+        limit: 20,
+        context: 0,
+      });
+      const repository = createSqliteSessionQuery(database);
+      const result = await repository.search(query);
 
       expect(result.hits).toHaveLength(documents.length);
       expect(result.support).toEqual({
@@ -80,6 +80,7 @@ describe("SQLite query lineage support", () => {
         uniqueKnownRoots: 2,
         unknownLineageSessions: 4,
       });
+      await expect(repository.search(query)).resolves.toEqual(result);
     } finally {
       database.close();
     }
