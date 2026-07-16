@@ -11,6 +11,7 @@
 | `pnpm lint` / `pnpm lint:fix`    | Check or fix source/test lint                                           | Fix variant only                | No                                  |
 | `pnpm measure:content-storage`   | Compare legacy and current canonical-content layouts with fixed corpora | Temporary directory, removed    | No                                  |
 | `pnpm measure:query-lineage`     | Compare repeated and query-scoped lineage resolution                    | No                              | No                                  |
+| `pnpm measure:search-query`      | Measure a fixed broad first-page search through production SQLite seams | In-memory database, removed     | No                                  |
 | `pnpm deps:check`                | Enforce production import graph                                         | No                              | No                                  |
 | `pnpm typecheck`                 | Strict TypeScript check                                                 | No                              | No                                  |
 | `pnpm test` / `pnpm test:watch`  | Run tests once or watch                                                 | Temporary test state            | No                                  |
@@ -36,6 +37,13 @@ Timings are report-only and can vary by machine and SQLite version.
 rebuilding lineage state per resolution with one query-scoped resolver over a
 deterministic generic in-memory corpus. Exact result equality is required;
 elapsed time and speedup are report-only and vary by machine and runtime.
+
+`pnpm measure:search-query` is opt-in and outside `pnpm check`. It indexes a
+fixed generic in-memory corpus through the production SQLite storage seam, then
+runs the same broad first-page query twice through the production query seam.
+Exact order, support counts, snippets, continuation, and repeated output are
+required; aggregate elapsed time is report-only and varies by machine and
+runtime.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
