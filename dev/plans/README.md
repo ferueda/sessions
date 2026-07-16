@@ -9,6 +9,9 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. M8 is complete; M9 packages the Agent Skill,
-M10 proves Cursor equivalence, and Markdown presentation remains deferred beyond
-V1.
+Active executor plan:
+
+- [Package the Sessions Agent Skill](260715-package-sessions-agent-skill.md)
+
+M9 packages the Agent Skill. M10 proves Cursor equivalence, and Markdown
+presentation remains deferred beyond V1.
