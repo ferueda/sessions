@@ -2,8 +2,10 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { Command } from "commander";
 import { describe, expect, test } from "vitest";
 
+import { createProgram, type ProgramOptions } from "../src/cli/program.ts";
 import {
   sessionsSkillForwardCases,
   workflowAuditCoverage,
@@ -71,7 +73,10 @@ describe("Sessions Agent Skill contracts", () => {
     );
     expect(protocol).toMatch(/sessions doctor --format json/u);
     expect(protocol).toMatch(/provider-free[\s\S]*source check fails[\s\S]*Continue/u);
-    expect(protocol).toMatch(/Index only when the user has authorized/u);
+    expect(protocol).toMatch(
+      /explicitly authorizes indexing[\s\S]*reading provider history[\s\S]*writing a durable Sessions-owned copy/u,
+    );
+    expect(protocol).toMatch(/request for analysis does not authorize indexing/u);
     expect(protocol).toMatch(/Do not omit the evidence ledger or\s+limits/u);
     expect(protocol).toMatch(/\*\*Done when:\*\*/u);
 
@@ -89,21 +94,38 @@ describe("Sessions Agent Skill contracts", () => {
     expect(handoff).toMatch(/full source and destination canonical IDs/u);
   });
 
-  test("uses only the shipped Sessions surface and preserves safety boundaries", async () => {
+  test("uses only shipped command paths and flags while preserving safety boundaries", async () => {
     const files = await Promise.all(
       expectedFiles.map((file) => readFile(path.join(skillRoot, file), "utf8")),
     );
     const contents = files.join("\n");
 
-    expect(contents).not.toMatch(
-      /sessions (?:analyze|cursor|codex (?:list|show|reindex))|--turn-query|--include-automation|--include-subagents/u,
+    const surface = shippedCliSurface();
+    const examples = extractCommandExamples(contents);
+    expect(examples.length).toBeGreaterThan(0);
+    for (const example of examples) {
+      expect(surface.has(example.path), `unshipped command: ${example.raw}`).toBe(true);
+      const commandFlags = surface.get(example.path) ?? new Set<string>();
+      expect(
+        example.flags.filter((flag) => !commandFlags.has(flag)),
+        `unshipped flag for ${example.path}: ${example.raw}`,
+      ).toEqual([]);
+    }
+
+    const shippedFlags = new Set([...surface.values()].flatMap((flags) => [...flags]));
+    const mentionedFlags = new Set(
+      [...contents.matchAll(/--[a-z][a-z-]*/gu)].map(([flag]) => flag),
     );
+    expect([...mentionedFlags].filter((flag) => !shippedFlags.has(flag))).toEqual([]);
+
+    expect(contents).not.toMatch(/sessions (?:analyze|cursor|codex (?:list|show|reindex))/u);
     expect(contents).not.toMatch(/\/Users\/[^/]+|[A-Za-z]:\\Users\\/u);
     expect(contents).not.toMatch(
       /semantic search|Sessions automatically|automatically (?:creates?|sends?|uploads?)/iu,
     );
     expect(contents).toMatch(/sessions index --source codex/u);
-    expect(contents).toMatch(/authorized indexing|authorized provider reading/u);
+    expect(contents).toMatch(/explicitly authorizes indexing/u);
+    expect(contents).not.toMatch(/authorized provider reading/u);
     expect(contents).toMatch(/user-requested deletion of Sessions-owned data/u);
     expect(contents).toMatch(/Do not automatically edit projects/u);
   });
@@ -142,4 +164,69 @@ async function relativeFiles(directory: string): Promise<string[]> {
     }),
   );
   return files.flat().sort();
+}
+
+function shippedCliSurface(): ReadonlyMap<string, ReadonlySet<string>> {
+  const unavailable = (): Promise<never> =>
+    Promise.reject(new Error("command handlers are not used by this contract"));
+  const options: ProgramOptions = {
+    version: "0.0.0",
+    output: { writeOut: () => undefined, writeErr: () => undefined },
+    doctor: unavailable,
+    paths: unavailable,
+    indexSources: ["codex"],
+    index: unavailable,
+    list: unavailable,
+    entries: unavailable,
+    search: unavailable,
+    show: unavailable,
+    export: unavailable,
+    forget: unavailable,
+    clearData: unavailable,
+    compactData: unavailable,
+    repairOrphanedData: unavailable,
+  };
+  const surface = new Map<string, ReadonlySet<string>>();
+  visitCommands(createProgram(options), [], surface);
+  return surface;
+}
+
+function visitCommands(
+  parent: Command,
+  parentPath: readonly string[],
+  surface: Map<string, ReadonlySet<string>>,
+): void {
+  for (const command of parent.commands) {
+    const pathParts = [...parentPath, command.name()];
+    surface.set(
+      pathParts.join(" "),
+      new Set(
+        command.options
+          .map(({ long }) => long)
+          .filter((flag): flag is string => flag !== undefined && flag.length > 0),
+      ),
+    );
+    visitCommands(command, pathParts, surface);
+  }
+}
+
+function extractCommandExamples(contents: string): readonly {
+  readonly raw: string;
+  readonly path: string;
+  readonly flags: readonly string[];
+}[] {
+  return [...contents.matchAll(/`(?<command>sessions\s+[^`]+)`/gu)].map((match) => {
+    const raw = match.groups?.command?.replace(/\s+/gu, " ").trim();
+    if (raw === undefined) throw new Error("command example has no body");
+    const tokens = raw.split(" ");
+    const first = tokens[1];
+    if (first === undefined) throw new Error(`command example has no path: ${raw}`);
+    const second = tokens[2];
+    const commandPath = first === "data" ? `${first} ${second ?? ""}`.trim() : first;
+    return {
+      raw,
+      path: commandPath,
+      flags: tokens.filter((token) => token !== "--" && token.startsWith("--")),
+    };
+  });
 }

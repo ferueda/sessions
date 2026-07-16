@@ -17,9 +17,10 @@ question requires.
      and source-state evidence.
    - If a failed check blocks the needed retained-library operation, stop with
      the failed capability and smallest remediation.
-   - Index only when the user has authorized provider reading in this task. Use
-     `sessions index --source codex --format json`; never infer authorization
-     from an analysis request.
+   - Run `sessions index --source codex --format json` only after the user
+     explicitly authorizes indexing, including both reading provider history and
+     writing a durable Sessions-owned copy. Permission to inspect history or a
+     request for analysis does not authorize indexing.
 2. State the question and the evidence needed to answer it before broadening the
    search.
 3. Start with narrow, bounded JSON or JSONL queries. Prefer exact source,
