@@ -25,6 +25,8 @@ const BARE_TOOL_NAME = "inspect_fixture";
 const NAMESPACED_TOOL_NAME = "read_fixture";
 const TOOL_NAMESPACE = "synthetic";
 const TOOL_MENTION = `Ordinary text mentions ${TOOL_MARKER}, ${BARE_TOOL_NAME}, and ${TOOL_NAMESPACE}/${NAMESPACED_TOOL_NAME}.`;
+const ACTIVITY_AFTER = "2025-07-14T14:19:59.999Z";
+const ACTIVITY_BEFORE = "2025-07-14T14:20:00.001Z";
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
 const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
 
@@ -267,6 +269,10 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "list",
       "--native-id",
       NATIVE_ID,
+      "--activity-after",
+      ACTIVITY_AFTER,
+      "--activity-before",
+      ACTIVITY_BEFORE,
       "--limit",
       "1",
       "--format",
@@ -279,14 +285,27 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     const structuredListSummary = readObject(readArray(structuredListReport, "sessions")[0]);
     const structuredSession = readObject(structuredListSummary.session);
     const structuredDigest = readObject(structuredListSummary.documentDigest);
+    const structuredRoot = readObject(structuredListSummary.root);
     assert.equal(structuredSession.canonicalId, canonicalId);
     assert.equal(structuredSession.nativeId, NATIVE_ID);
     assertDocumentDigest(structuredDigest);
+    assert.deepEqual(structuredRoot, {
+      kind: "known",
+      session: {
+        canonicalId: structuredSession.canonicalId,
+        source: structuredSession.source,
+        nativeId: structuredSession.nativeId,
+      },
+    });
 
     const structuredEntries = await stableProviderCommand(options, fixture.codexHome, environment, [
       "entries",
       "--native-id",
       NATIVE_ID,
+      "--activity-after",
+      ACTIVITY_AFTER,
+      "--activity-before",
+      ACTIVITY_BEFORE,
       "--kind",
       "tool-call",
       "--tool-name",
@@ -335,6 +354,10 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "distribution smoke",
       "--native-id",
       NATIVE_ID,
+      "--activity-after",
+      ACTIVITY_AFTER,
+      "--activity-before",
+      ACTIVITY_BEFORE,
       "--limit",
       "1",
       "--context",
@@ -348,12 +371,41 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assertStructuredHeader(structuredSearchReport, "search", "page");
     const structuredSearchHit = readObject(readArray(structuredSearchReport, "hits")[0]);
     const structuredSearchSummary = readObject(structuredSearchHit.session);
+    assert.deepEqual(readObject(structuredSearchHit.root), structuredRoot);
+    assert.deepEqual(readObject(structuredSearchHit.match).matchedTerms, ["distribution", "smoke"]);
     assertSameAttribution(
       structuredSearchSummary,
       structuredSession,
       structuredDigest,
       "structured search",
     );
+
+    const anySearch = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "search",
+      "distribution nevermatcheszzzz",
+      "--match",
+      "any",
+      "--native-id",
+      NATIVE_ID,
+      "--activity-after",
+      ACTIVITY_AFTER,
+      "--activity-before",
+      ACTIVITY_BEFORE,
+      "--context",
+      "0",
+      "--format",
+      "json",
+    ]);
+    assertCommand(anySearch, 0, "structured any-term search");
+    assertNoPrivateFixtureMarkers(anySearch.stdout, "structured any-term search");
+    const anySearchReport = parseJson(anySearch.stdout);
+    assertStructuredHeader(anySearchReport, "search", "page");
+    const anyHits = readArray(anySearchReport, "hits").map(readObject);
+    assert.equal(anyHits.length, 4);
+    for (const hit of anyHits) {
+      assert.deepEqual(readObject(hit.root), structuredRoot);
+      assert.deepEqual(readObject(hit.match).matchedTerms, ["distribution"]);
+    }
 
     const structuredShow = await stableProviderCommand(options, fixture.codexHome, environment, [
       "show",
@@ -366,6 +418,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     const structuredShowReport = parseJson(structuredShow.stdout);
     assertStructuredHeader(structuredShowReport, "show", "snapshot");
     const structuredSnapshot = readObject(structuredShowReport.snapshot);
+    assert.equal("root" in structuredSnapshot, false);
     assertSameAttribution(
       structuredSnapshot,
       structuredSession,
@@ -422,6 +475,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assert.ok(exportRecords.length > 1, "structured export returned no evidence records");
     assertStructuredHeader(exportRecords[0]!, "export", "session");
     const exportSnapshot = readObject(exportRecords[0]!.snapshot);
+    assert.equal("root" in exportSnapshot, false);
     assertSameAttribution(exportSnapshot, structuredSession, structuredDigest, "export session");
     let sawEntry = false;
     for (const record of exportRecords.slice(1)) {

@@ -374,8 +374,9 @@ result, or automatic repair policy is public.
 The application exposes immutable provider-neutral list/search/entries query values and
 one query repository beside canonical reconstruction on each read snapshot.
 Shared filters cover exact source/instance, exact opaque provider-native ID,
-effective source state, workspace, exclusive capture/source-observation bounds,
-and canonical identity. Native-ID lookup returns zero or more canonical summaries
+effective source state, workspace, exclusive activity/capture/source-observation
+bounds, and canonical identity. Activity uses `updatedAt`, falling back to
+`createdAt`; missing activity never matches. Native-ID lookup returns zero or more canonical summaries
 and never replaces the complete three-part identity required by singular or
 destructive operations. Search and entries add exclusive entry-time bounds,
 actor, content origin, exact entry kind, and exact source-observed tool
@@ -384,13 +385,22 @@ effective observation time is the source coverage observation while coverage is
 unknown and the session presence observation otherwise; it never falls back to
 last-seen or provider activity time.
 
-Search splits on Unicode whitespace, quotes every term as FTS data, and combines
-terms with AND. Raw FTS syntax is not public. One primary hit represents one
+Search splits on Unicode whitespace, admits at most 32 terms and 4 KiB of
+canonical UTF-8 text, and quotes every term as FTS data. `all` combines terms
+with AND and remains the default; `any` combines them with OR. Raw FTS syntax is
+not public. One primary hit represents one
 session entry regardless of matching-segment count. Its best content-level BM25
 value ranks the entry; ties use session activity descending/null-last, binary
 source/instance/native identity, then entry ordinal. The best segment and lowest
 segment ordinal supply the bounded snippet. Occurrence frequency never improves
 relevance.
+
+Every hit reports exact unique matched terms in first-query order. `any` derives
+them with page-bounded candidate probes; `all` reuses the query's unique terms.
+One query-scoped root resolver supplies support plus a known retained root or
+`unknown` on every list result, search hit, and entry result. Root attribution
+can point outside current filters and does not enter documents, digests, show, or
+export.
 
 Search can add bounded neighboring entries plus direct, non-recursive observed
 tool-call/result partners in either direction. It excludes every other relation
@@ -504,8 +514,8 @@ sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
-sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
-                       [--format human|json|jsonl]
+sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
+                       [--cursor TOKEN] [--format human|json|jsonl]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
                            [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
@@ -518,9 +528,9 @@ sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-The same milestone adds literal-any search, list/search root attribution, and
-activity bounds. Textless entry inventory and bounded show/export ranges are current. The next planned adapter
-surface then adds:
+Literal all/any search, per-hit matched terms, activity bounds, list/search/entry
+root attribution, textless entry inventory, and bounded show/export ranges are
+current. The next planned adapter surface adds:
 
 ```text
 sessions index --source cursor
@@ -833,8 +843,8 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 3 are implemented;
-M8 agent analysis retrieval is in progress. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 4 are implemented; M9
+packaged Agent Skill work is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex before Cursor becomes the second-adapter proof. The
@@ -868,12 +878,12 @@ persistence, same-snapshot attribution, shared bounded selection, closed
 schema-1 JSON/JSONL DTOs, and portable retained-session export. Framed Markdown
 is deferred beyond V1.
 
-### Phase 4 — Agent analysis retrieval
+### Phase 4 — Agent analysis retrieval (complete)
 
 Query-scoped lineage resolution, rank-first search hydration, bounded
-show/export ranges, and textless entry inventory are complete. Add literal-any
-search, list/search root attribution, and activity bounds without changing
-adapters or canonical storage.
+show/export ranges, textless entry inventory, literal all/any search, per-hit
+matched terms, list/search/entry root attribution, and activity bounds are
+complete. They required no adapter, canonical schema, or storage-index change.
 
 ### Phase 5 — Agent Skill
 

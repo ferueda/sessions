@@ -17,8 +17,10 @@ import {
   type SessionSearchSnippet,
 } from "../../domain/session-query.ts";
 import { contentHashMatches } from "../../domain/content-hash.ts";
+import type { SessionRootResolver } from "../../domain/session-lineage.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
+import { splitUnicodeWhitespaceTerms } from "../../domain/unicode-whitespace.ts";
 import { literalFtsQuery } from "./literal-fts-query.ts";
 import {
   decodeQueryCursor,
@@ -29,8 +31,13 @@ import {
   type QueryRevision,
 } from "./query-cursor.ts";
 import { readSearchContext, entryAt, truncateUtf8Around } from "./sqlite-query-context.ts";
-import { searchWhere, sessionWhere, type SqliteQueryWhere } from "./sqlite-query-filters.ts";
-import { countRootSupport } from "./sqlite-query-lineage.ts";
+import {
+  EFFECTIVE_SESSION_ACTIVITY_SQL,
+  searchWhere,
+  sessionWhere,
+  type SqliteQueryWhere,
+} from "./sqlite-query-filters.ts";
+import { countRootSupport, createRetainedSessionRootResolver } from "./sqlite-query-lineage.ts";
 import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { readSessionSummary } from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
@@ -75,8 +82,8 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
          ON source.source_instance_id = tracking.source_instance_id
        WHERE 1 = 1${where.sql}
        ORDER BY
-         CASE WHEN COALESCE(canonical.updated_at, canonical.created_at) IS NULL THEN 1 ELSE 0 END,
-         COALESCE(canonical.updated_at, canonical.created_at) DESC,
+         CASE WHEN ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL THEN 1 ELSE 0 END,
+         ${EFFECTIVE_SESSION_ACTIVITY_SQL} DESC,
          source.kind COLLATE BINARY,
          source.instance_id COLLATE BINARY,
          tracking.native_id COLLATE BINARY
@@ -84,11 +91,15 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
     )
     .all(...where.parameters, query.limit + 1, cursor.offset) as unknown as readonly IdentityRow[];
   const pageRows = rows.slice(0, query.limit);
+  const resolveRoot =
+    pageRows.length === 0 ? undefined : createRetainedSessionRootResolver(database);
   const sessions = pageRows.map((row) => {
     const identity = identityAt(row);
     const summary = readSessionSummary(database, identity);
-    if (summary === undefined) throw new SqliteSessionIndexError("corrupt-data");
-    return freezeSummary(summary);
+    if (summary === undefined || resolveRoot === undefined) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    return Object.freeze({ ...freezeSummary(summary), root: resolveRoot(identity) });
   });
   const nextCursor =
     rows.length > query.limit
@@ -102,10 +113,10 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
 
 function searchSessions(database: DatabaseSync, query: SessionSearchQuery): SessionSearchPage {
   const cursor = prepareCursor(database, "search", query);
-  const ftsQuery = literalFtsQuery(query.text);
+  const ftsQuery = literalFtsQuery(query.text, query.termMode);
   if (ftsQuery === undefined) return emptySearchPage();
   const where = searchWhere(query.filter);
-  const support = readSupport(database, ftsQuery, where);
+  const supportResolution = readSupport(database, ftsQuery, where);
   const searchRows = readSearchRows(database, query, ftsQuery, where, cursor.offset);
   const pageRows = searchRows.slice(0, query.limit);
   const hits =
@@ -117,6 +128,8 @@ function searchSessions(database: DatabaseSync, query: SessionSearchQuery): Sess
           query.context,
           ftsQuery,
           cursor.revision.libraryInstanceId,
+          query,
+          supportResolution.resolveRoot,
         );
   const nextCursor =
     searchRows.length > query.limit
@@ -124,7 +137,7 @@ function searchSessions(database: DatabaseSync, query: SessionSearchQuery): Sess
       : undefined;
   return Object.freeze({
     hits: Object.freeze(hits),
-    support: Object.freeze(support),
+    support: Object.freeze(supportResolution.support),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }
@@ -256,10 +269,101 @@ function hydrateSearchHits(
   adjacentContext: number,
   ftsQuery: string,
   libraryInstanceId: string,
+  query: SessionSearchQuery,
+  resolveRoot: SessionRootResolver | undefined,
 ): readonly SessionSearchHit[] {
+  if (resolveRoot === undefined) throw new SqliteSessionIndexError("corrupt-data");
   const hydrated = hydrateSearchContent(database, rows, ftsQuery, libraryInstanceId);
+  const matchedTerms = readMatchedTerms(database, rows, query);
   const summaryCache = new Map<number, SessionQuerySummary>();
-  return rows.map((row) => searchHit(database, row, adjacentContext, summaryCache, hydrated));
+  return rows.map((row) =>
+    searchHit(database, row, adjacentContext, summaryCache, hydrated, matchedTerms, resolveRoot),
+  );
+}
+
+function readMatchedTerms(
+  database: DatabaseSync,
+  rows: readonly SearchRankRow[],
+  query: SessionSearchQuery,
+): ReadonlyMap<string, readonly string[]> {
+  const terms = uniqueSearchTerms(query.text);
+  const coordinates = rows.map(searchCoordinateAt);
+  const matches = new Map<string, string[]>(
+    coordinates.map(({ sessionId, entryOrdinal }) => [coordinateKey(sessionId, entryOrdinal), []]),
+  );
+  if (matches.size !== coordinates.length || terms.length === 0) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+
+  if (query.termMode === "all") {
+    const exactTerms = Object.freeze([...terms]);
+    return new Map([...matches.keys()].map((key) => [key, exactTerms]));
+  }
+
+  const selectedSql = coordinates.map(() => "(?, ?)").join(", ");
+  const coordinateParameters = coordinates.flatMap(({ sessionId, entryOrdinal }) => [
+    sessionId,
+    entryOrdinal,
+  ]);
+  const originSql = query.filter.origin === undefined ? "" : " AND occurrence.origin = ?";
+  const originParameters = query.filter.origin === undefined ? [] : [query.filter.origin];
+  // Drive through the selected entry and occurrence keys before probing the one
+  // canonical FTS row, so term attribution stays page-bounded.
+  const statement = database.prepare(
+    `WITH selected_entries(session_id, entry_ordinal) AS (
+       VALUES ${selectedSql}
+     )
+     SELECT selected.session_id, selected.entry_ordinal
+     FROM selected_entries AS selected
+     WHERE EXISTS (
+       SELECT 1
+       FROM sessions_content_occurrences AS occurrence
+       WHERE occurrence.session_id = selected.session_id
+         AND occurrence.entry_ordinal = selected.entry_ordinal
+         AND occurrence.content_id IS NOT NULL${originSql}
+         AND EXISTS (
+           SELECT 1
+           FROM sessions_content_fts
+           WHERE sessions_content_fts MATCH ?
+             AND sessions_content_fts.rowid = CAST(occurrence.content_id AS INTEGER)
+         )
+     )
+     ORDER BY selected.session_id, selected.entry_ordinal`,
+  );
+
+  for (const term of terms) {
+    const termQuery = literalFtsQuery(term, "all");
+    if (termQuery === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    const matchedRows = statement.all(
+      ...coordinateParameters,
+      ...originParameters,
+      termQuery,
+    ) as unknown as readonly SearchCoordinateRow[];
+    for (const row of matchedRows) {
+      const coordinate = searchCoordinateAt(row);
+      const matched = matches.get(coordinateKey(coordinate.sessionId, coordinate.entryOrdinal));
+      if (matched === undefined) throw new SqliteSessionIndexError("corrupt-data");
+      matched.push(term);
+    }
+  }
+
+  const result = new Map<string, readonly string[]>();
+  for (const [key, matched] of matches) {
+    if (matched.length === 0) throw new SqliteSessionIndexError("corrupt-data");
+    result.set(key, Object.freeze(matched));
+  }
+  return result;
+}
+
+function uniqueSearchTerms(text: string): readonly string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const term of splitUnicodeWhitespaceTerms(text)) {
+    if (seen.has(term)) continue;
+    seen.add(term);
+    result.push(term);
+  }
+  return result;
 }
 
 function snippetMarkers(libraryInstanceId: string, candidate: number): SnippetMarkers {
@@ -273,7 +377,7 @@ function readSupport(
   database: DatabaseSync,
   ftsQuery: string,
   where: SqliteQueryWhere,
-): SessionSearchPage["support"] {
+): SearchSupportResolution {
   const joins = searchJoins();
   const aggregate = database
     .prepare(
@@ -294,11 +398,26 @@ function readSupport(
                 tracking.native_id COLLATE BINARY`,
     )
     .all(ftsQuery, ...where.parameters) as unknown as readonly IdentityRow[];
-  const roots = countRootSupport(database, matchingRows.map(identityAt));
+  const occurrences = integerAt(aggregate.occurrences);
+  const uniqueContent = integerAt(aggregate.unique_content);
+  if (matchingRows.length === 0) {
+    if (occurrences !== 0 || uniqueContent !== 0) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    return {
+      support: {
+        occurrences: 0,
+        uniqueContent: 0,
+        uniqueKnownRoots: 0,
+        unknownLineageSessions: 0,
+      },
+    };
+  }
+  const resolveRoot = createRetainedSessionRootResolver(database);
+  const roots = countRootSupport(resolveRoot, matchingRows.map(identityAt));
   return {
-    occurrences: integerAt(aggregate.occurrences),
-    uniqueContent: integerAt(aggregate.unique_content),
-    ...roots,
+    support: { occurrences, uniqueContent, ...roots },
+    resolveRoot,
   };
 }
 
@@ -325,6 +444,8 @@ function searchHit(
   adjacentContext: number,
   summaryCache: Map<number, SessionQuerySummary>,
   hydrated: HydratedSearchContent,
+  matchedTerms: ReadonlyMap<string, readonly string[]>,
+  resolveRoot: SessionRootResolver,
 ): SessionSearchHit {
   const sessionId = integerAt(row.session_id);
   const identity = identityAt({
@@ -354,13 +475,31 @@ function searchHit(
   if (content === undefined) throw new SqliteSessionIndexError("corrupt-data");
   const snippet = snippetAt(row, content, hydrated.markers);
   const context = readSearchContext(database, sessionId, entry.ordinal, adjacentContext);
+  const terms = matchedTerms.get(coordinateKey(sessionId, entry.ordinal));
+  if (terms === undefined) throw new SqliteSessionIndexError("corrupt-data");
   return Object.freeze({
     session: summary,
+    root: resolveRoot(identity),
     entry,
     snippet,
+    matchedTerms: terms,
     context: context.entries,
     linkedContextTruncated: context.linkedContextTruncated,
   });
+}
+
+function searchCoordinateAt(row: {
+  readonly session_id: unknown;
+  readonly entry_ordinal: unknown;
+}): SearchCoordinate {
+  return {
+    sessionId: integerAt(row.session_id),
+    entryOrdinal: integerAt(row.entry_ordinal),
+  };
+}
+
+function coordinateKey(sessionId: number, entryOrdinal: number): string {
+  return `${String(sessionId)}:${String(entryOrdinal)}`;
 }
 
 function snippetAt(
@@ -493,6 +632,21 @@ interface SnippetMarkers {
 interface HydratedSearchContent {
   readonly byContentId: ReadonlyMap<number, HydratedContentRow>;
   readonly markers: SnippetMarkers;
+}
+
+interface SearchSupportResolution {
+  readonly support: SessionSearchPage["support"];
+  readonly resolveRoot?: SessionRootResolver;
+}
+
+interface SearchCoordinate {
+  readonly sessionId: number;
+  readonly entryOrdinal: number;
+}
+
+interface SearchCoordinateRow {
+  readonly session_id: unknown;
+  readonly entry_ordinal: unknown;
 }
 
 interface IdentityRow {

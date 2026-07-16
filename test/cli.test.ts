@@ -9,6 +9,8 @@ import type { ForgetSessionReport } from "../src/application/forget-session.ts";
 import type { PathsReport } from "../src/application/get-paths.ts";
 import type { IndexReport } from "../src/application/index-report.ts";
 import type { ListSessionEntriesResult } from "../src/application/list-session-entries.ts";
+import type { ListSessionsResult } from "../src/application/list-sessions.ts";
+import type { SearchSessionsResult } from "../src/application/search-sessions.ts";
 import type { ShowSessionResult } from "../src/application/show-session.ts";
 import type { DoctorReport } from "../src/application/run-doctor.ts";
 import { SessionLibraryError } from "../src/application/library-error.ts";
@@ -420,7 +422,7 @@ describe("sessions CLI", () => {
     const delimited = await invoke(["search", "--", "---"], { search });
 
     expect(delimited).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
-    expect(search).toHaveBeenCalledExactlyOnceWith({ text: "---" });
+    expect(search).toHaveBeenCalledExactlyOnceWith({ text: "---", termMode: "all" });
 
     search.mockClear();
     const unknownOption = await invoke(["search", "---"], { search });
@@ -448,6 +450,10 @@ describe("sessions CLI", () => {
         "missing",
         "--workspace",
         "/repo",
+        "--activity-after",
+        "2026-07-13T23:00:00.000Z",
+        "--activity-before",
+        "2026-07-15T01:00:00.000Z",
         "--captured-after",
         "2026-07-14T00:00:00.000Z",
         "--captured-before",
@@ -472,6 +478,8 @@ describe("sessions CLI", () => {
         "exec",
         "--tool-namespace",
         "shell",
+        "--match",
+        "any",
         "--limit",
         "7",
         "--context",
@@ -485,12 +493,15 @@ describe("sessions CLI", () => {
     expect(invocation.exitCode).toBe(0);
     expect(search).toHaveBeenCalledWith({
       text: "needle",
+      termMode: "any",
       filter: {
         source: "codex",
         instance: "local",
         nativeId: "provider-thread",
         sourceState: "missing",
         workspace: "/repo",
+        activityAfter: "2026-07-13T23:00:00.000Z",
+        activityBefore: "2026-07-15T01:00:00.000Z",
         capturedAfter: "2026-07-14T00:00:00.000Z",
         capturedBefore: "2026-07-15T00:00:00.000Z",
         observedAfter: "2026-07-14T01:00:00.000Z",
@@ -529,6 +540,10 @@ describe("sessions CLI", () => {
         "missing",
         "--workspace",
         "/repo",
+        "--activity-after",
+        "2026-07-13T23:00:00.000Z",
+        "--activity-before",
+        "2026-07-15T01:00:00.000Z",
         "--captured-after",
         "2026-07-14T00:00:00.000Z",
         "--captured-before",
@@ -571,6 +586,8 @@ describe("sessions CLI", () => {
         nativeId: "provider-thread",
         sourceState: "missing",
         workspace: "/repo",
+        activityAfter: "2026-07-13T23:00:00.000Z",
+        activityBefore: "2026-07-15T01:00:00.000Z",
         capturedAfter: "2026-07-14T00:00:00.000Z",
         capturedBefore: "2026-07-15T00:00:00.000Z",
         observedAfter: "2026-07-14T01:00:00.000Z",
@@ -617,6 +634,29 @@ describe("sessions CLI", () => {
     );
   });
 
+  test("forwards shared activity bounds to list", async () => {
+    const list = vi.fn<ProgramOptions["list"]>(async () => ({ sessions: [] }));
+
+    const invocation = await invoke(
+      [
+        "list",
+        "--activity-after",
+        "2026-07-14T00:00:00.000Z",
+        "--activity-before",
+        "2026-07-15T00:00:00.000Z",
+      ],
+      { list },
+    );
+
+    expect(invocation.exitCode).toBe(0);
+    expect(list).toHaveBeenCalledExactlyOnceWith({
+      filter: {
+        activityAfter: "2026-07-14T00:00:00.000Z",
+        activityBefore: "2026-07-15T00:00:00.000Z",
+      },
+    });
+  });
+
   test("renders equivalent attributable entries JSON and JSONL", async () => {
     const result = entryInventoryResult();
     const entries = vi.fn<ProgramOptions["entries"]>(async () => result);
@@ -633,6 +673,49 @@ describe("sessions CLI", () => {
     expect(records.map(({ type }) => type)).toEqual(["page", "entry"]);
     expect(records[0]).toMatchObject({ entryCount: 1, nextCursor: "next-entry-page" });
     expect(records[1].entry).toEqual(page.entries[0]);
+  });
+
+  test("renders equivalent list/search roots and matched terms in JSON and JSONL", async () => {
+    const listResult = attributedListResult();
+    const searchResult = attributedSearchResult();
+    const list = vi.fn<ProgramOptions["list"]>(async () => listResult);
+    const search = vi.fn<ProgramOptions["search"]>(async () => searchResult);
+
+    const listJson = await invoke(["list", "--format", "json"], { list });
+    const listJsonl = await invoke(["list", "--format", "jsonl"], { list });
+    const searchJson = await invoke(
+      ["search", "first second", "--match", "any", "--format", "json"],
+      {
+        search,
+      },
+    );
+    const searchJsonl = await invoke(
+      ["search", "first second", "--match", "any", "--format", "jsonl"],
+      { search },
+    );
+
+    const listPage = JSON.parse(listJson.stdout);
+    const listRecords = listJsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const searchPage = JSON.parse(searchJson.stdout);
+    const searchRecords = searchJsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect([listJson, listJsonl, searchJson, searchJsonl].map(({ exitCode }) => exitCode)).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(listPage.sessions[0].root).toEqual({ kind: "unknown" });
+    expect(listRecords[1].summary).toEqual(listPage.sessions[0]);
+    expect(searchPage.hits[0]).toMatchObject({
+      root: { kind: "unknown" },
+      match: { matchedTerms: ["first", "second"] },
+    });
+    expect(searchRecords[1].hit).toEqual(searchPage.hits[0]);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls.every(([input]) => input.termMode === "any")).toBe(true);
   });
 
   test("rejects invalid query dependencies and bounds before handlers", async () => {
@@ -657,6 +740,22 @@ describe("sessions CLI", () => {
     );
     const blank = await invoke(["search", "   "], { search });
     const unicodeBlank = await invoke(["search", "\u0085"], { search });
+    const tooManyTerms = await invoke(
+      ["search", Array.from({ length: 33 }, (_, index) => `term-${String(index)}`).join(" ")],
+      { search },
+    );
+    const tooManyBytes = await invoke(["search", "é".repeat(2_049)], { search });
+    const equalActivityBounds = await invoke(
+      [
+        "list",
+        "--activity-after",
+        "2026-07-14T00:00:00.000Z",
+        "--activity-before",
+        "2026-07-14T00:00:00.000Z",
+      ],
+      { list },
+    );
+    const invalidMatch = await invoke(["search", "needle", "--match", "some"], { search });
 
     expect([
       missingSource.exitCode,
@@ -665,7 +764,13 @@ describe("sessions CLI", () => {
       equalBounds.exitCode,
       blank.exitCode,
       unicodeBlank.exitCode,
-    ]).toEqual([2, 2, 2, 2, 2, 2]);
+      tooManyTerms.exitCode,
+      tooManyBytes.exitCode,
+      equalActivityBounds.exitCode,
+      invalidMatch.exitCode,
+    ]).toEqual([2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    expect(tooManyTerms.stderr).toContain("at most 32 terms");
+    expect(tooManyBytes.stderr).toContain("at most 4096 UTF-8 bytes");
     expect(list).not.toHaveBeenCalled();
     expect(search).not.toHaveBeenCalled();
   });
@@ -1042,6 +1147,62 @@ function entryInventoryResult(): ListSessionEntriesResult {
       },
     ],
     nextCursor: "next-entry-page" as never,
+  };
+}
+
+function attributedListResult(): ListSessionsResult {
+  const snapshot = selectedSnapshot().snapshot;
+  const { title, createdAt, updatedAt } = snapshot;
+  if (title === undefined || createdAt === undefined || updatedAt === undefined) {
+    throw new TypeError("Attributed list fixture requires title and activity timestamps");
+  }
+  return {
+    sessions: [
+      {
+        identity: snapshot.identity,
+        documentDigest: snapshot.documentDigest,
+        title,
+        createdAt,
+        updatedAt,
+        capturedAt: snapshot.capturedAt,
+        sourceState: snapshot.sourceState,
+        sourceObservedAt: snapshot.sourceObservedAt,
+        adapterVersion: snapshot.adapterVersion,
+        freshness: snapshot.freshness,
+        root: { kind: "unknown" },
+      },
+    ],
+  };
+}
+
+function attributedSearchResult(): SearchSessionsResult {
+  const listed = attributedListResult().sessions[0]!;
+  return {
+    hits: [
+      {
+        session: listed,
+        root: listed.root,
+        entry: { ordinal: 0, kind: "message", actor: "human" },
+        matchedTerms: ["first", "second"],
+        snippet: {
+          segmentOrdinal: 0,
+          origin: "human",
+          originConfidence: "high",
+          contentHash: { scheme: "sha256-utf8-v1", digest: "d".repeat(64) },
+          text: "first second",
+          truncated: false,
+          additionalMatchingSegments: 0,
+        },
+        context: [],
+        linkedContextTruncated: false,
+      },
+    ],
+    support: {
+      occurrences: 1,
+      uniqueContent: 1,
+      uniqueKnownRoots: 0,
+      unknownLineageSessions: 1,
+    },
   };
 }
 

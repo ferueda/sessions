@@ -50,6 +50,8 @@ describe("searchSessions", () => {
         source: "synthetic",
         instance: "Profile-A",
         workspace: "/Exact/Workspace",
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T11:00:00.000Z",
         entryKind: "Tool-Call",
         toolName: "ReadFile",
       },
@@ -60,10 +62,13 @@ describe("searchSessions", () => {
     const reader = await lifecycle.openReader.mock.results[0]!.value;
     expect(reader.query.search).toHaveBeenCalledWith({
       text: "quoted Terms",
+      termMode: "all",
       filter: {
         source: "synthetic",
         instance: "Profile-A",
         workspace: "/Exact/Workspace",
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T11:00:00.000Z",
         entryKind: "Tool-Call",
         toolName: "ReadFile",
       },
@@ -76,7 +81,9 @@ describe("searchSessions", () => {
   test("selects the session title without changing search evidence", async () => {
     const hit = {
       session: { ...summary(), title: "😀".repeat(2_049), workspace: "/private/workspace" },
+      root: { kind: "known" as const, root: summary().identity },
       entry: { ordinal: 3, kind: "message", actor: "model" as const },
+      matchedTerms: ["needle"],
       snippet: {
         segmentOrdinal: 1,
         origin: "model" as const,
@@ -108,9 +115,29 @@ describe("searchSessions", () => {
       emittedUtf8Bytes: 8_192,
     });
     expect(result.hits[0]!.session).not.toHaveProperty("workspace");
+    expect(result.hits[0]?.root).toEqual({ kind: "known", root: summary().identity });
+    expect(result.hits[0]?.matchedTerms).toEqual(["needle"]);
     expect(result.hits[0]!.snippet).toEqual(hit.snippet);
     expect(result.hits[0]!.snippet).not.toBe(hit.snippet);
     expect(Object.isFrozen(result.hits[0]!.snippet.contentHash)).toBe(true);
+    expect(Object.isFrozen(result.hits[0]?.root)).toBe(true);
+    expect(Object.isFrozen(result.hits[0]?.matchedTerms)).toBe(true);
+    expect(result.hits[0]?.matchedTerms).not.toBe(hit.matchedTerms);
+  });
+
+  test("forwards explicit any-term mode", async () => {
+    const lifecycle = lifecycleWith(emptyPage());
+
+    await searchSessions({ paths, lifecycle, text: "alpha beta", termMode: "any" });
+
+    const reader = await lifecycle.openReader.mock.results[0]!.value;
+    expect(reader.query.search).toHaveBeenCalledWith({
+      text: "alpha beta",
+      termMode: "any",
+      filter: {},
+      limit: 20,
+      context: 0,
+    });
   });
 
   test("rejects invalid input before inspecting the library", async () => {

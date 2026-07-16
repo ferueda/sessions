@@ -9,10 +9,11 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > search with evidence context and support counts, show, scoped forget, all-data
 > clear, explicit orphan-content diagnosis/repair, explicit SQLite page
 > reclamation, source diagnostics, versioned JSON/JSONL query output, and
-> portable retained-session export. Textless entry inventory is also current.
-> Literal-any search, activity bounds, list/search root attribution, the
-> packaged Agent Skill, Cursor, and npm release remain planned; Markdown
-> presentation is deferred beyond V1.
+> portable retained-session export. Agent-oriented retrieval now includes
+> textless entry inventory, literal all/any search, activity bounds, per-hit
+> matched terms, and query-derived root attribution. The packaged Agent Skill,
+> Cursor, and npm release remain planned; Markdown presentation is deferred
+> beyond V1.
 
 ## Why Sessions
 
@@ -44,8 +45,10 @@ node dist/bin/sessions.js index --source codex
 node dist/bin/sessions.js list
 node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
 node dist/bin/sessions.js search 'query engine' --context 2
+node dist/bin/sessions.js search 'query engine' --match any --format jsonl
 node dist/bin/sessions.js search -- '-term'
-node dist/bin/sessions.js entries --actor human --select last --format jsonl
+node dist/bin/sessions.js entries --activity-after '2026-07-01T00:00:00.000Z' \
+  --actor human --select last --format jsonl
 node dist/bin/sessions.js show '<canonical-id>'
 node dist/bin/sessions.js show '<canonical-id>' --from-entry 120 --to-entry 139
 node dist/bin/sessions.js export '<canonical-id>' --format jsonl
@@ -58,7 +61,8 @@ sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
-sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
+sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
+                       [--cursor TOKEN]
                        [--format human|json|jsonl]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
                            [--format human|json|jsonl]
@@ -93,15 +97,23 @@ Show defaults to the first 50 entries or 3 entries of context around `--entry`
 required; invalid, reversed, conflicting, or out-of-document ranges fail rather
 than being clamped. Format does not change query ordering or cursor identity.
 
-Search treats whitespace-delimited input as literal FTS terms combined with AND,
-not as public FTS syntax. Use the `--` delimiter before search text that begins
-with a dash; unknown flags remain usage errors. Each hit identifies one canonical entry, renders a
-bounded snippet, can include up to 10 adjacent entries per side, and automatically
-includes directly linked observed tool-call/result evidence. Query-wide support
+Search treats whitespace-delimited input as literal terms, not public FTS syntax.
+`--match all` is the default; `--match any` returns hits for any term and reports
+the exact matched terms on each hit. A query accepts at most 32 terms and 4 KiB
+of canonical UTF-8 text. Use the `--` delimiter before search text that begins
+with a dash; unknown flags remain usage errors. Each hit identifies one canonical
+entry, renders a bounded snippet, can include up to 10 adjacent entries per side,
+and automatically includes directly linked observed tool-call/result evidence.
+Query-wide support
 reports matching segment occurrences, distinct canonical content, distinct known
 lineage roots, and matching sessions whose root remains unknown. Shared filters,
 exclusive time bounds, ranking, cursor invalidation, and exact output rules are in
 the [CLI contract](docs/reference/cli-contract.md).
+
+List, search, and entries return a query-derived known retained root or
+`unknown`. Shared activity bounds use `updatedAt`, falling back to `createdAt`;
+sessions missing both timestamps do not match. Root attribution is not added to
+show, export, canonical documents, or document digests.
 
 `entries` inventories retained entry structure without requiring search text.
 It can return all matching entries or the first/last canonical ordinal per
@@ -164,8 +176,8 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M7 JSON/JSONL delivery is complete. M8 continues provider-neutral analysis retrieval,
-M9 packages the Agent Skill, and M10 proves Cursor parity. Markdown remains
+M8 provider-neutral analysis retrieval is complete. M9 packages the Agent Skill,
+and M10 proves Cursor parity. Markdown remains
 deferred beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.

@@ -207,6 +207,88 @@ export function runSessionQueryContract(
     }
   });
 
+  test("matches any literal term and reports the qualifying terms per entry", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    const filter = { session: corpus.literalAny.identity } as const;
+    try {
+      const defaultAll = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "unionalpha unionbeta",
+          filter,
+          limit: 20,
+          context: 0,
+        }),
+      );
+      const explicitAll = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "unionalpha unionbeta",
+          termMode: "all",
+          filter,
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(explicitAll).toEqual(defaultAll);
+      expect(defaultAll.hits.map(({ entry }) => entry.ordinal)).toEqual([1]);
+      expect(defaultAll.hits[0]?.matchedTerms).toEqual(["unionalpha", "unionbeta"]);
+
+      const any = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "unionalpha unionbeta",
+          termMode: "any",
+          filter,
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(
+        new Map(any.hits.map(({ entry, matchedTerms }) => [entry.ordinal, matchedTerms])),
+      ).toEqual(
+        new Map([
+          [0, ["unionalpha", "unionbeta"]],
+          [1, ["unionalpha", "unionbeta"]],
+          [2, ["unionalpha", "unionbeta"]],
+        ]),
+      );
+      expect(any.support).toEqual({
+        occurrences: 5,
+        uniqueContent: 3,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 0,
+      });
+
+      const humanOrigin = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "unionalpha unionbeta",
+          termMode: "any",
+          filter: { ...filter, origin: "human" },
+          limit: 20,
+          context: 0,
+        }),
+      );
+      const byOrdinal = new Map(
+        humanOrigin.hits.map(({ entry, matchedTerms }) => [entry.ordinal, matchedTerms]),
+      );
+      expect(byOrdinal.get(2)).toEqual(["unionalpha"]);
+      expect(humanOrigin.support.occurrences).toBe(4);
+
+      const duplicate = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "unionalpha unionalpha",
+          termMode: "any",
+          filter,
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(duplicate.hits.every(({ matchedTerms }) => matchedTerms.length === 1)).toBe(true);
+      expect(duplicate.support.occurrences).toBe(3);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("excludes missing entry timestamps from bounds and uses effective observation time", async () => {
     const fixture = await createFixture();
     const corpus = sessionQueryContractCorpus();
@@ -336,6 +418,60 @@ export function runSessionQueryContract(
       expect(result.hits.map(({ session }) => key(session.identity))).toEqual(
         corpus.ranking.activityOrder.map(({ identity }) => key(identity)),
       );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("filters list, search, and entries by effective session activity", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    const [newest, fallback, older] = corpus.ranking.activityOrder;
+    if (newest === undefined || fallback === undefined || older === undefined) {
+      throw new Error("Activity corpus is incomplete");
+    }
+    const filter = {
+      source: newest.identity.source.kind,
+      instance: newest.identity.source.instanceId,
+      activityAfter: "2026-07-14T14:30:00.000Z",
+      activityBefore: "2026-07-14T16:00:00.000Z",
+    } as const;
+    try {
+      const listed = await fixture.query.list(createSessionListQuery({ filter, limit: 20 }));
+      const searched = await fixture.query.search(
+        createSessionSearchQuery({ text: "activityrank", filter, limit: 20, context: 0 }),
+      );
+      const entries = await fixture.query.entries(
+        createSessionEntryQuery({ filter, selection: "first", limit: 20 }),
+      );
+
+      expect(listed.sessions.map(({ identity }) => key(identity))).toEqual([
+        key(fallback.identity),
+      ]);
+      expect(searched.hits.map(({ session }) => key(session.identity))).toEqual([
+        key(fallback.identity),
+      ]);
+      expect(searched.support).toEqual({
+        occurrences: 1,
+        uniqueContent: 1,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 0,
+      });
+      expect(entries.entries.map(({ session }) => key(session.identity))).toEqual([
+        key(fallback.identity),
+      ]);
+
+      const updatedWins = await fixture.query.list(
+        createSessionListQuery({
+          filter: {
+            session: older.identity,
+            activityAfter: "2026-07-14T14:00:00.000Z",
+            activityBefore: "2026-07-14T14:20:00.000Z",
+          },
+          limit: 20,
+        }),
+      );
+      expect(updatedWins.sessions).toEqual([]);
     } finally {
       await fixture.close();
     }
@@ -605,7 +741,7 @@ export function runSessionQueryContract(
     }
   });
 
-  test("returns known and unknown retained roots without inferring missing ancestry", async () => {
+  test("returns the same known and unknown roots across list, search, and entries", async () => {
     const fixture = await createFixture();
     const inventory = sessionQueryContractCorpus().inventory;
     try {
@@ -615,10 +751,36 @@ export function runSessionQueryContract(
         limit: 20,
       });
       const result = await fixture.query.entries(query);
+      const listed = await fixture.query.list(
+        createSessionListQuery({
+          filter: { source: inventory.root.identity.source.kind },
+          limit: 20,
+        }),
+      );
+      const searched = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "inventory lineage",
+          filter: { source: inventory.root.identity.source.kind },
+          limit: 20,
+          context: 0,
+        }),
+      );
       await expect(fixture.query.entries(query)).resolves.toEqual(result);
       const roots = new Map(
         result.entries.map(({ session, root }) => [session.identity.nativeId, root]),
       );
+      expect(
+        new Map(listed.sessions.map(({ identity, root }) => [identity.nativeId, root])),
+      ).toEqual(roots);
+      expect(
+        new Map(searched.hits.map(({ session, root }) => [session.identity.nativeId, root])),
+      ).toEqual(roots);
+      expect(searched.support).toEqual({
+        occurrences: inventory.documents.length,
+        uniqueContent: inventory.documents.length,
+        uniqueKnownRoots: 2,
+        unknownLineageSessions: 4,
+      });
 
       expect(roots.get(inventory.root.identity.nativeId)).toEqual({
         kind: "known",
@@ -702,6 +864,18 @@ export function runSessionQueryContract(
       expect(listed).toHaveLength(corpus.documents.length);
       expect(new Set(listed).size).toBe(listed.length);
 
+      const firstList = await fixture.query.list(createSessionListQuery({ limit: 2 }));
+      if (firstList.nextCursor === undefined) throw new Error("Expected list continuation");
+      await expect(
+        fixture.query.list(
+          createSessionListQuery({
+            filter: { activityAfter: "2026-07-14T00:00:00.000Z" },
+            limit: 2,
+            cursor: firstList.nextCursor,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(SessionQueryUsageError);
+
       const first = await fixture.query.search(
         createSessionSearchQuery({
           text: "pageable corpus evidence",
@@ -722,6 +896,17 @@ export function runSessionQueryContract(
       expect(new Set(searched).size).toBe(searched.length);
 
       if (first.nextCursor === undefined) throw new Error("Expected search continuation");
+      await expect(
+        fixture.query.search(
+          createSessionSearchQuery({
+            text: "pageable corpus evidence",
+            termMode: "any",
+            limit: DEFAULT_SEARCH_LIMIT,
+            context: 0,
+            cursor: first.nextCursor,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(SessionQueryUsageError);
       const recreated = await fixture.recreateQuery();
       await expect(
         recreated.search(

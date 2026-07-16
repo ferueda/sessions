@@ -6,6 +6,8 @@ import {
   createSessionListQuery,
   createSessionQueryCursor,
   createSessionSearchQuery,
+  MAX_SESSION_SEARCH_TERMS,
+  MAX_SESSION_SEARCH_TEXT_UTF8_BYTES,
   sessionQueryFingerprintMaterial,
 } from "../../src/domain/session-query.ts";
 
@@ -20,6 +22,8 @@ describe("session query values", () => {
       instance: "Profile-A",
       nativeId: "Provider-Session-A",
       workspace: "/Users/Example/Workspace",
+      activityAfter: "2026-07-14T10:00:00.000Z",
+      activityBefore: "2026-07-14T11:00:00.000Z",
       session: identity,
     };
 
@@ -31,6 +35,8 @@ describe("session query values", () => {
       instance: "Profile-A",
       nativeId: "Provider-Session-A",
       workspace: "/Users/Example/Workspace",
+      activityAfter: "2026-07-14T10:00:00.000Z",
+      activityBefore: "2026-07-14T11:00:00.000Z",
       session: {
         source: { kind: "synthetic", instanceId: "Profile-A" },
         nativeId: "Session-A",
@@ -70,12 +76,27 @@ describe("session query values", () => {
       capturedAfter: "2026-07-14T10:00:00.000Z",
       capturedBefore: "2026-07-14T11:00:00.000Z",
     });
+    expect(
+      createSessionFilter({
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T11:00:00.000Z",
+      }),
+    ).toEqual({
+      activityAfter: "2026-07-14T10:00:00.000Z",
+      activityBefore: "2026-07-14T11:00:00.000Z",
+    });
     expect(() =>
       createSessionFilter({
         observedAfter: "2026-07-14T10:00:00.000Z",
         observedBefore: "2026-07-14T10:00:00.000Z",
       }),
     ).toThrow("Observation bounds must be increasing and exclusive");
+    expect(() =>
+      createSessionFilter({
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T10:00:00.000Z",
+      }),
+    ).toThrow("Activity bounds must be increasing and exclusive");
     expect(() => createSessionFilter({ capturedAfter: "2026-02-30T10:00:00.000Z" })).toThrow(
       "Captured-after must be a canonical UTC timestamp",
     );
@@ -89,8 +110,42 @@ describe("session query values", () => {
     });
 
     expect(query.text).toBe('alpha beta "OR" /path/to/file.ts');
+    expect(query.termMode).toBe("all");
     expect(Object.isFrozen(query)).toBe(true);
     expect(Object.isFrozen(query.filter)).toBe(true);
+  });
+
+  test("bounds canonical search terms and UTF-8 bytes while admitting any mode", () => {
+    const terms = Array.from({ length: MAX_SESSION_SEARCH_TERMS }, (_, index) => `term-${index}`);
+    const exactBytes = "é".repeat(MAX_SESSION_SEARCH_TEXT_UTF8_BYTES / 2);
+
+    expect(
+      createSessionSearchQuery({
+        text: terms.join("\u2003"),
+        termMode: "any",
+        limit: 20,
+        context: 0,
+      }),
+    ).toMatchObject({ text: terms.join(" "), termMode: "any" });
+    expect(createSessionSearchQuery({ text: exactBytes, limit: 20, context: 0 }).text).toBe(
+      exactBytes,
+    );
+    expect(() =>
+      createSessionSearchQuery({ text: [...terms, "overflow"].join(" "), limit: 20, context: 0 }),
+    ).toThrow(`Search text must contain at most ${String(MAX_SESSION_SEARCH_TERMS)} terms`);
+    expect(() =>
+      createSessionSearchQuery({ text: `${exactBytes}é`, limit: 20, context: 0 }),
+    ).toThrow(
+      `Search text must be at most ${String(MAX_SESSION_SEARCH_TEXT_UTF8_BYTES)} UTF-8 bytes`,
+    );
+    expect(() =>
+      createSessionSearchQuery({
+        text: "needle",
+        termMode: "some" as "all",
+        limit: 20,
+        context: 0,
+      }),
+    ).toThrow("Search term mode is invalid");
   });
 
   test.each([
@@ -128,6 +183,13 @@ describe("session query values", () => {
       filter: { source: "synthetic", nativeId: "Provider-Session-A" },
       limit: 50,
     });
+    const activityScoped = createSessionListQuery({
+      filter: {
+        source: "synthetic",
+        activityAfter: "2026-07-14T10:00:00.000Z",
+      },
+      limit: 50,
+    });
 
     expect(sessionQueryFingerprintMaterial(first)).toBe(sessionQueryFingerprintMaterial(second));
     expect(sessionQueryFingerprintMaterial(first)).not.toBe(
@@ -135,6 +197,43 @@ describe("session query values", () => {
     );
     expect(sessionQueryFingerprintMaterial(first)).not.toBe(
       sessionQueryFingerprintMaterial(nativeScoped),
+    );
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(
+      sessionQueryFingerprintMaterial(activityScoped),
+    );
+  });
+
+  test("binds search cursors to term mode and shared activity bounds", () => {
+    const first = createSessionSearchQuery({
+      text: "alpha beta",
+      limit: 20,
+      context: 0,
+    });
+    const explicitAll = createSessionSearchQuery({
+      text: "alpha beta",
+      termMode: "all",
+      limit: 20,
+      context: 0,
+    });
+    const any = createSessionSearchQuery({
+      text: "alpha beta",
+      termMode: "any",
+      limit: 20,
+      context: 0,
+    });
+    const activityScoped = createSessionSearchQuery({
+      text: "alpha beta",
+      filter: { activityBefore: "2026-07-14T11:00:00.000Z" },
+      limit: 20,
+      context: 0,
+    });
+
+    expect(sessionQueryFingerprintMaterial(first)).toBe(
+      sessionQueryFingerprintMaterial(explicitAll),
+    );
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(sessionQueryFingerprintMaterial(any));
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(
+      sessionQueryFingerprintMaterial(activityScoped),
     );
   });
 

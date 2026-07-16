@@ -21,6 +21,9 @@ export const EFFECTIVE_SOURCE_OBSERVED_AT_SQL = `CASE
   ELSE NULL
 END`;
 
+export const EFFECTIVE_SESSION_ACTIVITY_SQL =
+  "COALESCE(canonical.updated_at, canonical.created_at)";
+
 export function sessionWhere(filter: SessionFilter): SqliteQueryWhere {
   const conditions: string[] = [];
   const parameters: string[] = [];
@@ -102,6 +105,20 @@ function appendCommonFilters(
   appendExact(conditions, parameters, "tracking.native_id", filter.nativeId);
   appendExact(conditions, parameters, EFFECTIVE_SOURCE_STATE_SQL, filter.sourceState);
   appendExact(conditions, parameters, "canonical.workspace", filter.workspace);
+  appendExclusiveBound(
+    conditions,
+    parameters,
+    EFFECTIVE_SESSION_ACTIVITY_SQL,
+    ">",
+    filter.activityAfter,
+  );
+  appendExclusiveBound(
+    conditions,
+    parameters,
+    EFFECTIVE_SESSION_ACTIVITY_SQL,
+    "<",
+    filter.activityBefore,
+  );
   appendExclusiveBound(conditions, parameters, "tracking.captured_at", ">", filter.capturedAfter);
   appendExclusiveBound(conditions, parameters, "tracking.captured_at", "<", filter.capturedBefore);
   appendExclusiveBound(

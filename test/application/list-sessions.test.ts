@@ -32,8 +32,12 @@ describe("listSessions", () => {
   test("forwards one validated query and selects safe immutable summaries", async () => {
     const page = {
       sessions: [
-        { ...summary("z"), title: `${"é".repeat(4_096)}tail`, workspace: "/private/workspace" },
-        summary("a"),
+        {
+          ...listItem("z"),
+          title: `${"é".repeat(4_096)}tail`,
+          workspace: "/private/workspace",
+        },
+        { ...listItem("a"), root: { kind: "unknown" as const } },
       ],
       nextCursor: createSessionQueryCursor("next-page"),
     } satisfies SessionListPage;
@@ -42,7 +46,13 @@ describe("listSessions", () => {
     const result = await listSessions({
       paths,
       lifecycle,
-      filter: { source: "synthetic", instance: "Profile-One", workspace: "/Workspace" },
+      filter: {
+        source: "synthetic",
+        instance: "Profile-One",
+        workspace: "/Workspace",
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T11:00:00.000Z",
+      },
       limit: 2,
     });
 
@@ -54,12 +64,28 @@ describe("listSessions", () => {
       emittedUtf8Bytes: 8_192,
     });
     expect(result.sessions[0]).not.toHaveProperty("workspace");
+    expect(result.sessions[0]?.root).toEqual({
+      kind: "known",
+      root: summary("root").identity,
+    });
+    expect(result.sessions[1]?.root).toEqual({ kind: "unknown" });
     expect(Object.isFrozen(result.sessions[0])).toBe(true);
     expect(Object.isFrozen(result.sessions[0]!.identity.source)).toBe(true);
+    expect(Object.isFrozen(result.sessions[0]?.root)).toBe(true);
+    expect(
+      result.sessions[0]?.root.kind === "known" &&
+        Object.isFrozen(result.sessions[0].root.root.source),
+    ).toBe(true);
     expect(result.nextCursor).toBe("next-page");
     const reader = await lifecycle.openReader.mock.results[0]!.value;
     expect(reader.query.list).toHaveBeenCalledWith({
-      filter: { source: "synthetic", instance: "Profile-One", workspace: "/Workspace" },
+      filter: {
+        source: "synthetic",
+        instance: "Profile-One",
+        workspace: "/Workspace",
+        activityAfter: "2026-07-14T10:00:00.000Z",
+        activityBefore: "2026-07-14T11:00:00.000Z",
+      },
       limit: 2,
     });
     expect(reader.close).toHaveBeenCalledOnce();
@@ -151,5 +177,12 @@ function summary(nativeId: string): SessionQuerySummary {
       scheme: "sha256-sessions-document-jcs-v1",
       digest: "0".repeat(64),
     },
+  };
+}
+
+function listItem(nativeId: string): SessionListPage["sessions"][number] {
+  return {
+    ...summary(nativeId),
+    root: { kind: "known", root: summary("root").identity },
   };
 }

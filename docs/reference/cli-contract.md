@@ -21,14 +21,17 @@ sessions index [--source codex] [--format human|json]
 sessions list [--source SOURCE] [--instance INSTANCE]
               [--native-id NATIVE-ID]
               [--source-state present|missing|unknown] [--workspace WORKSPACE]
+              [--activity-after TIME] [--activity-before TIME]
               [--captured-after TIME] [--captured-before TIME]
               [--observed-after TIME] [--observed-before TIME]
               [--session CANONICAL-ID] [--limit N] [--cursor TOKEN]
               [--format human|json|jsonl]
 sessions search <text> [--source SOURCE] [--instance INSTANCE]
+                       [--match all|any]
                        [--native-id NATIVE-ID]
                        [--source-state present|missing|unknown]
                        [--workspace WORKSPACE]
+                       [--activity-after TIME] [--activity-before TIME]
                        [--captured-after TIME] [--captured-before TIME]
                        [--observed-after TIME] [--observed-before TIME]
                        [--session CANONICAL-ID]
@@ -41,6 +44,7 @@ sessions entries [--source SOURCE] [--instance INSTANCE]
                  [--native-id NATIVE-ID]
                  [--source-state present|missing|unknown]
                  [--workspace WORKSPACE]
+                 [--activity-after TIME] [--activity-before TIME]
                  [--captured-after TIME] [--captured-before TIME]
                  [--observed-after TIME] [--observed-before TIME]
                  [--session CANONICAL-ID]
@@ -82,10 +86,13 @@ collation. When another page exists, output ends with the copyable
 `Next cursor: <token>` line. A fresh library renders exactly
 `No sessions found.` plus a newline, exits `0`, and does not create state or
 resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
+Every non-empty result includes one query-derived known retained root or
+`unknown`.
 
-`search` requires non-blank text, defaults to 20 primary hits, and accepts 1
-through 200. `--context` defaults to 0 and accepts 0 through 10 adjacent entries
-on each side. A no-match result renders exactly `No matches found.` plus a
+`search` requires non-blank text, defaults to `--match all` and 20 primary hits,
+and accepts 1 through 200. `--context` defaults to 0 and accepts 0 through 10
+adjacent entries on each side. A no-match result renders exactly
+`No matches found.` plus a
 newline and exits `0`. Search, list, entries, and show read one immutable retained-library
 snapshot per operation and never resolve or reopen Codex. JSON emits an empty
 page bundle; JSONL emits one page record.
@@ -221,8 +228,6 @@ then index again. `data clear` does not claim that incompatible database.
 sessions index --source cursor
 ```
 
-M8 also adds literal-any search, list/search root attribution, and activity
-bounds. Textless entry inventory and bounded show/export ranges are current.
 Markdown is deferred beyond V1
 and `--format md` is not accepted today. Planned routes are added to generated
 help only when implemented and contract-tested.
@@ -532,6 +537,7 @@ use their case-sensitive canonical representation:
   the match.
 - `--source-state` accepts `present`, `missing`, or `unknown`.
 - `--workspace` selects the exact retained workspace value.
+- `--activity-after` / `--activity-before` bound effective provider activity.
 - `--captured-after` / `--captured-before` bound successful capture time.
 - `--observed-after` / `--observed-before` bound effective source-observation
   time.
@@ -548,6 +554,10 @@ Times must be canonical UTC with milliseconds, such as
 `2026-07-14T12:00:00.000Z`. Every `after`/`before` bound is exclusive; equal or
 inverted pairs are invalid usage. A missing timestamp does not satisfy either
 bound.
+
+Effective provider activity is `updatedAt`, falling back to `createdAt` only
+when `updatedAt` is absent. A session missing both does not match an activity
+bound. Capture, source-observation, and entry time are never substituted.
 
 Effective source state is `unknown` while the source instance's latest coverage
 is unknown; otherwise it is that retained session's `present`/`missing` tracking
@@ -601,10 +611,13 @@ Human output prints the escaped session/entry heading, root, preview or
 
 ### Search text, filters, and hits
 
-Search splits well-formed input on Unicode whitespace, quotes every non-empty
-term as literal FTS data, and joins terms with logical AND. Quotes, FTS keywords,
-paths, opaque IDs, operators, and punctuation are never interpreted as public
-FTS syntax. CLI argument parsing happens first: use `sessions search -- "-term"`
+Search splits well-formed input on Unicode whitespace, joins it with single
+spaces, and admits at most 32 terms and 4,096 UTF-8 bytes of that canonical text.
+It quotes every term as literal FTS data. `--match all` is the default and joins
+terms with logical AND; `--match any` joins them with logical OR. Quotes, FTS
+keywords, paths, opaque IDs, operators, and punctuation are never interpreted as
+public FTS syntax. CLI argument parsing happens first: use
+`sessions search -- "-term"`
 when search text begins with a dash. Without the delimiter, a leading-dash token
 is an unknown option and invalid usage. Blank input is invalid usage. Non-blank
 input that yields no tokens under the fixed FTS5 `unicode61` tokenizer succeeds with no matches.
@@ -613,6 +626,12 @@ case-sensitive exact filters below.
 
 Filters constrain the primary matching occurrence/entry; returned context need
 not satisfy them. Origin applies to the matching text occurrence.
+
+Every hit reports `matchedTerms` in first-query order, with exact unique query
+terms that matched an eligible text occurrence in that entry. An origin filter
+also constrains this evidence. Matched terms are derived from candidate-local
+term checks, never parsed from the snippet. In `all` mode they are the query's
+unique terms.
 
 Qualifying text occurrences group by canonical session identity and entry
 ordinal, yielding one primary hit per entry. The best-ranked matching segment,
@@ -655,12 +674,17 @@ paths that diverge to different roots stays unknown. Paths that converge on one
 root remain known. Equal text/hash and inverse-relation inference never create
 lineage, and one support unit is never substituted for another.
 
+List results, search hits, and entry inventory records each expose that same
+query-derived known root or `unknown`. Attribution can point to a retained root
+outside the current filters. It does not change filtering, ranking, ordering,
+canonical documents, document digests, show, or export.
+
 ### Continuation cursors
 
 List, search, and entries expose an opaque next cursor only when more primary rows exist.
 The token binds its command, the complete normalized query/order contract, a
 random library instance identity, the current writer generation, and the next
-offset. Changing query text, filters, bounds, limit, or context makes the cursor
+offset. Changing query text, term mode, filters, bounds, limit, or context makes the cursor
 query-mismatched. Malformed, wrong-command, and query-mismatched cursors are
 invalid usage (exit `2`). A cursor from a recreated library or any later admitted
 writer generation—including a no-op index writer—is stale (exit `1`). Cursors

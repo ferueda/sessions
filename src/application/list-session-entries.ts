@@ -3,6 +3,7 @@ import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
 import { selectSessionSummary, type SelectedSessionSummary } from "./session-presentation.ts";
 import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
+import { selectSessionRoot } from "./session-root-presentation.ts";
 import {
   createSessionEntryQuery,
   MAX_ENTRY_LIST_LIMIT,
@@ -66,7 +67,7 @@ function selectEntryInventoryItem(
   return Object.freeze({
     session: selectSessionSummary(item.session),
     entry: copyEntry(item.entry),
-    root: copyRoot(item.root),
+    root: selectSessionRoot(item.root),
     content: Object.freeze({
       textSegmentCount: item.content.textSegmentCount,
       omittedSegmentCount: item.content.omittedSegmentCount,
@@ -99,17 +100,6 @@ function copyEntry(entry: SessionSearchEntry): SessionSearchEntry {
     ...(entry.toolCallId === undefined ? {} : { toolCallId: entry.toolCallId }),
     ...(entry.toolName === undefined ? {} : { toolName: entry.toolName }),
     ...(entry.toolNamespace === undefined ? {} : { toolNamespace: entry.toolNamespace }),
-  });
-}
-
-function copyRoot(root: SessionRootResolution): SessionRootResolution {
-  if (root.kind === "unknown") return Object.freeze({ kind: "unknown" });
-  return Object.freeze({
-    kind: "known",
-    root: Object.freeze({
-      source: Object.freeze({ ...root.root.source }),
-      nativeId: root.root.nativeId,
-    }),
   });
 }
 

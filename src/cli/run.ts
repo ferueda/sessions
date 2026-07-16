@@ -13,7 +13,12 @@ export async function runCli(argv: readonly string[], options: CliOptions): Prom
     return 0;
   } catch (error) {
     if (error instanceof OperationalExit) return 1;
-    if (error instanceof CommanderError) return error.exitCode === 0 ? 0 : 2;
+    if (error instanceof CommanderError) {
+      if (error.code === "sessions.invalid-argument") {
+        options.output.writeErr(`${error.message}\n`);
+      }
+      return error.exitCode === 0 ? 0 : 2;
+    }
     if (error instanceof SessionQueryUsageError) {
       options.output.writeErr(`sessions: ${error.message}\n`);
       return 2;

@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
 import type { ContentHash } from "./content-hash.ts";
 import type { SessionDocumentDigest } from "./public-session-document.ts";
@@ -11,6 +13,8 @@ export const MAX_ENTRY_LIST_LIMIT = MAX_SESSION_QUERY_LIMIT;
 export const MAX_SESSION_SEARCH_CONTEXT = 10;
 export const MAX_SESSION_SEARCH_BODY_BYTES = 512;
 export const MAX_SESSION_SEARCH_LINKED_CONTEXT = 20;
+export const MAX_SESSION_SEARCH_TERMS = 32;
+export const MAX_SESSION_SEARCH_TEXT_UTF8_BYTES = 4 * 1_024;
 export const MAX_SESSION_QUERY_CURSOR_LENGTH = 2_048;
 
 declare const sessionQueryCursorBrand: unique symbol;
@@ -23,6 +27,7 @@ export type SessionQueryCursor = string & {
 };
 
 export type SessionSourceState = "present" | "missing" | "unknown";
+export type SessionSearchTermMode = "all" | "any";
 
 export interface SessionFilterInput {
   readonly source?: string;
@@ -30,6 +35,8 @@ export interface SessionFilterInput {
   readonly nativeId?: string;
   readonly sourceState?: SessionSourceState;
   readonly workspace?: string;
+  readonly activityAfter?: string;
+  readonly activityBefore?: string;
   readonly capturedAfter?: string;
   readonly capturedBefore?: string;
   readonly observedAfter?: string;
@@ -74,6 +81,7 @@ export interface SessionListQuery {
 
 export interface SessionSearchQueryInput {
   readonly text: string;
+  readonly termMode?: SessionSearchTermMode;
   readonly filter?: SessionSearchFilterInput;
   readonly limit: number;
   readonly context: number;
@@ -83,6 +91,7 @@ export interface SessionSearchQueryInput {
 export interface SessionSearchQuery {
   readonly [sessionSearchQueryBrand]: "SessionSearchQuery";
   readonly text: string;
+  readonly termMode: SessionSearchTermMode;
   readonly filter: SessionSearchFilter;
   readonly limit: number;
   readonly context: number;
@@ -118,8 +127,12 @@ export interface SessionQuerySummary {
   readonly documentDigest: SessionDocumentDigest;
 }
 
+export interface SessionListItem extends SessionQuerySummary {
+  readonly root: SessionRootResolution;
+}
+
 export interface SessionListPage {
-  readonly sessions: readonly SessionQuerySummary[];
+  readonly sessions: readonly SessionListItem[];
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -153,7 +166,9 @@ export interface SessionSearchContextEntry extends SessionSearchEntry {
 
 export interface SessionSearchHit {
   readonly session: SessionQuerySummary;
+  readonly root: SessionRootResolution;
   readonly entry: SessionSearchEntry;
+  readonly matchedTerms: readonly string[];
   readonly snippet: SessionSearchSnippet;
   readonly context: readonly SessionSearchContextEntry[];
   readonly linkedContextTruncated: boolean;
@@ -213,6 +228,7 @@ const ORIGINS = new Set<ContentOrigin>([
   "unknown",
 ]);
 const SOURCE_STATES = new Set<SessionSourceState>(["present", "missing", "unknown"]);
+const SEARCH_TERM_MODES = new Set<SessionSearchTermMode>(["all", "any"]);
 const ENTRY_SELECTIONS = new Set<SessionEntrySelection>(["all", "first", "last"]);
 
 export function createSessionQueryCursor(value: unknown): SessionQueryCursor {
@@ -253,13 +269,15 @@ export function createSessionListQuery(input: SessionListQueryInput): SessionLis
 }
 
 export function createSessionSearchQuery(input: SessionSearchQueryInput): SessionSearchQuery {
-  const text = canonicalSearchText(input.text);
+  const text = canonicalizeSessionSearchText(input.text);
+  const termMode = optionalLiteral(input.termMode, SEARCH_TERM_MODES, "Search term mode") ?? "all";
   const filter = createSessionSearchFilter(input.filter);
   const limit = boundedInteger(input.limit, 1, MAX_SESSION_QUERY_LIMIT, "Search limit");
   const context = boundedInteger(input.context, 0, MAX_SESSION_SEARCH_CONTEXT, "Search context");
   const cursor = input.cursor === undefined ? undefined : createSessionQueryCursor(input.cursor);
   return Object.freeze({
     text,
+    termMode,
     filter,
     limit,
     context,
@@ -290,6 +308,8 @@ export function sessionQueryFingerprintMaterial(
     filter.instance ?? null,
     filter.sourceState ?? null,
     filter.workspace ?? null,
+    filter.activityAfter ?? null,
+    filter.activityBefore ?? null,
     filter.capturedAfter ?? null,
     filter.capturedBefore ?? null,
     filter.observedAfter ?? null,
@@ -322,6 +342,7 @@ export function sessionQueryFingerprintMaterial(
     "sessions-query-v1",
     "search",
     query.text,
+    query.termMode,
     query.limit,
     query.context,
     ...common,
@@ -349,6 +370,9 @@ function createFilter(
   const nativeId = optionalOpaque(input.nativeId, "Native ID");
   const sourceState = optionalLiteral(input.sourceState, SOURCE_STATES, "Source state");
   const workspace = optionalExact(input.workspace, "Workspace");
+  const activityAfter = optionalTimestamp(input.activityAfter, "Activity-after");
+  const activityBefore = optionalTimestamp(input.activityBefore, "Activity-before");
+  validateBounds(activityAfter, activityBefore, "Activity");
   const capturedAfter = optionalTimestamp(input.capturedAfter, "Captured-after");
   const capturedBefore = optionalTimestamp(input.capturedBefore, "Captured-before");
   validateBounds(capturedAfter, capturedBefore, "Capture");
@@ -363,6 +387,8 @@ function createFilter(
     ...(nativeId === undefined ? {} : { nativeId }),
     ...(sourceState === undefined ? {} : { sourceState }),
     ...(workspace === undefined ? {} : { workspace }),
+    ...(activityAfter === undefined ? {} : { activityAfter }),
+    ...(activityBefore === undefined ? {} : { activityBefore }),
     ...(capturedAfter === undefined ? {} : { capturedAfter }),
     ...(capturedBefore === undefined ? {} : { capturedBefore }),
     ...(observedAfter === undefined ? {} : { observedAfter }),
@@ -456,11 +482,22 @@ function boundedInteger(value: number, minimum: number, maximum: number, label: 
   return value;
 }
 
-function canonicalSearchText(value: string): string {
+export function canonicalizeSessionSearchText(value: string): string {
   if (typeof value !== "string" || !value.isWellFormed()) {
     throw new TypeError("Search text must be a well-formed string");
   }
   const terms = splitUnicodeWhitespaceTerms(value);
   if (terms.length === 0) throw new TypeError("Search text must not be blank");
-  return terms.join(" ");
+  if (terms.length > MAX_SESSION_SEARCH_TERMS) {
+    throw new TypeError(
+      `Search text must contain at most ${String(MAX_SESSION_SEARCH_TERMS)} terms`,
+    );
+  }
+  const text = terms.join(" ");
+  if (Buffer.byteLength(text, "utf8") > MAX_SESSION_SEARCH_TEXT_UTF8_BYTES) {
+    throw new TypeError(
+      `Search text must be at most ${String(MAX_SESSION_SEARCH_TEXT_UTF8_BYTES)} UTF-8 bytes`,
+    );
+  }
+  return text;
 }

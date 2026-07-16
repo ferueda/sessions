@@ -41,16 +41,16 @@ elapsed time and speedup are report-only and vary by machine and runtime.
 
 `pnpm measure:entry-query` is opt-in and outside `pnpm check`. It indexes 2,000
 generic sessions with five entries each through the production storage seam,
-then repeats broad, first, last, and tool inventory queries. Exact records,
-order, roots, counts, previews, and cursors must agree; aggregate elapsed time is
-report-only.
+then repeats broad, first, last, tool, and activity-bounded inventory queries.
+Exact records, order, roots, counts, previews, and cursors must agree; aggregate
+elapsed time is report-only.
 
 `pnpm measure:search-query` is opt-in and outside `pnpm check`. It indexes a
 fixed generic in-memory corpus through the production SQLite storage seam, then
-runs the same broad first-page query twice through the production query seam.
-Exact order, support counts, snippets, continuation, and repeated output are
-required; aggregate elapsed time is report-only and varies by machine and
-runtime.
+runs broad first-page `all` and `any` queries twice through the production query
+seam. Exact order, roots, matched terms, support counts, snippets, continuation,
+and repeated output are required; aggregate elapsed time is report-only and
+varies by machine and runtime.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state

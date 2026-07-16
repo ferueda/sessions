@@ -137,6 +137,8 @@ source-observation time, last-good adapter version, source state/freshness, and
 the stored digest. Show reads attribution and the document under one immutable
 library snapshot and verifies the digest before returning canonical content.
 List/search read the stored digest directly and do not reopen providers.
+Activity bounds use retained `updatedAt`, falling back to retained `createdAt`;
+they add no provider read or stored field.
 
 Human and structured list/search/entries/show output omits source locators, source
 metadata, provider roots, attachment paths, and local workspace values. Export
@@ -159,9 +161,14 @@ references, hidden reasoning, or evidence the adapter did not observe.
 
 Entry inventory exposes one bounded representative text preview only after page
 selection. An origin-filtered query never previews text from another origin, and
-an omitted-only match exposes no payload or placeholder. Its known root value is
-one retained session reference; unknown lineage remains explicit. Root evidence
-does not enter document digests or other query records.
+an omitted-only match exposes no payload or placeholder. List, search, and entry
+records expose only one query-derived retained root reference or explicit
+`unknown`; they never expose root workspace or provider paths. Root evidence does
+not enter canonical documents, document digests, show, or export.
+
+Search `matchedTerms` repeats only exact terms from the admitted query that
+matched an eligible occurrence in that hit. It adds no transcript field, schema
+column, storage index, or provider access.
 
 Opaque list/search/entries cursors contain query-binding, library-instance, generation,
 and offset data rather than transcript text. They are continuation tokens, not

@@ -78,6 +78,7 @@ async function seedContractCorpus(database: DatabaseSync): Promise<void> {
       finishedAt: "2026-07-14T12:01:00.000Z",
     });
 
+    await replaceCompleted(index, [corpus.literalAny], "2026-07-14T13:15:00.000Z");
     await replaceCompleted(index, corpus.pageable, SESSION_QUERY_CONTRACT_TIMES.pageable);
     for (const documents of groupBySource([
       ...corpus.inventory.documents,
