@@ -1074,7 +1074,8 @@ Primary change areas:
 - `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md`;
 - a least-privilege release workflow under `.github/workflows/`;
 - release-package smoke scripts and `docs/contributing/releasing.md`;
-- final README install, upgrade, privacy, and troubleshooting routes.
+- final README install, upgrade, privacy, and troubleshooting routes;
+- a release-pinned agent setup guide for the CLI and packaged skill.
 
 Required behavior:
 
@@ -1087,6 +1088,20 @@ Required behavior:
   dependency caching disabled. Run the full gate, inspect the tarball allowlist,
   install it normally, validate the packaged skill, and execute a representative
   synthetic workflow on Linux, macOS, and Windows.
+- Make global npm installation the primary V1 route and `npx` a trial route.
+  Do not add an `init` alias, setup wizard, self-installer, or postinstall
+  mutation: `doctor` and `paths` remain read-only, while explicit
+  `index --source <source>` remains the only initialization path.
+- Publish one release-pinned agent setup contract. It may authorize installing
+  the official CLI and matching global skill, must verify version, doctor, and
+  paths, and must stop before indexing until the agent explains the provider
+  read and durable Sessions write and receives separate permission.
+- Verify the exact release-tag skill install through the supported host installer.
+  Do not pair an npm release with a skill from mutable `main` or reimplement host
+  skill-directory management in Sessions.
+- Document paired CLI/skill upgrades, the external installer's network boundary,
+  global npm permission recovery without `sudo`, and that uninstalling either
+  package does not delete retained Sessions data.
 - Bootstrap the first npm package release with maintainer-controlled 2FA because
   npm trusted-publisher configuration requires an existing package. Then bind the
   exact repository, workflow filename, and protected environment as the trusted
@@ -1107,9 +1122,15 @@ Exit gate:
 - A release candidate installs through ordinary npm tooling and runs help,
   version, doctor, paths, synthetic index/search/show/export, forget/data clear,
   and packaged skill validation on every supported operating system.
+- One clean human journey reaches install -> doctor -> explicit durable index ->
+  bounded query. One clean agent journey installs matching CLI and skill
+  releases, verifies readiness, stops at the indexing permission boundary, then
+  completes the same journey after synthetic authorization.
 - A dry run proves version/changelog/tag/package alignment and least-privilege job
   permissions. The first real publish proves registry metadata and provenance.
 - User docs require neither pnpm nor TypeScript nor a Sessions source checkout.
+- No V1 Homebrew tap, standalone binary, shell-piped installer, or self-updater is
+  added without measured adoption evidence that npm is the blocker.
 - `pnpm check` passes from the release revision.
 
 ### M12 — Establish parity, retain the Harness skill, and close V1

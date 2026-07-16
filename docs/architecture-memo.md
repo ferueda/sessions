@@ -804,17 +804,35 @@ honest observational conclusion.
 - TypeScript ESM in source; compiled ESM JavaScript in the published tarball.
 - Node.js `>=24.16`; native TypeScript is a contributor convenience, never a user requirement.
 - Intended package `@ferueda/sessions`; binary `sessions`. Scope ownership is a release gate.
-- Users install with npm-compatible tooling or invoke through `npx`; they do not need pnpm.
+- A global npm install is the primary V1 channel. `npx` is a trial path for
+  help or diagnostics, not the persistent command expected by the Agent Skill.
 - The package allowlists compiled output, the packaged skill, README, and license.
 - A package smoke test packs, installs into an isolated project, and invokes the generated executable.
+- First use has no separate `init` command. `doctor` and `paths` inspect without
+  creating state; explicit `index --source <source>` is the only initialization
+  path because it reads provider history and writes a durable Sessions copy.
+- Human onboarding stays install -> doctor -> explicit index. Uninitialized
+  human output may name that next command, but no installer, postinstall hook, or
+  setup wizard indexes automatically.
+- Agent onboarding uses a short release-pinned setup guide. The user may
+  authorize installing the official CLI and skill together, while indexing
+  remains a separate permission after the agent explains what it will read and
+  retain. The guide verifies version, doctor, and paths before that request.
+- Install the skill globally by default because Sessions works across projects.
+  Pair it with the matching CLI release rather than mutable `main`; the external
+  skill installer owns host discovery, copying, updates, and removal.
+- CLI or skill uninstall never deletes retained Sessions data. Users remove that
+  data only through the explicit Sessions deletion commands.
 - A local source checkout can install the skill with
   `npx skills add . --skill sessions`; remote repository shorthand remains a
-  post-merge verification and documentation step.
+  release-tag verification and documentation step.
 - One local `pnpm check` gate covers format, lint, dependency rules, types, tests, build, dist smoke, and package smoke. CI calls the same gate.
 - CI covers Linux, macOS, and Windows before release.
 - Release automation uses release-please and npm trusted publishing/OIDC with provenance after the package scope and GitHub environment are configured.
 
-No V1 daemon, watcher, TUI, native binary, Homebrew formula, or self-update path.
+No V1 daemon, watcher, TUI, native binary, Homebrew formula, shell-piped
+installer, or self-update path. Revisit another distribution channel only when
+support evidence shows that Node or global npm is a recurring adoption blocker.
 
 ## Harness relationship
 
