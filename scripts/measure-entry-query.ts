@@ -62,6 +62,17 @@ try {
       }),
       (page) => assertSelectedPage(page, 2),
     ),
+    activity: await measure(
+      repository.entries,
+      createSessionEntryQuery({
+        filter: {
+          activityAfter: "2026-07-15T11:59:59.999Z",
+          activityBefore: "2026-07-15T12:00:00.001Z",
+        },
+        limit: 7,
+      }),
+      assertAllPage,
+    ),
   };
 
   process.stdout.write(

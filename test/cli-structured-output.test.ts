@@ -39,7 +39,7 @@ const identity = {
 describe("schema-1 structured output", () => {
   it("builds an exact list bundle and attributable JSONL records", () => {
     const input: StructuredListInputV1 = {
-      sessions: [summary()],
+      sessions: [listedSummary()],
       nextCursor: "next-page",
     };
 
@@ -52,7 +52,7 @@ describe("schema-1 structured output", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: "next-page",
-      sessions: [publicSummary()],
+      sessions: [publicListedSummary()],
     });
     expect(jsonl).toEqual([
       {
@@ -68,7 +68,7 @@ describe("schema-1 structured output", () => {
         command: "list",
         type: "session",
         disposition: "untrusted-history",
-        summary: publicSummary(),
+        summary: publicListedSummary(),
       },
     ]);
     const sessionRecord = jsonl[1]!;
@@ -112,6 +112,7 @@ describe("schema-1 structured output", () => {
     });
     expect(json.hits[0]).toEqual({
       session: publicSummary(),
+      root: publicRoot(),
       entry: {
         ordinal: 4,
         kind: "tool-call",
@@ -128,6 +129,7 @@ describe("schema-1 structured output", () => {
         excerpt: { text: "match\ntext", truncated: true },
         contentHash,
         additionalMatchingSegments: 1,
+        matchedTerms: ["match", "text"],
       },
       context: [
         {
@@ -317,7 +319,7 @@ describe("schema-1 structured output", () => {
   it("copies only allowlisted fields from safe application results", () => {
     const privateMarker = "private-marker-never-export";
     const unsafeSummary = {
-      ...summary(),
+      ...listedSummary(),
       workspace: privateMarker,
       locator: { uri: privateMarker },
       sourceMetadata: { hidden: privateMarker },
@@ -343,6 +345,7 @@ describe("schema-1 structured output", () => {
       "sourceObservedAt",
       "adapterVersion",
       "freshness",
+      "root",
     ]);
   });
 
@@ -420,6 +423,7 @@ describe("schema-1 structured output", () => {
           sourceObservedAt: "2026-07-15T12:00:00.000Z",
           adapterVersion: "synthetic-v1",
           freshness: "current",
+          root: knownRoot(),
         },
       ],
     });
@@ -436,7 +440,7 @@ describe("schema-1 structured output", () => {
       buildListJsonV1({
         sessions: [
           {
-            ...summary(),
+            ...listedSummary(),
             title: { text: "é", truncated: false, originalUtf8Bytes: 1, emittedUtf8Bytes: 1 },
           },
         ],
@@ -444,7 +448,7 @@ describe("schema-1 structured output", () => {
     ).toThrow("byte accounting");
     expect(() =>
       buildListJsonV1({
-        sessions: [{ ...summary(), documentDigest: { ...documentDigest, digest: "0" } }],
+        sessions: [{ ...listedSummary(), documentDigest: { ...documentDigest, digest: "0" } }],
       }),
     ).toThrow("document digest");
     expect(() =>
@@ -453,6 +457,23 @@ describe("schema-1 structured output", () => {
         support: { ...searchInput().support, occurrences: Number.MAX_SAFE_INTEGER + 1 },
       }),
     ).toThrow("safe integer");
+    expect(() =>
+      buildSearchJsonV1({
+        ...searchInput(),
+        hits: [{ ...searchInput().hits[0]!, matchedTerms: ["duplicate", "duplicate"] }],
+      }),
+    ).toThrow("must be unique");
+    expect(() =>
+      buildSearchJsonV1({
+        ...searchInput(),
+        hits: [{ ...searchInput().hits[0]!, matchedTerms: ["two terms"] }],
+      }),
+    ).toThrow("single search terms");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [{ ...listedSummary(), root: { kind: "invalid" } as never }],
+      }),
+    ).toThrow("session root");
     expect(() =>
       buildSnapshotJsonV1("show", {
         ...snapshotInput(),
@@ -504,15 +525,15 @@ describe("structured encoders", () => {
   });
 
   it.each([
-    ["json", () => encodeStructuredJson(buildListJsonV1({ sessions: [summary()] }))],
-    ["jsonl", () => encodeStructuredJsonl(buildListJsonlV1({ sessions: [summary()] }))],
+    ["json", () => encodeStructuredJson(buildListJsonV1({ sessions: [listedSummary()] }))],
+    ["jsonl", () => encodeStructuredJsonl(buildListJsonlV1({ sessions: [listedSummary()] }))],
   ] as const)("admits %s exactly at its UTF-8 cap and rejects one byte less", (_name, encode) => {
     const unbounded = encode();
     const bytes = Buffer.byteLength(unbounded, "utf8");
     const value =
       _name === "json"
-        ? buildListJsonV1({ sessions: [summary()] })
-        : buildListJsonlV1({ sessions: [summary()] });
+        ? buildListJsonV1({ sessions: [listedSummary()] })
+        : buildListJsonlV1({ sessions: [listedSummary()] });
     const atBoundary =
       _name === "json"
         ? encodeStructuredJson(value as ReturnType<typeof buildListJsonV1>, {
@@ -575,6 +596,35 @@ function summary(): StructuredSessionSummaryInputV1 {
   };
 }
 
+function knownRoot() {
+  return {
+    kind: "known" as const,
+    root: {
+      source: { kind: "synthetic", instanceId: "root" },
+      nativeId: "root-session",
+    },
+  };
+}
+
+function publicRoot() {
+  return {
+    kind: "known" as const,
+    session: {
+      canonicalId: "synthetic@root:root-session",
+      source: { kind: "synthetic", instanceId: "root" },
+      nativeId: "root-session",
+    },
+  };
+}
+
+function listedSummary() {
+  return { ...summary(), root: knownRoot() };
+}
+
+function publicListedSummary() {
+  return { ...publicSummary(), root: publicRoot() };
+}
+
 function publicSummary() {
   return {
     session: {
@@ -599,6 +649,8 @@ function searchInput(): StructuredSearchInputV1 {
     hits: [
       {
         session: summary(),
+        root: knownRoot(),
+        matchedTerms: ["match", "text"],
         entry: {
           ordinal: 4,
           kind: "tool-call",

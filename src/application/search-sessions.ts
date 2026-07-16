@@ -3,6 +3,7 @@ import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
 import { selectSessionSummary, type SelectedSessionSummary } from "./session-presentation.ts";
 import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
+import { selectSessionRoot } from "./session-root-presentation.ts";
 import {
   createSessionSearchQuery,
   MAX_SESSION_QUERY_LIMIT,
@@ -14,7 +15,9 @@ import {
   type SessionSearchHit,
   type SessionSearchSnippet,
   type SessionSearchSupport,
+  type SessionSearchTermMode,
 } from "../domain/session-query.ts";
+import type { SessionRootResolution } from "../domain/session-lineage.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = MAX_SESSION_QUERY_LIMIT;
@@ -23,7 +26,9 @@ export const MAX_SEARCH_CONTEXT = MAX_SESSION_SEARCH_CONTEXT;
 
 export interface SelectedSessionSearchHit {
   readonly session: SelectedSessionSummary;
+  readonly root: SessionRootResolution;
   readonly entry: SessionSearchEntry;
+  readonly matchedTerms: readonly string[];
   readonly snippet: SessionSearchSnippet;
   readonly context: readonly SessionSearchContextEntry[];
   readonly linkedContextTruncated: boolean;
@@ -39,6 +44,7 @@ export async function searchSessions(input: {
   readonly paths: IndexPaths;
   readonly lifecycle: IndexLifecycle;
   readonly text: string;
+  readonly termMode?: SessionSearchTermMode;
   readonly filter?: SessionSearchFilterInput;
   readonly limit?: number;
   readonly context?: number;
@@ -47,6 +53,7 @@ export async function searchSessions(input: {
   const cursor = admitSessionQueryCursor(input.cursor);
   const query = createSessionSearchQuery({
     text: input.text,
+    ...(input.termMode === undefined ? {} : { termMode: input.termMode }),
     limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
     context: input.context ?? DEFAULT_SEARCH_CONTEXT,
     ...(input.filter === undefined ? {} : { filter: input.filter }),
@@ -80,7 +87,9 @@ export async function searchSessions(input: {
 function selectSearchHit(hit: SessionSearchHit): SelectedSessionSearchHit {
   return Object.freeze({
     session: selectSessionSummary(hit.session),
+    root: selectSessionRoot(hit.root),
     entry: copyEntry(hit.entry),
+    matchedTerms: Object.freeze([...hit.matchedTerms]),
     snippet: Object.freeze({
       segmentOrdinal: hit.snippet.segmentOrdinal,
       origin: hit.snippet.origin,

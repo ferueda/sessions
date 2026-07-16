@@ -1,9 +1,11 @@
 import { Buffer } from "node:buffer";
 
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
+import { MAX_SESSION_SEARCH_TERMS } from "../domain/session-query.ts";
 import type { SessionRootResolution } from "../domain/session-lineage.ts";
 import { formatSessionIdentity, isSessionIdentity } from "../domain/session-identity.ts";
 import type { SessionIdentity } from "../domain/session.ts";
+import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 
 export type StructuredCommandV1 = "list" | "search" | "entries" | "show" | "export";
 
@@ -43,6 +45,14 @@ export interface PublicSessionSummaryV1 {
   readonly sourceObservedAt: string;
   readonly adapterVersion: string;
   readonly freshness: "current" | "stale";
+}
+
+export type PublicSessionRootV1 =
+  | { readonly kind: "known"; readonly session: SessionRefV1 }
+  | { readonly kind: "unknown" };
+
+export interface PublicListSessionV1 extends PublicSessionSummaryV1 {
+  readonly root: PublicSessionRootV1;
 }
 
 export interface CountSelectionV1 {
@@ -135,6 +145,7 @@ export interface SearchContextExcerptV1 {
 
 export interface PublicSearchHitV1 {
   readonly session: PublicSessionSummaryV1;
+  readonly root: PublicSessionRootV1;
   readonly entry: PublicEntryCoordinateV1;
   readonly match: {
     readonly segmentOrdinal: number;
@@ -143,6 +154,7 @@ export interface PublicSearchHitV1 {
     readonly excerpt: SearchExcerptV1;
     readonly contentHash: ContentHashV1;
     readonly additionalMatchingSegments: number;
+    readonly matchedTerms: readonly string[];
   };
   readonly context: readonly SearchContextExcerptV1[];
   readonly linkedContextTruncated: boolean;
@@ -155,10 +167,6 @@ export interface SearchSupportV1 {
   readonly unknownLineageSessions: number;
 }
 
-export type PublicEntryRootV1 =
-  | { readonly kind: "known"; readonly session: SessionRefV1 }
-  | { readonly kind: "unknown" };
-
 export interface PublicEntryPreviewV1 {
   readonly segmentOrdinal: number;
   readonly origin: ContentOriginV1;
@@ -169,7 +177,7 @@ export interface PublicEntryPreviewV1 {
 
 export interface PublicEntryInventoryV1 {
   readonly session: PublicSessionSummaryV1;
-  readonly root: PublicEntryRootV1;
+  readonly root: PublicSessionRootV1;
   readonly coordinate: PublicEntryCoordinateV1;
   readonly content: {
     readonly textSegmentCount: number;
@@ -181,7 +189,7 @@ export interface PublicEntryInventoryV1 {
 
 export type ListJsonV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
-  readonly sessions: readonly PublicSessionSummaryV1[];
+  readonly sessions: readonly PublicListSessionV1[];
 };
 
 export type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
@@ -204,7 +212,7 @@ export type ListPageJsonlV1 = StructuredHeaderV1<"list", "page"> & {
 };
 
 export type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
-  readonly summary: PublicSessionSummaryV1;
+  readonly summary: PublicListSessionV1;
 };
 
 export type SearchPageJsonlV1 = StructuredHeaderV1<"search", "page"> & {
@@ -284,8 +292,12 @@ export interface StructuredSessionSummaryInputV1 {
 }
 
 export interface StructuredListInputV1 {
-  readonly sessions: readonly StructuredSessionSummaryInputV1[];
+  readonly sessions: readonly StructuredListSessionInputV1[];
   readonly nextCursor?: string;
+}
+
+export interface StructuredListSessionInputV1 extends StructuredSessionSummaryInputV1 {
+  readonly root: SessionRootResolution;
 }
 
 export interface StructuredSearchInputV1 {
@@ -296,7 +308,9 @@ export interface StructuredSearchInputV1 {
 
 export interface StructuredSearchHitInputV1 {
   readonly session: StructuredSessionSummaryInputV1;
+  readonly root: SessionRootResolution;
   readonly entry: PublicEntryCoordinateV1;
+  readonly matchedTerms: readonly string[];
   readonly snippet: {
     readonly segmentOrdinal: number;
     readonly origin: ContentOriginV1;
@@ -387,12 +401,12 @@ export function buildListJsonV1(input: StructuredListInputV1): ListJsonV1 {
   return finalizeStructuredOutput({
     ...header("list", "page"),
     nextCursor: copyCursor(input.nextCursor),
-    sessions: input.sessions.map(copySummary),
+    sessions: input.sessions.map(copyListSession),
   });
 }
 
 export function buildListJsonlV1(input: StructuredListInputV1): StructuredJsonlV1 {
-  const summaries = input.sessions.map(copySummary);
+  const summaries = input.sessions.map(copyListSession);
   return finalizeStructuredOutput([
     {
       ...header("list", "page"),
@@ -521,6 +535,10 @@ function copySummary(input: StructuredSessionSummaryInputV1): PublicSessionSumma
   };
 }
 
+function copyListSession(input: StructuredListSessionInputV1): PublicListSessionV1 {
+  return { ...copySummary(input), root: copyRoot(input.root) };
+}
+
 function copySnapshot(input: StructuredSessionSnapshotInputV1): PublicSessionSnapshotV1 {
   return {
     ...copySummary(input),
@@ -628,6 +646,7 @@ function copySegment(input: PublicSelectedSegmentV1): PublicSelectedSegmentV1 {
 function copySearchHit(input: StructuredSearchHitInputV1): PublicSearchHitV1 {
   return {
     session: copySummary(input.session),
+    root: copyRoot(input.root),
     entry: copyEntryCoordinate(input.entry),
     match: {
       segmentOrdinal: nonNegativeInteger(input.snippet.segmentOrdinal),
@@ -636,6 +655,7 @@ function copySearchHit(input: StructuredSearchHitInputV1): PublicSearchHitV1 {
       excerpt: copyExcerpt(input.snippet.text, input.snippet.truncated),
       contentHash: copyContentHash(input.snippet.contentHash),
       additionalMatchingSegments: nonNegativeInteger(input.snippet.additionalMatchingSegments),
+      matchedTerms: copyMatchedTerms(input.matchedTerms),
     },
     context: input.context.map((context) => ({
       type: "entry-excerpt",
@@ -658,10 +678,7 @@ function copyEntryInventory(input: StructuredEntryInventoryInputV1): PublicEntry
   }
   return {
     session: copySummary(input.session),
-    root:
-      input.root.kind === "known"
-        ? { kind: "known", session: copySessionRef(input.root.root) }
-        : { kind: "unknown" },
+    root: copyRoot(input.root),
     coordinate: copyEntryCoordinate(input.entry),
     content: {
       textSegmentCount,
@@ -680,6 +697,31 @@ function copyEntryInventory(input: StructuredEntryInventoryInputV1): PublicEntry
           }),
     },
   };
+}
+
+function copyRoot(input: SessionRootResolution): PublicSessionRootV1 {
+  if (input.kind === "known") return { kind: "known", session: copySessionRef(input.root) };
+  if (input.kind === "unknown") return { kind: "unknown" };
+  throw new TypeError("Structured session root is invalid");
+}
+
+function copyMatchedTerms(value: readonly string[]): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SESSION_SEARCH_TERMS) {
+    throw new TypeError("Structured matched terms are invalid");
+  }
+  const terms = value.map(nonEmptyString);
+  if (
+    terms.some((term) => {
+      const tokens = splitUnicodeWhitespaceTerms(term);
+      return tokens.length !== 1 || tokens[0] !== term;
+    })
+  ) {
+    throw new TypeError("Structured matched terms must be single search terms");
+  }
+  if (new Set(terms).size !== terms.length) {
+    throw new TypeError("Structured matched terms must be unique");
+  }
+  return terms;
 }
 
 function copyExcerpt(text: string, truncated: boolean): SearchExcerptV1 {

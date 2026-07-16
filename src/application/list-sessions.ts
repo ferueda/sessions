@@ -2,18 +2,24 @@ import { SessionLibraryError } from "./library-error.ts";
 import type { IndexLifecycle, IndexPaths, IndexReader } from "./ports/index-lifecycle.ts";
 import { selectSessionSummary, type SelectedSessionSummary } from "./session-presentation.ts";
 import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
+import { selectSessionRoot } from "./session-root-presentation.ts";
 import {
   createSessionListQuery,
   MAX_SESSION_QUERY_LIMIT,
   type SessionFilterInput,
+  type SessionListItem,
   type SessionQueryCursor,
 } from "../domain/session-query.ts";
 
 export const DEFAULT_LIST_LIMIT = 50;
 export const MAX_LIST_LIMIT = MAX_SESSION_QUERY_LIMIT;
 
+export interface SelectedSessionListItem extends SelectedSessionSummary {
+  readonly root: SessionListItem["root"];
+}
+
 export interface ListSessionsResult {
-  readonly sessions: readonly SelectedSessionSummary[];
+  readonly sessions: readonly SelectedSessionListItem[];
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -40,9 +46,16 @@ export async function listSessions(input: {
   return withReader(input.lifecycle, input.paths, async (reader) => {
     const page = await reader.query.list(query);
     return Object.freeze({
-      sessions: Object.freeze(page.sessions.map((session) => selectSessionSummary(session))),
+      sessions: Object.freeze(page.sessions.map(selectListItem)),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     });
+  });
+}
+
+function selectListItem(item: SessionListItem): SelectedSessionListItem {
+  return Object.freeze({
+    ...selectSessionSummary(item),
+    root: selectSessionRoot(item.root),
   });
 }
 

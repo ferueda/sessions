@@ -21,6 +21,9 @@ describe("SQLite query primitives", () => {
     expect(literalFtsQuery(" \t\n ")).toBeUndefined();
     expect(literalFtsQuery("\u0085")).toBeUndefined();
     expect(literalFtsQuery("alpha\u0085beta")).toBe('"alpha" AND "beta"');
+    expect(literalFtsQuery('alpha OR /tmp/a.ts "quoted"', "any")).toBe(
+      '"alpha" OR "OR" OR "/tmp/a.ts" OR """quoted"""',
+    );
     expect(literalFtsQuery("---")).toBe('"---"');
   });
 

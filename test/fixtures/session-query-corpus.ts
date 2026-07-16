@@ -25,6 +25,7 @@ export interface SessionQueryContractCorpus {
   readonly present: SessionDocument;
   readonly missing: SessionDocument;
   readonly unknown: SessionDocument;
+  readonly literalAny: SessionDocument;
   readonly pageable: readonly SessionDocument[];
   readonly inventory: SessionEntryInventoryCorpus;
   readonly ranking: SessionQueryRankingCorpus;
@@ -187,6 +188,26 @@ export function sessionQueryContractCorpus(): SessionQueryContractCorpus {
     updatedAt: "2026-07-14T09:05:00.000Z",
     entries: [entry(0, "unknown-observation evidence", { timestamp: false })],
   });
+  const literalAny = document(
+    identity({ kind: "synthetic-query", instanceId: "profile/literal-any" }, "literal-any:1"),
+    {
+      lineageCoverage: "complete",
+      title: "Literal any query session",
+      createdAt: "2026-07-14T13:30:00.000Z",
+      updatedAt: "2026-07-14T14:00:00.000Z",
+      entries: [
+        {
+          ...entry(0, "unused"),
+          content: [textSegment(0, "unionalpha"), textSegment(1, "unionbeta")],
+        },
+        entry(1, "unionalpha unionbeta"),
+        {
+          ...entry(2, "unused"),
+          content: [textSegment(0, "unionalpha"), textSegment(1, "unionbeta", "injected")],
+        },
+      ],
+    },
+  );
   const pageable = Array.from({ length: 23 }, (_, ordinal) => {
     const padded = String(ordinal).padStart(2, "0");
     const session = identity(
@@ -207,6 +228,7 @@ export function sessionQueryContractCorpus(): SessionQueryContractCorpus {
     present,
     missing,
     unknown,
+    literalAny,
     pageable,
     inventory,
     ranking,
@@ -214,6 +236,7 @@ export function sessionQueryContractCorpus(): SessionQueryContractCorpus {
       present,
       missing,
       unknown,
+      literalAny,
       ...pageable,
       ...inventory.documents,
       ...ranking.documents,
@@ -238,7 +261,7 @@ function sessionEntryInventoryCorpus(): SessionEntryInventoryCorpus {
     title: "Entry inventory root",
     workspace: "/private/inventory-root",
     entries: [
-      entry(0, "retained injected setup", {
+      entry(0, "retained injected setup inventory lineage", {
         actor: "system",
         kind: "instruction",
         origin: "injected",

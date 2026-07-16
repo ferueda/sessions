@@ -29,13 +29,12 @@ export interface RootSupportCounts {
 }
 
 export function countRootSupport(
-  database: DatabaseSync,
+  resolveRoot: SessionRootResolver,
   matchingSessions: readonly SessionIdentity[],
 ): RootSupportCounts {
   if (matchingSessions.length === 0) {
     return { uniqueKnownRoots: 0, unknownLineageSessions: 0 };
   }
-  const resolveRoot = createRetainedSessionRootResolver(database);
   const roots = new Set<string>();
   let unknownLineageSessions = 0;
   for (const identity of matchingSessions) {

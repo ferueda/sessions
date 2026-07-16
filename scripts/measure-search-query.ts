@@ -22,6 +22,7 @@ import {
 const CORPUS_SESSIONS = 2_000;
 const PAGE_LIMIT = 5;
 const SEARCH_TERM = "searchmeasurement";
+const ANY_TERMS = ["alternateeven", "alternateodd"] as const;
 const SOURCE: SourceInstance = Object.freeze({
   kind: "synthetic-measurement",
   instanceId: "search-query",
@@ -33,29 +34,46 @@ const database = openDatabase();
 try {
   await seedCorpus(database);
   const repository = createSqliteSessionQuery(database);
-  const query = createSessionSearchQuery({
+  const allQuery = createSessionSearchQuery({
     text: SEARCH_TERM,
     limit: PAGE_LIMIT,
     context: 0,
   });
+  const anyQuery = createSessionSearchQuery({
+    text: ANY_TERMS.join(" "),
+    termMode: "any",
+    limit: PAGE_LIMIT,
+    context: 0,
+  });
 
-  const warm = await repository.search(query);
-  assertExpectedPage(warm);
-
-  const startedAt = performance.now();
-  const repeated = await repository.search(query);
-  const elapsedMilliseconds = performance.now() - startedAt;
-
-  assert.deepStrictEqual(repeated, warm, "repeated broad search changed its result");
+  const elapsedMilliseconds = {
+    all: await measure(repository.search, allQuery, (page) => assertExpectedPage(page, "all")),
+    any: await measure(repository.search, anyQuery, (page) => assertExpectedPage(page, "any")),
+  };
 
   process.stdout.write(
     `${JSON.stringify({
       corpusSessions: CORPUS_SESSIONS,
-      elapsedMs: roundMilliseconds(elapsedMilliseconds),
+      elapsedMs: elapsedMilliseconds,
     })}\n`,
   );
 } finally {
   database.close();
+}
+
+async function measure(
+  run: (query: ReturnType<typeof createSessionSearchQuery>) => Promise<SessionSearchPage>,
+  query: ReturnType<typeof createSessionSearchQuery>,
+  assertPage: (page: SessionSearchPage) => void,
+): Promise<number> {
+  const warm = await run(query);
+  assertPage(warm);
+  const startedAt = performance.now();
+  const repeated = await run(query);
+  const elapsedMilliseconds = performance.now() - startedAt;
+  assertPage(repeated);
+  assert.deepStrictEqual(repeated, warm, "repeated broad search changed its result");
+  return roundMilliseconds(elapsedMilliseconds);
 }
 
 async function seedCorpus(database: DatabaseSync): Promise<void> {
@@ -142,7 +160,7 @@ function documentAt(ordinal: number): SessionDocument {
   };
 }
 
-function assertExpectedPage(page: SessionSearchPage): void {
+function assertExpectedPage(page: SessionSearchPage, mode: "all" | "any"): void {
   const expectedNativeIds = Array.from({ length: PAGE_LIMIT }, (_, ordinal) => nativeIdAt(ordinal));
   assert.deepStrictEqual(
     page.hits.map(({ session }) => session.identity.nativeId),
@@ -159,6 +177,11 @@ function assertExpectedPage(page: SessionSearchPage): void {
 
   for (const [ordinal, hit] of page.hits.entries()) {
     const text = textAt(ordinal);
+    assert.deepStrictEqual(hit.root, { kind: "known", root: hit.session.identity });
+    assert.deepStrictEqual(
+      hit.matchedTerms,
+      mode === "all" ? [SEARCH_TERM] : [ANY_TERMS[ordinal % ANY_TERMS.length]!],
+    );
     assert.deepStrictEqual(hit.snippet, {
       segmentOrdinal: 0,
       origin: "human",
@@ -194,7 +217,7 @@ function nativeIdAt(ordinal: number): string {
 }
 
 function textAt(ordinal: number): string {
-  return `${SEARCH_TERM} generic evidence ${nativeIdAt(ordinal)}`;
+  return `${SEARCH_TERM} ${ANY_TERMS[ordinal % ANY_TERMS.length]} generic evidence ${nativeIdAt(ordinal)}`;
 }
 
 function roundMilliseconds(value: number): number {

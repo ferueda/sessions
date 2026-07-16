@@ -26,6 +26,7 @@ import type {
   SessionEntryFilterInput,
   SessionEntrySelection,
   SessionSearchFilterInput,
+  SessionSearchTermMode,
   SessionSourceState,
 } from "../domain/session-query.ts";
 import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts";
@@ -85,6 +86,7 @@ export interface ProgramOptions {
   }) => Promise<ListSessionEntriesResult>;
   readonly search: (input: {
     readonly text: string;
+    readonly termMode?: SessionSearchTermMode;
     readonly filter?: SessionSearchFilterInput;
     readonly limit?: number;
     readonly context?: number;
@@ -208,6 +210,11 @@ export function createProgram(options: ProgramOptions): Command {
   const search = program.command("search <text>").description("Search retained session evidence");
   addEntryFilterOptions(addSessionFilterOptions(search).addOption(retainedQueryFormatOption()))
     .addOption(
+      new Option("--match <mode>", "literal search term match mode")
+        .choices(["all", "any"])
+        .default("all"),
+    )
+    .addOption(
       new Option("--limit <number>", "maximum search hits").argParser((value) =>
         parseInteger(value, { minimum: 1, maximum: MAX_SEARCH_LIMIT }),
       ),
@@ -225,6 +232,7 @@ export function createProgram(options: ProgramOptions): Command {
       const filter = searchFilter(values);
       const result = await options.search({
         text,
+        termMode: values.match,
         ...(filter === undefined ? {} : { filter }),
         ...(values.limit === undefined ? {} : { limit: values.limit }),
         ...(values.context === undefined ? {} : { context: values.context }),
@@ -382,6 +390,8 @@ interface SessionOptionValues {
   readonly capturedBefore?: string;
   readonly observedAfter?: string;
   readonly observedBefore?: string;
+  readonly activityAfter?: string;
+  readonly activityBefore?: string;
   readonly session?: SessionIdentity;
 }
 
@@ -393,6 +403,7 @@ interface ListOptionValues extends SessionOptionValues {
 
 interface SearchOptionValues extends SessionOptionValues {
   readonly format: RetainedQueryOutputFormat;
+  readonly match: SessionSearchTermMode;
   readonly entryAfter?: string;
   readonly entryBefore?: string;
   readonly actor?: Actor;
@@ -535,6 +546,16 @@ function addSessionFilterOptions(command: Command): Command {
       "exclude source observations at or after this time",
       parseTimestamp,
     )
+    .option(
+      "--activity-after <timestamp>",
+      "exclude session activity at or before this time",
+      parseTimestamp,
+    )
+    .option(
+      "--activity-before <timestamp>",
+      "exclude session activity at or after this time",
+      parseTimestamp,
+    )
     .option("--session <canonical-id>", "exact canonical session", parseIdentity);
 }
 
@@ -585,6 +606,7 @@ function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefi
   }
   validateBounds(values.capturedAfter, values.capturedBefore, "capture");
   validateBounds(values.observedAfter, values.observedBefore, "observation");
+  validateBounds(values.activityAfter, values.activityBefore, "activity");
   const filter: SessionFilterInput = {
     ...(values.source === undefined ? {} : { source: values.source }),
     ...(values.instance === undefined ? {} : { instance: values.instance }),
@@ -595,6 +617,8 @@ function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefi
     ...(values.capturedBefore === undefined ? {} : { capturedBefore: values.capturedBefore }),
     ...(values.observedAfter === undefined ? {} : { observedAfter: values.observedAfter }),
     ...(values.observedBefore === undefined ? {} : { observedBefore: values.observedBefore }),
+    ...(values.activityAfter === undefined ? {} : { activityAfter: values.activityAfter }),
+    ...(values.activityBefore === undefined ? {} : { activityBefore: values.activityBefore }),
     ...(values.session === undefined ? {} : { session: values.session }),
   };
   return Object.keys(filter).length === 0 ? undefined : filter;

@@ -133,6 +133,63 @@ describe("SQLite session query", () => {
     }
   });
 
+  test("keeps any-term attribution entry-wide, duplicate-free, and origin-scoped", async () => {
+    const database = migratedDatabase();
+    await seedQueryDocuments(database, [literalAnyDocument()]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const defaultAll = await repository.search(
+        createSessionSearchQuery({ text: "anyalpha anybeta", limit: 20, context: 0 }),
+      );
+      expect(defaultAll.hits.map(({ entry }) => entry.ordinal)).toEqual([1]);
+      expect(defaultAll.hits[0]?.matchedTerms).toEqual(["anyalpha", "anybeta"]);
+
+      const any = await repository.search(
+        createSessionSearchQuery({
+          text: "anyalpha anyalpha anybeta",
+          termMode: "any",
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(
+        new Map(any.hits.map(({ entry, matchedTerms }) => [entry.ordinal, matchedTerms])),
+      ).toEqual(
+        new Map([
+          [0, ["anyalpha", "anybeta"]],
+          [1, ["anyalpha", "anybeta"]],
+        ]),
+      );
+      expect(any.support).toEqual({
+        occurrences: 3,
+        uniqueContent: 3,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 0,
+      });
+
+      const human = await repository.search(
+        createSessionSearchQuery({
+          text: "anyalpha anybeta",
+          termMode: "any",
+          filter: { origin: "human" },
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(
+        new Map(human.hits.map(({ entry, matchedTerms }) => [entry.ordinal, matchedTerms])),
+      ).toEqual(
+        new Map([
+          [0, ["anyalpha"]],
+          [1, ["anyalpha", "anybeta"]],
+        ]),
+      );
+      expect(human.support.occurrences).toBe(2);
+    } finally {
+      database.close();
+    }
+  });
+
   test("preserves a selected snippet containing the first deterministic marker candidate", async () => {
     const database = migratedDatabase();
     const marker = firstSnippetMarkerCandidate(database);
@@ -506,6 +563,45 @@ function markerDocument(nativeId: string, text: string): SessionDocument {
         content: [
           createTestSegment({
             text,
+            origin: "human",
+            originConfidence: "high",
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+function literalAnyDocument(): SessionDocument {
+  return createTestDocument({
+    identity: {
+      source: { kind: "synthetic-any", instanceId: "query" },
+      nativeId: "entry-wide",
+    },
+    lineageCoverage: "complete",
+    entries: [
+      createTestEntry({
+        ordinal: 0,
+        content: [
+          createTestSegment({
+            ordinal: 0,
+            text: "anyalpha",
+            origin: "human",
+            originConfidence: "high",
+          }),
+          createTestSegment({
+            ordinal: 1,
+            text: "anybeta",
+            origin: "injected",
+            originConfidence: "high",
+          }),
+        ],
+      }),
+      createTestEntry({
+        ordinal: 1,
+        content: [
+          createTestSegment({
+            text: "anyalpha anybeta",
             origin: "human",
             originConfidence: "high",
           }),

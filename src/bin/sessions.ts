@@ -93,11 +93,12 @@ const exitCode = await runCli(process.argv.slice(2), {
       ...(limit === undefined ? {} : { limit }),
       ...(cursor === undefined ? {} : { cursor }),
     }),
-  search: ({ text, filter, limit, context, cursor }) =>
+  search: ({ text, termMode, filter, limit, context, cursor }) =>
     searchSessions({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       text,
+      ...(termMode === undefined ? {} : { termMode }),
       ...(filter === undefined ? {} : { filter }),
       ...(limit === undefined ? {} : { limit }),
       ...(context === undefined ? {} : { context }),

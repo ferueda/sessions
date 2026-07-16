@@ -12,6 +12,7 @@ import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { SelectedText } from "../application/session-presentation.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
+import type { SessionRootResolution } from "../domain/session-lineage.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
 import {
   MAX_SESSION_SEARCH_BODY_BYTES,
@@ -108,7 +109,7 @@ export function renderList(result: ListSessionsResult): string {
     const identity = renderScalar(formatSessionIdentity(session.identity));
     const title = session.title === undefined ? "(untitled)" : renderSelectedText(session.title);
     const capture = session.capturedAt;
-    return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]`;
+    return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]\n${renderRoot(session.root)}`;
   });
   if (result.nextCursor !== undefined) {
     lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
@@ -128,9 +129,11 @@ export function renderSearch(result: SearchSessionsResult): string {
     const capture = hit.session.capturedAt;
     lines.push(
       `${identity}  ${title}  [${hit.session.freshness}; ${hit.session.sourceState}; ${capture}]`,
+      renderRoot(hit.root),
       renderEntryHeading(hit.entry),
       renderSearchBody(hit.snippet.text, hit.snippet.truncated),
       `Evidence: segment #${String(hit.snippet.segmentOrdinal)}; ${hit.snippet.origin}/${hit.snippet.originConfidence}; ${String(hit.snippet.additionalMatchingSegments)} additional matching segment(s)`,
+      `Matched terms: ${hit.matchedTerms.map(renderScalar).join(", ")}`,
     );
     for (const context of hit.context) {
       const relation =
@@ -173,9 +176,7 @@ export function renderEntries(result: ListSessionEntriesResult): string {
     lines.push(
       `${identity}  ${title}  [${item.session.freshness}; ${item.session.sourceState}; ${item.session.capturedAt}]`,
       renderEntryHeading(item.entry),
-      item.root.kind === "known"
-        ? `Root: ${renderScalar(formatSessionIdentity(item.root.root))}`
-        : "Root: unknown",
+      renderRoot(item.root),
       item.content.preview === undefined
         ? "(no text preview)"
         : renderSearchBody(item.content.preview.text, item.content.preview.truncated),
@@ -228,6 +229,12 @@ export function escapeScalar(value: string): string {
 
 function renderScalar(value: string): string {
   return truncateUtf8(escapeScalar(value), MAX_SEGMENT_BYTES, false);
+}
+
+function renderRoot(root: SessionRootResolution): string {
+  return root.kind === "known"
+    ? `Root: ${renderScalar(formatSessionIdentity(root.root))}`
+    : "Root: unknown";
 }
 
 function renderSelectedText(value: SelectedText): string {

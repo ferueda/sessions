@@ -214,6 +214,10 @@ describe("human CLI rendering", () => {
           title: bounded,
           freshness: "current",
           sourceState: "present",
+          root: {
+            kind: "known",
+            root: { source: { kind: "synthetic", instanceId: "root" }, nativeId: "root" },
+          },
         },
       ],
     });
@@ -254,6 +258,7 @@ describe("human CLI rendering", () => {
     });
 
     expect(list).toContain("… [truncated]");
+    expect(list).toContain("Root: synthetic@root:root");
     expect(show).toContain("… [truncated]");
     expect(Buffer.byteLength(list, "utf8")).toBeLessThan(9_000);
     expect(Buffer.byteLength(show, "utf8")).toBeLessThan(9_000);
@@ -316,6 +321,13 @@ describe("human CLI rendering", () => {
             sourceState: "present",
             capturedAt: "2026-07-14T12:00:00.000Z",
           },
+          root: {
+            kind: "known",
+            root: {
+              source: { kind: "synthetic", instanceId: "root" },
+              nativeId: "root-session",
+            },
+          },
           entry: {
             ordinal: 4,
             kind: "tool-call",
@@ -324,6 +336,7 @@ describe("human CLI rendering", () => {
             toolNamespace: "shell",
             relatedEntryOrdinal: 9,
           },
+          matchedTerms: ["match\u001b", "text"],
           snippet: {
             segmentOrdinal: 1,
             origin: "tool",
@@ -360,6 +373,8 @@ describe("human CLI rendering", () => {
     expect(output).toContain("synthetic@one:session");
     expect(output).toContain("match\\u{1b}[31m");
     expect(output).toContain("[current; present; 2026-07-14T12:00:00.000Z]");
+    expect(output).toContain("Root: synthetic@root:root-session");
+    expect(output).toContain("Matched terms: match\\u{1b}, text");
     expect(output).toContain("tool=shell/exec\\u{1b}");
     expect(output).toContain("Context (linked) #9 tool tool-result related=#4");
     expect(output).toContain("result\\u{07}");
@@ -367,7 +382,7 @@ describe("human CLI rendering", () => {
     expect(output).toContain("Support: 3 occurrence(s); 2 unique content value(s)");
     expect(output).toContain("Next cursor: cursor-token");
     expect(output).not.toContain("\u001b");
-    expect(Buffer.byteLength(output.split("\n")[2]!, "utf8")).toBeLessThanOrEqual(512);
+    expect(Buffer.byteLength(output.split("\n")[3]!, "utf8")).toBeLessThanOrEqual(512);
   });
 
   test("renders escaped entry inventory evidence, counts, root, and continuation", () => {
