@@ -21,6 +21,13 @@ Sessions reads Codex files without changing them. It stores canonical evidence,
 not raw JSON records, encrypted values, image URLs, local image paths, world
 state, or provider caches.
 
+## Agent Skill boundary
+
+Codex is the only current Sessions index source. The packaged Agent Skill queries
+the retained canonical library through the provider-neutral CLI; it does not
+read Codex files directly or change this adapter contract. Codex and Cursor may
+both host the skill, but Cursor history cannot be indexed until M10.
+
 ## Instance and path resolution
 
 Sessions resolves one global/default Codex instance:

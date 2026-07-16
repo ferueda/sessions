@@ -5,15 +5,11 @@ Local-first search and analysis for AI coding-agent session history.
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local library. Humans and agents can preserve sessions beyond provider retention, recover or carry forward context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
 > **Status: pre-alpha.** The Codex-backed retained-library and query slice is
-> implemented: explicit durable indexing, filtered/paginated list, lexical
-> search with evidence context and support counts, show, scoped forget, all-data
-> clear, explicit orphan-content diagnosis/repair, explicit SQLite page
-> reclamation, source diagnostics, versioned JSON/JSONL query output, and
-> portable retained-session export. Agent-oriented retrieval now includes
-> textless entry inventory, literal all/any search, activity bounds, per-hit
-> matched terms, and query-derived root attribution. The packaged Agent Skill,
-> Cursor, and npm release remain planned; Markdown presentation is deferred
-> beyond V1.
+> implemented: explicit durable indexing, bounded list/search/entries/show,
+> portable JSON/JSONL export, scoped deletion, source diagnostics, orphan
+> repair, and SQLite page reclamation. The packaged Sessions Agent Skill adds
+> seven evidence-first analysis routes over those commands. Cursor indexing and
+> the npm release remain planned; Markdown presentation is deferred beyond V1.
 
 ## Why Sessions
 
@@ -36,6 +32,23 @@ pnpm install --frozen-lockfile
 pnpm build
 node dist/bin/sessions.js doctor
 ```
+
+### Install the Agent Skill
+
+The skill needs a working `sessions` command in the agent process. From this
+repository checkout, install the packaged skill with:
+
+```bash
+npx skills add . --skill sessions
+```
+
+You can instead copy `skills/sessions/` into a host's skill directory, preserving
+its layout. Codex and Cursor can host the skill, but the CLI currently indexes
+Codex only. This pre-alpha guide documents only the locally verified install;
+add the remote shorthand after an exact default-branch install is verified.
+
+See [getting started](docs/getting-started.md) for the complete first-use flow
+and [Agent Skill](docs/reference/agent-skill.md) for routes and limits.
 
 Index the default local Codex installation, then inspect its retained copy:
 
@@ -176,9 +189,8 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M8 provider-neutral analysis retrieval is complete. M9 packages the Agent Skill,
-and M10 proves Cursor parity. Markdown remains
-deferred beyond V1; `--format md` is not accepted today.
+M9 packaged Agent Skill work is complete. M10 proves Cursor parity. Markdown
+remains deferred beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 
@@ -199,6 +211,8 @@ See the [privacy contract](docs/privacy.md) for promises and limitations.
 - [V1 implementation roadmap](dev/plans/260713-v1-implementation-roadmap.md)
 - [CLI contract](docs/reference/cli-contract.md)
 - [Structured output contract](docs/reference/structured-output.md)
+- [Agent Skill](docs/reference/agent-skill.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Active implementation plans](dev/plans/README.md)
 

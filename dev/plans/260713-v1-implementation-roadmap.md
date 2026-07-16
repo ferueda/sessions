@@ -2,7 +2,7 @@
 
 - Status: active program roadmap
 - Date: 2026-07-13
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 - Foundation baseline: PR #1, merged as `601f924`
 
 ## Goal
@@ -24,7 +24,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 8 are complete. M9 packaged Agent Skill work is next.
+Milestones 0 through 9 are complete. M10 core evidence hardening is next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -68,6 +68,9 @@ The repository now includes:
 - literal all/any search with bounded admission and per-hit matched terms,
   shared exclusive activity bounds, and query-derived roots on list, search, and
   entries;
+- one packaged Sessions Agent Skill with a shared evidence protocol and seven
+  routed playbooks for context, retrospectives, preferences, workflow and
+  verification audits, handoffs, and capability discovery;
 - explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and a
   query-scoped iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
@@ -78,9 +81,11 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the packaged Agent Skill, Cursor adapter, release
-automation, or pinned Harness integration. M9 packages the evidence playbooks,
-and M10 then proves the same complete surface through a second passive adapter.
+It does not yet have capture-scope reporting, bounded recovery for a source that
+changes during its first read, proportionate unchanged-run performance, the
+Cursor adapter, release automation, or pinned Harness integration. M10 settles
+the provider-neutral capture and indexing contract before M11 proves the same
+complete surface through a second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -106,6 +111,81 @@ machine formats for V1.
    projection rebuild, or migration never implies permission to delete them;
    canonical deletion remains an explicit user operation.
 
+## Post-M9 dogfood evidence and accepted direction
+
+A real-library comparison after M9 confirmed that the standalone model is
+stronger than the Harness metadata cache for durable, reproducible evidence. It
+also exposed three gaps that must be settled before the second adapter proves
+the core contract:
+
+- A candidate that changes during its first read correctly fails as
+  `source-changed`, but indexing records that terminal outcome without one fresh
+  retry. An existing last-good snapshot remains queryable as stale; a first-read
+  failure has no canonical document and remains unindexed.
+- List, search, and entries describe retained matches but cannot tell an agent
+  that tracked sessions were discovered and never captured. A no-hit result can
+  therefore look more complete than the retained evidence warrants.
+- Complete-scan reconciliation currently considers only identities with a
+  canonical document. An unindexed tracking row can remain marked present after
+  a later complete scan no longer observes it, which must be corrected before
+  capture-scope counts become public evidence.
+
+The same comparison measured an almost entirely unchanged real library taking
+nearly two minutes to index. The code avoids transcript reads for unchanged
+candidates, but still performs discovery, per-candidate freshness reads and
+immediate tracking transactions, writer-open validation/FTS inspection, and
+final reconciliation. The dominant phase is not yet known, so M10 instruments
+the complete path before selecting an optimization. Synthetic millisecond query
+benchmarks remain algorithm checks, not proof of real-library latency.
+
+Other observations do not overturn the architecture:
+
+- A larger standalone database is expected because it retains normalized text
+  and FTS instead of reopening provider files. Aggregate inspection found no
+  material free-page leak, and the retained library remained substantially
+  smaller than the provider history it represented.
+- Rejecting a changing input is required to avoid a mixed-generation document.
+  The gap is bounded recovery, not weaker mutation checks.
+- Last-good preservation already works. Only a session that has never completed
+  one successful capture lacks queryable evidence.
+- `--match all` means all tokenizer terms, not an adjacent phrase. Additional
+  matches are expected under that contract.
+- Canonical UTC bounds and cursor-bound exact filters remain deliberate
+  reproducibility choices. Human time shortcuts are not part of M10.
+
+Accepted M10 direction:
+
+- reconcile complete discovery against every tracked identity while preserving
+  unindexed failure evidence and allowing the honest orthogonal state
+  `unindexed + missing`;
+- add aggregate capture scope to list/search/entries page output and global
+  doctor details without claiming an unindexed session matched or failed a
+  canonical metadata, entry, or text filter;
+- perform at most one fresh rediscovery per source when the primary pass has
+  `source-changed` candidates, retry only those original identities, and keep
+  primary discovery as the sole coverage and missing-reconciliation snapshot;
+- add opt-in, privacy-safe phase timings, then optimize only the measured stable
+  indexing bottleneck while preserving exact results and lifecycle behavior.
+
+Near-term candidates remain evidence-gated rather than M10 commitments:
+
+- tokenizer-adjacent phrase search, explicitly distinct from byte-exact segment
+  containment;
+- a lower title bound for search and entries if representative payload
+  measurements confirm material encoded-output savings;
+- exact provider-neutral locator-string interning if distinct-count and database
+  measurements justify a schema and join cost. The observed repeated locator
+  bytes make this credible, but retained canonical text and FTS are expected
+  storage rather than leaks.
+
+After V1, the preferred core direction remains deterministic evidence primitives:
+related-session traversal, literal metadata discovery, explicit multi-session
+JSON/JSONL bundles with reproducibility manifests, exact named-unit facets,
+cross-session comparison/timelines, machine-readable capability discovery, and
+a canonical archive whose import/restore semantics are designed separately.
+Semantic relevance, causality, success/failure, drift, preferences, and workflow
+recommendations stay in the Agent Skill rather than the core engine.
+
 ## Dependency map
 
 ```mermaid
@@ -118,19 +198,22 @@ flowchart TD
   M5 --> M6["M6 Query and evidence engine — complete"]
   M6 --> M7["M7 Export and CLI schemas — complete"]
   M7 --> M8["M8 Agent analysis retrieval — complete"]
-  M8 --> M9["M9 Packaged Agent Skill"]
-  M9 --> M10["M10 Cursor parity"]
-  M10 --> M11["M11 Release qualification"]
-  M11 --> M12["M12 Parity, Harness cutover, V1"]
+  M8 --> M9["M9 Packaged Agent Skill — complete"]
+  M9 --> M10["M10 Capture truth and routine-index hardening — next"]
+  M10 --> M11["M11 Cursor parity"]
+  M11 --> M12["M12 Release qualification"]
+  M12 --> M13["M13 Parity, Harness cutover, V1"]
 ```
 
 Codex is intentionally first. Its state/rollout split, namespaced tools,
 non-text records, and structural lineage force the generic model to prove its
 assumptions before the query/export and Agent Skill contracts stabilize. M8 and
-M9 complete that provider-neutral evidence workflow over Codex. Cursor then
-becomes the second-adapter architecture proof: it must enter through the existing
-source port without provider-specific changes to domain, storage, indexing,
-query, export, CLI semantics, or skill playbooks.
+M9 complete that provider-neutral evidence workflow over Codex. M10 uses real
+dogfood evidence to settle capture-scope truth, bounded source-change recovery,
+and routine indexing cost. Cursor then becomes the second-adapter architecture
+proof: it must enter through the settled source port without provider-specific
+changes to domain, storage, indexing, query, export, CLI semantics, or skill
+playbooks.
 
 ## Milestones
 
@@ -215,7 +298,7 @@ Required decisions and behavior:
   use. Never reuse or auto-migrate the legacy Harness JSONL cache.
 - `sessions paths [--format human|json]` initially reports only Sessions-owned
   index/state locations plus initialized state without creating directories or
-  files. Registered adapters extend it with their own source roots in M5 and M10.
+  files. Registered adapters extend it with their own source roots in M5 and M11.
 - Only explicit `sessions index` opens a writer that creates state or applies
   migrations. Read commands report missing or incompatible state with a concise
   remediation path; they do not silently initialize or rebuild it.
@@ -880,7 +963,7 @@ Exit gate:
 - Focused broad-query benchmarks record the before/after lineage cost and guard
   against rebuilding retained lineage per hit. `pnpm check` passes.
 
-### M9 — Package the Sessions Agent Skill and user onboarding
+### M9 — Package the Sessions Agent Skill and user onboarding (complete)
 
 Outcome: users and agents can install Sessions, authorize indexing, and apply
 evidence-first playbooks immediately without knowing provider internals.
@@ -1013,7 +1096,94 @@ Exit gate:
   -> entries/search/show/export -> optional forget or explicit data clear.
 - `pnpm check` passes.
 
-### M10 — Add Cursor and prove adapter equivalence
+### M10 — Make capture scope honest and harden routine indexing
+
+Outcome: agents can distinguish retained search results from missing capture
+evidence, a source that changes during its first read receives one safe recovery
+attempt, and routine unchanged indexing is measured and made proportionate
+without weakening correctness.
+
+This milestone may use separate scoped executor plans when capture truth, retry
+recovery, and measured performance work would be safer to review independently.
+All parts remain provider-neutral and land before Cursor adapter work.
+
+Primary change areas:
+
+- indexing flow and repository ports under `src/application/`;
+- SQLite tracking, complete-scan reconciliation, query-scope aggregation, and
+  writer lifecycle under `src/infrastructure/sqlite/`;
+- list/search/entries and doctor structured presentation under `src/cli/`;
+- fixed generic measurements and correctness comparisons under `scripts/` and
+  focused application, infrastructure, CLI, and docs contracts.
+
+Required behavior:
+
+- Complete discovery reconciles every tracked identity for the exact source
+  instance, not only identities with canonical documents. A previously failed
+  first capture may become missing while remaining `unindexed`; its latest
+  revision/failure stays intact, `capturedAt` stays absent, and no canonical
+  document is manufactured. Missing accounting distinguishes retained from
+  unindexed state wherever a combined count would hide evidence availability.
+- List, search, and entries page results include one aggregate capture-scope
+  summary. JSONL carries it once on the page record, never on every hit. It
+  reports exact tracked, retained-current, retained-stale, unindexed, effective
+  present/missing/unknown, source-coverage, and latest-read-failure aggregates
+  over the tracking scope.
+- Capture scope applies only filters provable from source/tracking identity,
+  including source, instance, native/canonical identity, and effective source
+  state. It names canonical metadata, time, entry, actor/origin/tool, title, and
+  search-text filters that cannot classify an unindexed row. It never reports an
+  unindexed row as a text match or non-match. Human output emits a concise
+  incomplete-evidence warning only when applicable.
+- Doctor exposes the same global aggregate state without identities or private
+  metadata. Unindexed sessions and unknown coverage are evidence warnings, not
+  canonical corruption and not by themselves a failed health result.
+- Primary discovery remains the only coverage snapshot and source of `seen` and
+  missing decisions. Delay durable recording only for first-attempt
+  `source-changed` outcomes. If any exist, run at most one additional complete
+  rediscovery for that source and retry only those original identities found in
+  it. Ignore new identities until the next run. Incomplete rediscovery, a
+  vanished identity, or another source change records one final failure.
+- Each primary identity contributes once to `discovered` and exactly one
+  terminal `unchanged`, `updated`, or `failed` outcome. Retry attempts do not
+  become another coverage generation or inflate run counts. Adapters continue
+  to detect mutation and provide fresh candidates; the indexing application owns
+  retry policy.
+- Add opt-in aggregate timings for writer open/validation, discovery and
+  fingerprinting, freshness reads, unchanged writes, changed reads,
+  normalization, canonical/FTS replacement, reconciliation, and close. Timings
+  remain local diagnostics outside stable query DTOs and never contain session
+  identities, paths, transcript data, or telemetry.
+- Use the measurements to select the smallest stable-run optimization. Bulk
+  freshness reads and bounded unchanged/missing write batches are the first
+  hypothesis; writer-open canonical/FK/FTS validation and provider discovery are
+  competing hypotheses. Do not add a clean-generation shortcut, durable cache,
+  parallel writer, or weaker validation unless the measured dominant cost and a
+  recovery-safe design justify it.
+- Keep the existing simple startup notice for potentially long indexing. M10
+  adds no spinner, daemon, watcher, semantic progress percentage, or public
+  continuation-progress contract.
+
+Exit gate:
+
+- A first-read failure, later complete disappearance, and later reappearance
+  prove exact `unindexed + present`, `unindexed + missing`, and eventual retained
+  transitions without losing the original failure or inventing a snapshot.
+- Structured list/search/entries and doctor fixtures prove capture aggregates,
+  evaluable/non-evaluable filter disclosure, unknown coverage, stale last-good
+  evidence, empty results, pagination, and aggregate-only privacy.
+- Deterministic source-mutation tests prove recovery after one fresh rediscovery,
+  a still-changing final failure, incomplete retry discovery, a vanished retry
+  target, no duplicate run counts, and primary-snapshot-only missing decisions.
+- A fixed generic unchanged corpus and a privacy-safe real-library comparison
+  record phase baselines before optimization and exact after-results. Canonical
+  digests, ordered query output, support, lineage, cursors, failures, timestamps,
+  provider bytes, and lease/interruption behavior are unchanged. The scoped plan
+  sets a numeric stable-run budget only after the phase baseline identifies the
+  dominant cost.
+- `pnpm check` passes.
+
+### M11 — Add Cursor and prove adapter equivalence
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
@@ -1060,7 +1230,7 @@ Exit gate:
   edits.
 - `pnpm check` passes on all CI operating systems.
 
-### M11 — Qualify and automate public releases
+### M12 — Qualify and automate public releases
 
 Outcome: a clean public pre-release can be installed without a source checkout,
 and subsequent releases use auditable versioning and short-lived publish
@@ -1071,7 +1241,8 @@ Primary change areas:
 - `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md`;
 - a least-privilege release workflow under `.github/workflows/`;
 - release-package smoke scripts and `docs/contributing/releasing.md`;
-- final README install, upgrade, privacy, and troubleshooting routes.
+- final README install, upgrade, privacy, and troubleshooting routes;
+- a release-pinned agent setup guide for the CLI and packaged skill.
 
 Required behavior:
 
@@ -1084,6 +1255,20 @@ Required behavior:
   dependency caching disabled. Run the full gate, inspect the tarball allowlist,
   install it normally, validate the packaged skill, and execute a representative
   synthetic workflow on Linux, macOS, and Windows.
+- Make global npm installation the primary V1 route and `npx` a trial route.
+  Do not add an `init` alias, setup wizard, self-installer, or postinstall
+  mutation: `doctor` and `paths` remain read-only, while explicit
+  `index --source <source>` remains the only initialization path.
+- Publish one release-pinned agent setup contract. It may authorize installing
+  the official CLI and matching global skill, must verify version, doctor, and
+  paths, and must stop before indexing until the agent explains the provider
+  read and durable Sessions write and receives separate permission.
+- Verify the exact release-tag skill install through the supported host installer.
+  Do not pair an npm release with a skill from mutable `main` or reimplement host
+  skill-directory management in Sessions.
+- Document paired CLI/skill upgrades, the external installer's network boundary,
+  global npm permission recovery without `sudo`, and that uninstalling either
+  package does not delete retained Sessions data.
 - Bootstrap the first npm package release with maintainer-controlled 2FA because
   npm trusted-publisher configuration requires an existing package. Then bind the
   exact repository, workflow filename, and protected environment as the trusted
@@ -1104,12 +1289,18 @@ Exit gate:
 - A release candidate installs through ordinary npm tooling and runs help,
   version, doctor, paths, synthetic index/search/show/export, forget/data clear,
   and packaged skill validation on every supported operating system.
+- One clean human journey reaches install -> doctor -> explicit durable index ->
+  bounded query. One clean agent journey installs matching CLI and skill
+  releases, verifies readiness, stops at the indexing permission boundary, then
+  completes the same journey after synthetic authorization.
 - A dry run proves version/changelog/tag/package alignment and least-privilege job
   permissions. The first real publish proves registry metadata and provenance.
 - User docs require neither pnpm nor TypeScript nor a Sessions source checkout.
+- No V1 Homebrew tap, standalone binary, shell-piped installer, or self-updater is
+  added without measured adoption evidence that npm is the blocker.
 - `pnpm check` passes from the release revision.
 
-### M12 — Establish parity, retain the Harness skill, and close V1
+### M13 — Establish parity, retain the Harness skill, and close V1
 
 Outcome: standalone Sessions becomes the only general implementation upstream;
 Harness keeps its `skills/sessions` entry as a thin, pinned consumer.
@@ -1158,9 +1349,10 @@ These are evidence checkpoints, not date commitments:
 | Internal alpha         | M1-M5 complete; Codex index/list/show vertical slice                  |
 | Feature-complete alpha | M6-M8; Codex evidence/export plus agent-efficient retrieval           |
 | Agent-ready alpha      | M9; packaged skill, onboarding, and forward-tested playbooks          |
-| Beta                   | M10; Cursor equivalence and third-adapter architecture proof          |
-| Release candidate      | M11; install and publish qualification                                |
-| V1                     | M12; parity, released package, and pinned one-way Harness integration |
+| Core-hardened alpha    | M10; honest capture scope, bounded retry, and measured routine index  |
+| Beta                   | M11; Cursor equivalence and third-adapter architecture proof          |
+| Release candidate      | M12; install and publish qualification                                |
+| V1                     | M13; parity, released package, and pinned one-way Harness integration |
 
 Do not publish an alpha whose help advertises placeholder behavior. Do not call a
 release beta until both adapters use the same complete engine. Do not call a
@@ -1173,13 +1365,16 @@ Every V1 release candidate must prove:
 - **Architecture:** provider-neutral core; passive adapters; only composition
   knows concrete implementations; third-adapter proof passes.
 - **Library integrity:** incremental, idempotent, transactional, single-writer,
-  non-destructive complete-scan presence reconciliation, adapter-version
-  invalidation, deterministic snapshot digests, last-good preservation, and
+  non-destructive complete-scan reconciliation of every tracked identity,
+  adapter-version invalidation, deterministic snapshot digests, last-good
+  preservation, one bounded fresh-candidate retry after `source-changed`, and
   rebuildable FTS that cannot delete canonical data.
 - **Evidence integrity:** faithful canonical text, explicit non-text omissions
   and provenance confidence, source-observed tool identity/linkage, index-only reads, explicit
   separation of mentions from execution evidence, separate
-  occurrence/unique-content/unique-root measures, and honest unknown lineage.
+  occurrence/unique-content/unique-root measures, honest unknown lineage, and
+  aggregate capture scope that distinguishes retained, stale, and unindexed
+  evidence without classifying unavailable transcript content.
 - **Privacy:** explicit indexing, read-only provider access, no runtime network or
   telemetry, durable application-data placement, restrictive owned-state
   permissions, bounded diagnostic retention, no TTL/provider-deletion
@@ -1187,7 +1382,9 @@ Every V1 release candidate must prove:
   clearing.
 - **CLI:** consistent filters, stable identity, bounded defaults, deterministic
   pagination/ranking, versioned JSON/JSONL, strict usage, clean streams, and
-  portable JSON/JSONL context extraction without destination delivery.
+  portable JSON/JSONL context extraction without destination delivery. Routine
+  indexing has a recorded phase baseline and a correctness-preserving stable-run
+  budget derived from real and fixed generic evidence.
 - **Delivery:** clean compiled install, allowlisted tarball, packaged skill,
   multi-OS full/smoke gates, release provenance, and no source-checkout runtime.
 - **Adoption:** install-to-first-search guide, provider/troubleshooting reference,
