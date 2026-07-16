@@ -103,13 +103,19 @@ function searchSessions(database: DatabaseSync, query: SessionSearchQuery): Sess
   const where = searchWhere(query.filter);
   const support = readSupport(database, ftsQuery, where);
   const searchRows = readSearchRows(database, query, ftsQuery, where, cursor.offset);
-  const pageRows = searchRows.rows.slice(0, query.limit);
-  const summaryCache = new Map<number, SessionQuerySummary>();
-  const hits = pageRows.map((row) =>
-    searchHit(database, row, query.context, summaryCache, searchRows.markers),
-  );
+  const pageRows = searchRows.slice(0, query.limit);
+  const hits =
+    pageRows.length === 0
+      ? []
+      : hydrateSearchHits(
+          database,
+          pageRows,
+          query.context,
+          ftsQuery,
+          cursor.revision.libraryInstanceId,
+        );
   const nextCursor =
-    searchRows.rows.length > query.limit
+    searchRows.length > query.limit
       ? nextQueryCursor("search", cursor, cursor.offset + query.limit)
       : undefined;
   return Object.freeze({
@@ -125,9 +131,8 @@ function readSearchRows(
   ftsQuery: string,
   where: SqliteQueryWhere,
   offset: number,
-): SearchRows {
-  const markers = createSnippetMarkers(database);
-  const rows = database
+): readonly SearchRankRow[] {
+  return database
     .prepare(
       `WITH matching_segments AS (
          SELECT canonical.session_id,
@@ -145,12 +150,9 @@ function readSearchRows(
                 entry.tool_name,
                 entry.tool_namespace,
                 occurrence.segment_ordinal,
+                occurrence.content_id,
                 occurrence.origin,
                 occurrence.confidence,
-                content.text,
-                content.digest AS content_digest,
-                snippet(sessions_content_fts, 0, ?, ?, ' … ', 64)
-                  AS snippet_text,
                 bm25(sessions_content_fts) AS score
          FROM sessions_content_fts
          JOIN sessions_content_values AS content
@@ -192,14 +194,75 @@ function readSearchRows(
        LIMIT ? OFFSET ?`,
     )
     .all(
-      markers.start,
-      markers.end,
       ftsQuery,
       ...where.parameters,
       query.limit + 1,
       offset,
-    ) as unknown as readonly SearchRow[];
-  return { rows, markers };
+    ) as unknown as readonly SearchRankRow[];
+}
+
+function hydrateSearchContent(
+  database: DatabaseSync,
+  rows: readonly SearchRankRow[],
+  ftsQuery: string,
+  libraryInstanceId: string,
+): HydratedSearchContent {
+  const contentIds = [...new Set(rows.map((row) => integerAt(row.content_id)))];
+  // FTS5 can ignore an untyped bound rowid beside MATCH; the explicit cast keeps
+  // hydration restricted to the one ranked canonical content row.
+  const statement = database.prepare(
+    `SELECT content.text,
+            content.digest AS content_digest,
+            snippet(sessions_content_fts, 0, ?, ?, ' … ', 64) AS snippet_text
+     FROM sessions_content_fts
+     JOIN sessions_content_values AS content
+       ON content.content_id = sessions_content_fts.rowid
+     WHERE sessions_content_fts MATCH ?
+       AND sessions_content_fts.rowid = CAST(? AS INTEGER)`,
+  );
+
+  for (let candidate = 0; ; candidate += 1) {
+    if (!Number.isSafeInteger(candidate)) throw new SqliteSessionIndexError("corrupt-data");
+    const markers = snippetMarkers(libraryInstanceId, candidate);
+    const byContentId = new Map<number, HydratedContentRow>();
+    let collision = false;
+    for (const contentId of contentIds) {
+      const hydrated = statement.all(
+        markers.start,
+        markers.end,
+        ftsQuery,
+        contentId,
+      ) as unknown as readonly HydratedContentRow[];
+      if (hydrated.length !== 1) throw new SqliteSessionIndexError("corrupt-data");
+      const row = hydrated[0]!;
+      const text = storedString(row.text);
+      if (text.includes(markers.start) || text.includes(markers.end)) {
+        collision = true;
+        break;
+      }
+      byContentId.set(contentId, row);
+    }
+    if (!collision) return { byContentId, markers };
+  }
+}
+
+function hydrateSearchHits(
+  database: DatabaseSync,
+  rows: readonly SearchRankRow[],
+  adjacentContext: number,
+  ftsQuery: string,
+  libraryInstanceId: string,
+): readonly SessionSearchHit[] {
+  const hydrated = hydrateSearchContent(database, rows, ftsQuery, libraryInstanceId);
+  const summaryCache = new Map<number, SessionQuerySummary>();
+  return rows.map((row) => searchHit(database, row, adjacentContext, summaryCache, hydrated));
+}
+
+function snippetMarkers(libraryInstanceId: string, candidate: number): SnippetMarkers {
+  return {
+    start: `\u0001sessions-${libraryInstanceId}-${String(candidate)}-match-start\u0002`,
+    end: `\u0001sessions-${libraryInstanceId}-${String(candidate)}-match-end\u0002`,
+  };
 }
 
 function readSupport(
@@ -254,10 +317,10 @@ function searchJoins(): string {
 
 function searchHit(
   database: DatabaseSync,
-  row: SearchRow,
+  row: SearchRankRow,
   adjacentContext: number,
   summaryCache: Map<number, SessionQuerySummary>,
-  markers: SnippetMarkers,
+  hydrated: HydratedSearchContent,
 ): SessionSearchHit {
   const sessionId = integerAt(row.session_id);
   const identity = identityAt({
@@ -282,7 +345,10 @@ function searchHit(
     tool_name: row.tool_name,
     tool_namespace: row.tool_namespace,
   });
-  const snippet = snippetAt(row, markers);
+  const contentId = integerAt(row.content_id);
+  const content = hydrated.byContentId.get(contentId);
+  if (content === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  const snippet = snippetAt(row, content, hydrated.markers);
   const context = readSearchContext(database, sessionId, entry.ordinal, adjacentContext);
   return Object.freeze({
     session: summary,
@@ -293,13 +359,17 @@ function searchHit(
   });
 }
 
-function snippetAt(row: SearchRow, markers: SnippetMarkers): SessionSearchSnippet {
-  const fullText = storedString(row.text);
-  const contentHash = decodeSqliteContentDigest(row.content_digest);
+function snippetAt(
+  row: SearchRankRow,
+  content: HydratedContentRow,
+  markers: SnippetMarkers,
+): SessionSearchSnippet {
+  const fullText = storedString(content.text);
+  const contentHash = decodeSqliteContentDigest(content.content_digest);
   if (!contentHashMatches(fullText, contentHash)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
-  const markedExcerpt = storedString(row.snippet_text);
+  const markedExcerpt = storedString(content.snippet_text);
   if (!ORIGINS.has(row.origin) || !CONFIDENCES.has(row.confidence)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
@@ -324,26 +394,6 @@ function snippetAt(row: SearchRow, markers: SnippetMarkers): SessionSearchSnippe
     truncated: bounded.truncated || excerpt !== fullText,
     additionalMatchingSegments: matchingSegments - 1,
   });
-}
-
-function createSnippetMarkers(database: DatabaseSync): SnippetMarkers {
-  const library = readQueryRevision(database).libraryInstanceId;
-  for (let candidate = 0; ; candidate += 1) {
-    if (!Number.isSafeInteger(candidate)) throw new SqliteSessionIndexError("corrupt-data");
-    const markers = {
-      start: `\u0001sessions-${library}-${String(candidate)}-match-start\u0002`,
-      end: `\u0001sessions-${library}-${String(candidate)}-match-end\u0002`,
-    };
-    const collision = database
-      .prepare(
-        `SELECT 1
-         FROM sessions_content_values
-         WHERE instr(text, ?) > 0 OR instr(text, ?) > 0
-         LIMIT 1`,
-      )
-      .get(markers.start, markers.end);
-    if (collision === undefined) return markers;
-  }
 }
 
 function removeSnippetMarkers(value: string, markers: SnippetMarkers): string {
@@ -436,8 +486,8 @@ interface SnippetMarkers {
   readonly end: string;
 }
 
-interface SearchRows {
-  readonly rows: readonly SearchRow[];
+interface HydratedSearchContent {
+  readonly byContentId: ReadonlyMap<number, HydratedContentRow>;
   readonly markers: SnippetMarkers;
 }
 
@@ -452,7 +502,7 @@ interface AggregateRow {
   readonly unique_content: unknown;
 }
 
-interface SearchRow {
+interface SearchRankRow {
   readonly session_id: unknown;
   readonly source_kind: unknown;
   readonly instance_id: unknown;
@@ -466,10 +516,14 @@ interface SearchRow {
   readonly tool_name: unknown;
   readonly tool_namespace: unknown;
   readonly segment_ordinal: unknown;
+  readonly content_id: unknown;
   readonly origin: ContentOrigin;
   readonly confidence: OriginConfidence;
+  readonly matching_segment_count: unknown;
+}
+
+interface HydratedContentRow {
   readonly text: unknown;
   readonly content_digest: unknown;
   readonly snippet_text: unknown;
-  readonly matching_segment_count: unknown;
 }
