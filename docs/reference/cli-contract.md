@@ -778,6 +778,14 @@ success. This is expectation-setting only: it exposes no percentage, elapsed
 time, work total, ETA, cursor, partial outcome, or machine-readable progress
 contract.
 
+The contributor diagnostic `SESSIONS_INDEX_TIMINGS=1 sessions index ...` is the
+only exception to quiet redirected stderr on successful indexing. It adds one
+prefixed aggregate JSON timing record to stderr after the operation while
+leaving stdout, the index report, and the exit code unchanged. It is not a
+versioned public DTO or progress contract and contains only fixed phase names,
+call counts, and elapsed milliseconds. Other values and commands ignore the
+switch.
+
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 Concurrent index/forget/repair/compact/clear ownership is a sanitized
 `Session library is busy` operational failure; lease tokens, owners, and timing

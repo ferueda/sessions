@@ -67,14 +67,35 @@ source, shared by every affected primary candidate. It never adds a per-candidat
 discovery, sleep, backoff, or retry loop. This favors deterministic results,
 bounded failure handling, and last-good retention over parallel write throughput.
 
+## Opt-in timing
+
+`SESSIONS_INDEX_TIMINGS=1 sessions index ...` measures the shipped indexing path.
+It writes one `sessions:index-timings` JSON record to stderr after the command.
+The fixed phases cover source resolution, writer open, probe/discovery,
+freshness reads, unchanged writes, changed reads, replacement, reconciliation,
+run bookkeeping, close, and total elapsed time. Each phase contains only a call
+count and elapsed milliseconds.
+
+The source port returns an already normalized document, so
+`changedReadAndNormalize` honestly combines provider reading, adapter
+normalization, and application admission. Add deeper adapter-local measurement
+only if this combined phase becomes the measured bottleneck.
+
+Timing is disabled by default, is never stored, and does not change stdout,
+reports, exit codes, or indexing decisions. The diagnostic has no identities,
+paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
+clock, collection, and stderr failures are best-effort and cannot replace the
+underlying command result.
+
 ## Code and proofs
 
 - Flow: `src/application/run-index.ts`,
-  `src/application/discover-sessions.ts`
+  `src/application/discover-sessions.ts`, `src/application/index-timing.ts`
 - Admission and revision checks: `src/application/validate-session.ts`,
   `src/application/read-session-document.ts`
 - Durable writes: `src/infrastructure/sqlite/sqlite-session-index.ts`,
   `src/infrastructure/sqlite/database.ts`
+- Timing aggregation: `src/infrastructure/runtime/index-timings.ts`
 - Tests: `test/application/run-index.sqlite.test.ts`,
   `test/application/discover-sessions.test.ts`,
   `test/infrastructure/sqlite-session-index.test.ts`
