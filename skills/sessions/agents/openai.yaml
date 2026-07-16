@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sessions"
+  short_description: "Analyze local agent sessions with traceable evidence"
+  default_prompt: "Use $sessions to answer this question from evidence in my local agent sessions."

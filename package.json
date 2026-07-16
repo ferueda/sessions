@@ -41,8 +41,8 @@
     "check:docs": "pnpm format:docs:check && pnpm test:docs",
     "clean": "node scripts/clean.ts",
     "deps:check": "node scripts/check-dependencies.ts",
-    "format": "oxfmt --write src scripts test docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
-    "format:check": "oxfmt --check src scripts test docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format": "oxfmt --write src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format:check": "oxfmt --check src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
     "format:docs:check": "oxfmt --check \"**/*.md\"",
     "lint": "oxlint -c .oxlintrc.json src scripts test vitest.config.ts",
     "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
@@ -55,7 +55,7 @@
     "smoke:dist": "node scripts/smoke-dist.ts",
     "smoke:package": "node scripts/smoke-package.ts",
     "test": "vitest run",
-    "test:docs": "vitest run test/docs-contracts.test.ts",
+    "test:docs": "vitest run test/docs-contracts.test.ts test/skill-contracts.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -80,7 +80,7 @@
       "pnpm exec oxfmt --write",
       "pnpm exec oxlint -c .oxlintrc.json --fix"
     ],
-    "{docs,dev,.github}/**/*.{md,json,yml,yaml}": "pnpm exec oxfmt --write",
+    "{docs,dev,.github,skills}/**/*.{md,json,yml,yaml}": "pnpm exec oxfmt --write",
     "*.{md,json,yml,yaml}": "pnpm exec oxfmt --write"
   },
   "engines": {
