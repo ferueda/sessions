@@ -10,6 +10,7 @@
 | `pnpm format:docs:check`         | Check Markdown formatting                                               | No                              | No                                  |
 | `pnpm lint` / `pnpm lint:fix`    | Check or fix source/test lint                                           | Fix variant only                | No                                  |
 | `pnpm measure:content-storage`   | Compare legacy and current canonical-content layouts with fixed corpora | Temporary directory, removed    | No                                  |
+| `pnpm measure:query-lineage`     | Compare repeated and query-scoped lineage resolution                    | No                              | No                                  |
 | `pnpm deps:check`                | Enforce production import graph                                         | No                              | No                                  |
 | `pnpm typecheck`                 | Strict TypeScript check                                                 | No                              | No                                  |
 | `pnpm test` / `pnpm test:watch`  | Run tests once or watch                                                 | Temporary test state            | No                                  |
@@ -30,6 +31,11 @@ parameters, per-object/file byte counts, and interning timings. The structural
 checks require exact-content ID reuse, collision coexistence, no target index on
 text, and a realistic target database no larger than 60% of the legacy layout.
 Timings are report-only and can vary by machine and SQLite version.
+
+`pnpm measure:query-lineage` is also opt-in and outside `pnpm check`. It compares
+rebuilding lineage state per resolution with one query-scoped resolver over a
+deterministic generic in-memory corpus. Exact result equality is required;
+elapsed time and speedup are report-only and vary by machine and runtime.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
