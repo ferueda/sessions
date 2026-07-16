@@ -37,9 +37,10 @@ sessions search <text> [--source SOURCE] [--instance INSTANCE]
                        [--tool-name NAME] [--tool-namespace NAMESPACE]
                        [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
-sessions show <canonical-id> [--entry N --context N]
+sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
-sessions export <canonical-id> --format json|jsonl [--full]
+sessions export <canonical-id> --format json|jsonl
+                               [--full | --from-entry N --to-entry N]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -78,7 +79,13 @@ page bundle; JSONL emits one page record.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
-requires `--entry`. Missing session/entry values are operational failures.
+requires `--entry`. `--from-entry N` and `--to-entry N` select both inclusive
+endpoints and must be supplied together. A range contains at most 200 entries and
+cannot combine with `--entry` or `--context`. Missing session/entry values,
+including either range endpoint outside the retained document, are operational
+failures; ranges are never clamped.
+Incomplete, reversed, oversized, or conflicting ranges exit `2` before library
+inspection.
 List/search/show default to human and accept JSON or JSONL. Human output escapes
 and bounds untrusted terminal content. Machine output uses the exact closed
 schema-1 records in the
@@ -89,7 +96,9 @@ and workspace metadata.
 `export` requires an explicit JSON or JSONL format and reads one retained
 canonical snapshot. Default export is bounded; `--full` removes presentation
 bounds and the aggregate encoded-output cap only for export-eligible fields in
-that snapshot. Export never resolves a provider or follows relations.
+that snapshot. Export accepts the same paired inclusive range and 200-entry
+maximum, but a range cannot combine with `--full`. Export never resolves a
+provider or follows relations.
 
 `forget` idempotently deletes one retained Sessions copy and returns `forgotten`
 or `absent`. `data repair-orphans` requires no confirmation and deletes only
@@ -192,10 +201,10 @@ sessions entries [filters] [--limit N] [--cursor TOKEN]
                  [--format human|json|jsonl]
 ```
 
-M8 also adds literal-any search, per-result root attribution, activity bounds,
-and bounded show/export ranges. Markdown is deferred beyond V1 and `--format md`
-is not accepted today. Planned routes are added to generated help only when
-implemented and contract-tested.
+M8 also adds literal-any search, per-result root attribution, and activity
+bounds. Bounded show/export ranges are current. Markdown is deferred beyond V1
+and `--format md` is not accepted today. Planned routes are added to generated
+help only when implemented and contract-tested.
 
 ## Current retention and empty-library semantics
 
@@ -647,6 +656,13 @@ result is validated before the first write. Every bounded machine result at or
 below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search can be
 narrowed. Show is always bounded. Default export is bounded, while explicit
 `export --full` is the sole structured route exempt from the aggregate cap.
+
+Show/export ranges choose an exact contiguous entry window before the existing
+segment/text bounds run. Therefore selected entries can still report omitted
+segments or truncated text. Range selection does not alter the complete-document
+digest. The current reader reconstructs and validates the complete retained
+document before selecting the requested window; ranges bound returned evidence,
+not SQLite read cost.
 
 Export reads exactly one retained canonical snapshot and never probes or reopens
 a provider source. Known relations are metadata only and do not recursively

@@ -496,8 +496,10 @@ sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
-sessions show <canonical-id> [--entry N --context N] [--format human|json|jsonl]
-sessions export <canonical-id> --format json|jsonl [--full]
+sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
+                             [--format human|json|jsonl]
+sessions export <canonical-id> --format json|jsonl
+                               [--full | --from-entry N --to-entry N]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -511,9 +513,9 @@ sessions entries [filters] [--limit N] [--cursor TOKEN]
                  [--format human|json|jsonl]
 ```
 
-The same milestone adds literal-any search, per-result root attribution,
-activity bounds, and bounded show/export ranges. The next planned adapter surface
-then adds:
+The same milestone adds literal-any search, per-result root attribution, and
+activity bounds. Bounded show/export ranges are current. The next planned adapter
+surface then adds:
 
 ```text
 sessions index --source cursor
@@ -586,8 +588,13 @@ reuse.
 Default export selects the first 50 entries, first 50 relations, and first 100
 segments, with at most 8 KiB raw UTF-8 per title/text segment and 256 KiB across
 segment text. Show applies the same relation/segment/text bounds after its
-existing entry window. Selection truncates only at Unicode code-point boundaries
-and never shortens structural identity, hash, or linkage values. Every bounded
+existing entry window. Show/export may instead select one inclusive paired entry
+range of at most 200 entries. Ranges never clamp, cannot combine with focused
+show or full export, and still reconstruct and verify the complete retained
+document before selection. A ranged result keeps that complete document digest;
+entry selection does not remove later segment/text truncation. Selection
+truncates only at Unicode code-point boundaries and never shortens structural
+identity, hash, or linkage values. Every bounded
 JSON/JSONL result is completely encoded and validated before stdout and may not
 exceed 16 MiB. `export --full` alone removes selection and aggregate output caps
 for export-eligible fields in the one snapshot.
@@ -857,9 +864,10 @@ is deferred beyond V1.
 
 ### Phase 4 — Agent analysis retrieval
 
-Optimize query-scoped lineage resolution; add textless entry inventory,
-literal-any search, per-result root attribution, activity bounds, and bounded
-show/export ranges without changing adapters or canonical storage.
+Query-scoped lineage resolution, rank-first search hydration, and bounded
+show/export ranges are complete. Add textless entry inventory, literal-any
+search, per-result root attribution, and activity bounds without changing
+adapters or canonical storage.
 
 ### Phase 5 — Agent Skill
 

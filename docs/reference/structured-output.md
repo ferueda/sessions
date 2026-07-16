@@ -21,9 +21,10 @@ sessions list [filters] [--limit N] [--cursor TOKEN]
               [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
-sessions show <canonical-id> [--entry N --context N]
+sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
-sessions export <canonical-id> --format json|jsonl [--full]
+sessions export <canonical-id> --format json|jsonl
+                               [--full | --from-entry N --to-entry N]
 ```
 
 List, search, and show default to `human`. Export requires `--format json` or
@@ -93,7 +94,11 @@ Full export emits the complete title with equal original/emitted byte counts and
 `truncated: false`.
 
 Show first keeps its existing entry window: the first 50 entries, or a focused
-entry and its requested context. It then applies the default snapshot bounds:
+entry and its requested context. Show/export may instead select one paired,
+inclusive `--from-entry`/`--to-entry` range of at most 200 entries. Both
+endpoints are required. Ranges never clamp; out-of-document endpoints fail.
+Focused show and ranged show are mutually exclusive, as are ranged export and
+`--full`. The selected window then uses the default snapshot bounds:
 
 - first 50 ordered relations;
 - first 100 segments across the selected entries;
@@ -104,6 +109,12 @@ entry and its requested context. It then applies the default snapshot bounds:
 Default export selects one contiguous prefix in canonical order with the same
 bounds plus the first 50 entries. Entry timestamps never reorder evidence. The
 title has its own budget and does not consume the segment-text budget.
+
+Range selection changes only which entries enter bounded presentation. Segment
+and text limits can still omit or truncate content inside selected entries. The
+document digest always covers the complete retained document. The current
+reader reconstructs and validates that complete document before selecting a
+range, so a range bounds returned evidence rather than storage read cost.
 
 Relations, entries, and segments are processed in canonical order. An omitted
 canonical segment uses a segment slot but no text bytes. An entry already

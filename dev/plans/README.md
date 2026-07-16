@@ -9,10 +9,6 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
-
-- [Add bounded show and export entry ranges](260715-bounded-entry-ranges.md)
-
-This is the next M8 work. The textless entry inventory follows, M9 packages the
-Agent Skill, M10 proves Cursor equivalence, and Markdown presentation remains
-deferred beyond V1.
+There are no active executor plans. The textless entry inventory is the next M8
+work. M9 packages the Agent Skill, M10 proves Cursor equivalence, and Markdown
+presentation remains deferred beyond V1.

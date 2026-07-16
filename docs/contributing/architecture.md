@@ -1,8 +1,8 @@
 # Current architecture
 
 Status: M8 agent analysis retrieval is in progress; query-scoped lineage
-resolution and rank-first search hydration are complete, and bounded show/export
-ranges are next.
+resolution, rank-first search hydration, and bounded show/export ranges are
+complete. Textless entry inventory is next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -237,9 +237,12 @@ observed tool evidence only; it cannot decide roots, counts, filters, ranking, o
 presentation.
 
 The application layer performs title/transcript selection once, before choosing
-a human or machine renderer. Show keeps its existing entry window, then uses the
-same relation/segment/text bounds as default export. Export full mode removes
-presentation selection only; it does not broaden the public projection. The CLI
+a human or machine renderer. Show keeps its existing focus/default behavior, and
+show/export may select one paired inclusive range of at most 200 entries. Invalid
+or out-of-document ranges are never clamped. Every bounded selection then uses
+the same relation/segment/text limits. The full canonical document is still read
+and verified first, and its digest identifies ranged output. Export full mode
+removes presentation selection only; it does not broaden the public projection. The CLI
 maps these safe values field by field into closed schema-1 DTOs, recursively
 validates them, encodes the whole result, and applies the exact 16 MiB bound
 before stdout. JSONL is independently attributable but is not a direct SQLite
