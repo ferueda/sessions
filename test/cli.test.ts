@@ -740,6 +740,11 @@ describe("sessions CLI", () => {
     );
     const blank = await invoke(["search", "   "], { search });
     const unicodeBlank = await invoke(["search", "\u0085"], { search });
+    const tooManyTerms = await invoke(
+      ["search", Array.from({ length: 33 }, (_, index) => `term-${String(index)}`).join(" ")],
+      { search },
+    );
+    const tooManyBytes = await invoke(["search", "é".repeat(2_049)], { search });
     const equalActivityBounds = await invoke(
       [
         "list",
@@ -759,9 +764,13 @@ describe("sessions CLI", () => {
       equalBounds.exitCode,
       blank.exitCode,
       unicodeBlank.exitCode,
+      tooManyTerms.exitCode,
+      tooManyBytes.exitCode,
       equalActivityBounds.exitCode,
       invalidMatch.exitCode,
-    ]).toEqual([2, 2, 2, 2, 2, 2, 2, 2]);
+    ]).toEqual([2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    expect(tooManyTerms.stderr).toContain("at most 32 terms");
+    expect(tooManyBytes.stderr).toContain("at most 4096 UTF-8 bytes");
     expect(list).not.toHaveBeenCalled();
     expect(search).not.toHaveBeenCalled();
   });

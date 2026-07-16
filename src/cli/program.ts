@@ -21,6 +21,7 @@ import { MAX_SEARCH_CONTEXT, MAX_SEARCH_LIMIT } from "../application/search-sess
 import { MAX_SHOW_CONTEXT } from "../application/show-session.ts";
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
 import { parseSessionIdentity } from "../domain/session-identity.ts";
+import { canonicalizeSessionSearchText } from "../domain/session-query.ts";
 import type {
   SessionFilterInput,
   SessionEntryFilterInput,
@@ -30,7 +31,6 @@ import type {
   SessionSourceState,
 } from "../domain/session-query.ts";
 import type { Actor, ContentOrigin, SessionIdentity } from "../domain/session.ts";
-import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 import { encodeStructuredJson } from "./encode-json-output.ts";
 import { encodeStructuredJsonl } from "./encode-jsonl-output.ts";
 import {
@@ -226,12 +226,10 @@ export function createProgram(options: ProgramOptions): Command {
     )
     .option("--cursor <cursor>", "continue a previous search query")
     .action(async (text: string, values: SearchOptionValues) => {
-      if (splitUnicodeWhitespaceTerms(text).length === 0) {
-        usage("search text must not be blank");
-      }
+      const searchText = parseSearchText(text);
       const filter = searchFilter(values);
       const result = await options.search({
-        text,
+        text: searchText,
         termMode: values.match,
         ...(filter === undefined ? {} : { filter }),
         ...(values.limit === undefined ? {} : { limit: values.limit }),
@@ -702,4 +700,13 @@ function parseIdentity(value: string): SessionIdentity {
 
 function usage(message: string): never {
   throw new CommanderError(2, "sessions.invalid-argument", `error: ${message}`);
+}
+
+function parseSearchText(value: string): string {
+  try {
+    return canonicalizeSessionSearchText(value);
+  } catch (error) {
+    if (error instanceof TypeError) usage(error.message);
+    throw error;
+  }
 }

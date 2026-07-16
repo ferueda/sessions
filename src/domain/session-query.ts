@@ -269,7 +269,7 @@ export function createSessionListQuery(input: SessionListQueryInput): SessionLis
 }
 
 export function createSessionSearchQuery(input: SessionSearchQueryInput): SessionSearchQuery {
-  const text = canonicalSearchText(input.text);
+  const text = canonicalizeSessionSearchText(input.text);
   const termMode = optionalLiteral(input.termMode, SEARCH_TERM_MODES, "Search term mode") ?? "all";
   const filter = createSessionSearchFilter(input.filter);
   const limit = boundedInteger(input.limit, 1, MAX_SESSION_QUERY_LIMIT, "Search limit");
@@ -482,7 +482,7 @@ function boundedInteger(value: number, minimum: number, maximum: number, label: 
   return value;
 }
 
-function canonicalSearchText(value: string): string {
+export function canonicalizeSessionSearchText(value: string): string {
   if (typeof value !== "string" || !value.isWellFormed()) {
     throw new TypeError("Search text must be a well-formed string");
   }
