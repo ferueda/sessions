@@ -25,8 +25,8 @@ plan and independently reviewable pull request before work starts. The accepted
 ## Current state
 
 Milestones 0 through 7 are complete. M8 agent analysis retrieval is in progress:
-query-scoped lineage resolution is complete and bounded show/export ranges are
-next.
+query-scoped lineage resolution and rank-first bounded search hydration are
+complete, and bounded show/export ranges are next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -803,11 +803,12 @@ transcript export.
 
 Execution sequence:
 
-1. **Complete:** optimize query-scoped lineage resolution and prove the
-   broad-search cost;
-2. **Next:** expose bounded show/export ranges through the existing selector;
-3. add the textless entry inventory and its structured contract;
-4. add literal-any search, per-result root attribution, and activity bounds.
+1. **Complete:** optimize query-scoped lineage resolution;
+2. **Complete:** rank compact search coordinates before bounded text, digest,
+   and snippet hydration, with exact output and measured broad-search proof;
+3. **Next:** expose bounded show/export ranges through the existing selector;
+4. add the textless entry inventory and its structured contract;
+5. add literal-any search, per-result root attribution, and activity bounds.
 
 Each item may use its own executor plan and pull request. Later items rebase on
 the accepted earlier query contract; none may move analysis policy into adapters.
@@ -815,6 +816,7 @@ the accepted earlier query contract; none may move analysis policy into adapters
 Primary change areas:
 
 - query-scoped lineage resolution and focused performance proof;
+- rank-first bounded search hydration and deterministic measurement;
 - provider-neutral entry-query values, repository port, application service, and
   SQLite implementation;
 - list/search/entry structured DTOs and CLI grammar;

@@ -225,6 +225,11 @@ fresh-library behavior.
 
 SQLite owns literal FTS translation, parameterized filter SQL, deterministic
 rank/order, bounded context assembly, query-wide counts, and cursor encoding.
+Search ranks compact coordinates first, keeps the extra rank-only row used for
+pagination, and hydrates text, digest, and snippets only for the selected page.
+Snippet markers are checked against those selected canonical texts and retried
+on collision, so search does not scan or hydrate the rest of the library.
+Support remains exact and query-wide rather than being inferred from the page.
 `fts-projection.ts` is the shared bootstrap/repair definition. These modules do
 not import adapters. Codex supplies canonical lineage coverage/relations and
 observed tool evidence only; it cannot decide roots, counts, filters, ranking, or
