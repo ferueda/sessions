@@ -24,7 +24,10 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 9 are complete. M10 core evidence hardening is next.
+Milestones 0 through 9 are complete. M10 core evidence hardening is underway:
+capture truth and all-tracked reconciliation are implemented, bounded
+source-change retry is next, and instrumentation plus measured optimization
+follow.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -38,7 +41,8 @@ The repository now includes:
 - an atomic provider-neutral canonical repository with collision-safe content,
   last-good freshness state, bounded run diagnostics, and derived FTS data;
 - an internal provider-neutral indexing service with complete-discovery admission,
-  incremental reads, last-good preservation, exact-source reconciliation, and
+  incremental reads, last-good preservation, all-tracked exact-source
+  reconciliation, and
   repository-authoritative reports;
 - renewable writer leases, transactional mutation fencing, abandoned-run
   interruption, and valid WAL recovery;
@@ -81,8 +85,8 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have capture-scope reporting, bounded recovery for a source that
-changes during its first read, proportionate unchanged-run performance, the
+It does not yet have bounded recovery for a source that changes during its first
+read, indexing instrumentation or measured unchanged-run optimization, the
 Cursor adapter, release automation, or pinned Harness integration. M10 settles
 the provider-neutral capture and indexing contract before M11 proves the same
 complete surface through a second passive adapter.
@@ -122,13 +126,13 @@ the core contract:
   `source-changed`, but indexing records that terminal outcome without one fresh
   retry. An existing last-good snapshot remains queryable as stale; a first-read
   failure has no canonical document and remains unindexed.
-- List, search, and entries describe retained matches but cannot tell an agent
+- At that baseline, list, search, and entries described retained matches but
+  could not tell an agent
   that tracked sessions were discovered and never captured. A no-hit result can
   therefore look more complete than the retained evidence warrants.
-- Complete-scan reconciliation currently considers only identities with a
-  canonical document. An unindexed tracking row can remain marked present after
-  a later complete scan no longer observes it, which must be corrected before
-  capture-scope counts become public evidence.
+- Complete-scan reconciliation then considered only identities with a canonical
+  document. An unindexed tracking row could remain marked present after a later
+  complete scan no longer observed it.
 
 The same comparison measured an almost entirely unchanged real library taking
 nearly two minutes to index. The code avoids transcript reads for unchanged
@@ -199,7 +203,7 @@ flowchart TD
   M6 --> M7["M7 Export and CLI schemas — complete"]
   M7 --> M8["M8 Agent analysis retrieval — complete"]
   M8 --> M9["M9 Packaged Agent Skill — complete"]
-  M9 --> M10["M10 Capture truth and routine-index hardening — next"]
+  M9 --> M10["M10 Capture truth and routine-index hardening — underway"]
   M10 --> M11["M11 Cursor parity"]
   M11 --> M12["M12 Release qualification"]
   M12 --> M13["M13 Parity, Harness cutover, V1"]
@@ -1106,6 +1110,10 @@ without weakening correctness.
 This milestone may use separate scoped executor plans when capture truth, retry
 recovery, and measured performance work would be safer to review independently.
 All parts remain provider-neutral and land before Cursor adapter work.
+
+Capture-scope reporting and all-tracked complete-scan reconciliation are
+implemented. Bounded source-change retry is the next scoped item;
+instrumentation and measured stable-run optimization follow it.
 
 Primary change areas:
 

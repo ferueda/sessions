@@ -31,6 +31,49 @@ import {
 import { createTestDocument, createTestEntry, createTestSegment } from "../fixtures/session.ts";
 
 describe("SQLite session query", () => {
+  test("reports registered coverage on no-tracking and no-hit list pages", async () => {
+    const database = migratedDatabase();
+    try {
+      database
+        .prepare(
+          `INSERT INTO sessions_source_instances (
+             kind, instance_id, coverage_status, coverage_observed_at
+           ) VALUES ('synthetic-empty', 'complete', 'complete', ?),
+                    ('synthetic-empty', 'unknown', 'unknown', ?)`,
+        )
+        .run("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:00.000Z");
+      const repository = createSqliteSessionQuery(database);
+
+      const complete = await repository.list(
+        createSessionListQuery({
+          filter: { source: "synthetic-empty", instance: "complete", nativeId: "absent" },
+          limit: 20,
+        }),
+      );
+      expect(complete.sessions).toEqual([]);
+      expect(complete.captureScope).toMatchObject({
+        status: "complete",
+        trackedSessions: 0,
+        sourceCoverage: { complete: 1, unknown: 0 },
+      });
+
+      const unknown = await repository.list(
+        createSessionListQuery({
+          filter: { source: "synthetic-empty", instance: "unknown", nativeId: "absent" },
+          limit: 20,
+        }),
+      );
+      expect(unknown.sessions).toEqual([]);
+      expect(unknown.captureScope).toMatchObject({
+        status: "incomplete",
+        trackedSessions: 0,
+        sourceCoverage: { complete: 0, unknown: 1 },
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   test("searches literal special text and returns match-centered bounded evidence", async () => {
     const fixture = await seededQueryFixture();
     try {
@@ -85,9 +128,10 @@ describe("SQLite session query", () => {
       );
       expect(collision.hits[0]?.snippet.text).toContain("AMBIGUOUS_LATE_MATCH");
 
-      await expect(
-        repository.search(createSessionSearchQuery({ text: "---", limit: 20, context: 0 })),
-      ).resolves.toEqual({
+      const emptyLiteral = await repository.search(
+        createSessionSearchQuery({ text: "---", limit: 20, context: 0 }),
+      );
+      expect(emptyLiteral).toMatchObject({
         hits: [],
         support: {
           occurrences: 0,
@@ -95,6 +139,12 @@ describe("SQLite session query", () => {
           uniqueKnownRoots: 0,
           unknownLineageSessions: 0,
         },
+      });
+      expect(emptyLiteral.captureScope).toMatchObject({
+        status: "complete",
+        trackedSessions: 2,
+        sourceCoverage: { complete: 1, unknown: 0 },
+        unassessedFilters: ["searchText"],
       });
     } finally {
       fixture.database.close();
@@ -326,9 +376,16 @@ describe("SQLite session query", () => {
         }),
       );
       expect(unknown.sessions).toHaveLength(2);
-      await expect(
-        repository.list(createSessionListQuery({ filter: { sourceState: "present" }, limit: 20 })),
-      ).resolves.toEqual({ sessions: [] });
+      const noPresent = await repository.list(
+        createSessionListQuery({ filter: { sourceState: "present" }, limit: 20 }),
+      );
+      expect(noPresent.sessions).toEqual([]);
+      expect(noPresent.captureScope).toMatchObject({
+        status: "incomplete",
+        trackedSessions: 0,
+        sourceCoverage: { complete: 0, unknown: 1 },
+        appliedFilters: ["sourceState"],
+      });
     } finally {
       interruptOwnedRunsAndReleaseWriterLease(fixture.database, lease, {
         now: () => new Date("2026-07-14T15:00:00.000Z"),

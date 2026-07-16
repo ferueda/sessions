@@ -8,7 +8,9 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > implemented: explicit durable indexing, bounded list/search/entries/show,
 > portable JSON/JSONL export, scoped deletion, source diagnostics, orphan
 > repair, and SQLite page reclamation. The packaged Sessions Agent Skill adds
-> seven evidence-first analysis routes over those commands. Cursor indexing and
+> seven evidence-first analysis routes over those commands. Retained query pages
+> now report capture scope so empty or partial results expose stale, unindexed,
+> and unknown-coverage limits. Cursor indexing and
 > the npm release remain planned; Markdown presentation is deferred beyond V1.
 
 ## Why Sessions
@@ -128,6 +130,14 @@ List, search, and entries return a query-derived known retained root or
 sessions missing both timestamps do not match. Root attribution is not added to
 show, export, canonical documents, or document digests.
 
+Those three paged queries also return one aggregate `captureScope`. It reports
+tracked, retained-current, retained-stale, unindexed, effective source-state,
+source-coverage, and latest-failure counts without identities or filter values.
+`appliedFilters` names source/tracking filters the aggregate can evaluate;
+`unassessedFilters` names canonical metadata, entry, or search-text filters that
+cannot classify an unindexed session. Capture scope describes evidence
+availability. Search `support` still counts retained matches only.
+
 `entries` inventories retained entry structure without requiring search text.
 It can return all matching entries or the first/last canonical ordinal per
 session after exact entry filters. Results stay in binary source identity and
@@ -170,6 +180,9 @@ exact temporary workspace.
 `doctor` and `paths` inspect runtime, library, and Codex source readiness without
 indexing or creating state. All runtime operation is local, network-free, and
 telemetry-free.
+For a ready library, incomplete capture evidence is a warning with `ok: true`;
+canonical, foreign-key, FTS, reachability, run, and lease failures keep their
+existing failed-health semantics.
 
 Pre-alpha builds recognize one current on-disk baseline. Databases created by
 earlier development builds are not upgraded or deleted automatically; use a fresh
@@ -189,8 +202,9 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M9 packaged Agent Skill work is complete. M10 proves Cursor parity. Markdown
-remains deferred beyond V1; `--format md` is not accepted today.
+M9 packaged Agent Skill work is complete. M10 hardens core capture evidence,
+bounded source-change recovery, and routine indexing cost. M11 proves Cursor
+parity. Markdown remains deferred beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

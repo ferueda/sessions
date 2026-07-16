@@ -1,9 +1,13 @@
 import type { IndexPaths } from "./index-lifecycle.ts";
+import type { SessionCaptureScope } from "../../domain/session-capture-scope.ts";
 
 export type IndexHealthCheck = "failed" | "ok";
 export type IndexFtsSecureDeleteHealth = "enabled" | "missing" | "unsupported";
 export type IndexPageReclamationHealth = "incremental" | "invalid";
 export type IndexContentReachabilityHealth = "inspection-failed" | "ok" | "orphaned";
+export type IndexCaptureScopeHealth =
+  | SessionCaptureScope
+  | { readonly status: "inspection-failed" };
 export type IndexWriterLeaseHealth =
   | "clear-live"
   | "compact-live"
@@ -16,6 +20,7 @@ export type IndexWriterLeaseHealth =
 
 export interface ReadyIndexHealth {
   readonly ok: boolean;
+  readonly captureScope: IndexCaptureScopeHealth;
   readonly canonicalIntegrity: IndexHealthCheck;
   readonly foreignKeys: IndexHealthCheck;
   readonly contentReachability: IndexContentReachabilityHealth;

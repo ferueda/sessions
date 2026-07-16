@@ -15,6 +15,11 @@ import {
   type SessionSearchEntry,
 } from "../domain/session-query.ts";
 import type { SessionRootResolution } from "../domain/session-lineage.ts";
+import {
+  copySessionCaptureScope,
+  createUninitializedCaptureScope,
+  type SessionCaptureScope,
+} from "../domain/session-capture-scope.ts";
 
 export const DEFAULT_ENTRY_LIST_LIMIT = 50;
 
@@ -27,6 +32,7 @@ export interface SelectedSessionEntryInventoryItem {
 
 export interface ListSessionEntriesResult {
   readonly entries: readonly SelectedSessionEntryInventoryItem[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -48,7 +54,10 @@ export async function listSessionEntries(input: {
   const state = await input.lifecycle.inspect(input.paths);
   if (state.status === "uninitialized") {
     if (query.cursor !== undefined) throw new SessionQueryOperationalError("stale-cursor");
-    return Object.freeze({ entries: Object.freeze([]) });
+    return Object.freeze({
+      entries: Object.freeze([]),
+      captureScope: createUninitializedCaptureScope(query.filter),
+    });
   }
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
@@ -56,6 +65,7 @@ export async function listSessionEntries(input: {
     const page = await reader.query.entries(query);
     return Object.freeze({
       entries: Object.freeze(page.entries.map(selectEntryInventoryItem)),
+      captureScope: copySessionCaptureScope(page.captureScope),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     });
   });

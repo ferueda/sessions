@@ -66,7 +66,89 @@ export function runSessionQueryContract(
             limit: 200,
           }),
         ),
-      ).resolves.toEqual({ sessions: [] });
+      ).resolves.toMatchObject({ sessions: [] });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("reports one capture scope with exact filter disclosure for every query kind", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    try {
+      if (corpus.present.workspace === undefined) throw new Error("Corpus workspace is required");
+      const listed = await fixture.query.list(
+        createSessionListQuery({
+          filter: {
+            source: corpus.present.identity.source.kind,
+            instance: corpus.present.identity.source.instanceId,
+            nativeId: corpus.present.identity.nativeId,
+            sourceState: "present",
+            workspace: corpus.present.workspace,
+            capturedAfter: before(SESSION_QUERY_CONTRACT_TIMES.present),
+            capturedBefore: after(SESSION_QUERY_CONTRACT_TIMES.present),
+            observedAfter: before(SESSION_QUERY_CONTRACT_TIMES.present),
+            observedBefore: after(SESSION_QUERY_CONTRACT_TIMES.present),
+            session: corpus.present.identity,
+          },
+          limit: 20,
+        }),
+      );
+      expect(listed.captureScope).toEqual({
+        status: "complete",
+        trackedSessions: 1,
+        retainedSessions: { current: 1, stale: 0 },
+        unindexedSessions: 0,
+        sourceState: { present: 1, missing: 0, unknown: 0 },
+        sourceCoverage: { complete: 1, unknown: 0 },
+        latestFailures: {
+          unavailable: 0,
+          unreadable: 0,
+          malformed: 0,
+          sourceChanged: 0,
+          unsupportedFormat: 0,
+          repositoryWrite: 0,
+        },
+        appliedFilters: ["source", "instance", "nativeId", "sourceState", "session"],
+        unassessedFilters: [
+          "workspace",
+          "capturedAfter",
+          "capturedBefore",
+          "observedAfter",
+          "observedBefore",
+        ],
+      });
+
+      const searched = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "filterable",
+          filter: { session: corpus.present.identity, actor: "model" },
+          limit: 20,
+          context: 0,
+        }),
+      );
+      expect(searched.captureScope).toMatchObject({
+        status: "complete",
+        trackedSessions: 1,
+        appliedFilters: ["session"],
+        unassessedFilters: ["actor", "searchText"],
+      });
+
+      const entries = await fixture.query.entries(
+        createSessionEntryQuery({
+          filter: { session: corpus.unknown.identity, entryKind: "message" },
+          limit: 20,
+        }),
+      );
+      expect(entries.captureScope).toMatchObject({
+        status: "incomplete",
+        trackedSessions: 1,
+        retainedSessions: { current: 1, stale: 0 },
+        sourceState: { present: 0, missing: 0, unknown: 1 },
+        sourceCoverage: { complete: 0, unknown: 1 },
+        appliedFilters: ["session"],
+        unassessedFilters: ["entryKind"],
+      });
     } finally {
       await fixture.close();
     }
@@ -582,7 +664,7 @@ export function runSessionQueryContract(
             limit: 200,
           }),
         ),
-      ).resolves.toEqual({ entries: [] });
+      ).resolves.toMatchObject({ entries: [] });
     } finally {
       await fixture.close();
     }
@@ -866,6 +948,10 @@ export function runSessionQueryContract(
 
       const firstList = await fixture.query.list(createSessionListQuery({ limit: 2 }));
       if (firstList.nextCursor === undefined) throw new Error("Expected list continuation");
+      const secondList = await fixture.query.list(
+        createSessionListQuery({ limit: 2, cursor: firstList.nextCursor }),
+      );
+      expect(secondList.captureScope).toEqual(firstList.captureScope);
       await expect(
         fixture.query.list(
           createSessionListQuery({
@@ -896,6 +982,15 @@ export function runSessionQueryContract(
       expect(new Set(searched).size).toBe(searched.length);
 
       if (first.nextCursor === undefined) throw new Error("Expected search continuation");
+      const secondSearch = await fixture.query.search(
+        createSessionSearchQuery({
+          text: "pageable corpus evidence",
+          limit: DEFAULT_SEARCH_LIMIT,
+          context: 0,
+          cursor: first.nextCursor,
+        }),
+      );
+      expect(secondSearch.captureScope).toEqual(first.captureScope);
       await expect(
         fixture.query.search(
           createSessionSearchQuery({

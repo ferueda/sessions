@@ -4,6 +4,11 @@ import { selectSessionSummary, type SelectedSessionSummary } from "./session-pre
 import { admitSessionQueryCursor, SessionQueryOperationalError } from "./session-query-error.ts";
 import { selectSessionRoot } from "./session-root-presentation.ts";
 import {
+  copySessionCaptureScope,
+  createUninitializedCaptureScope,
+  type SessionCaptureScope,
+} from "../domain/session-capture-scope.ts";
+import {
   createSessionListQuery,
   MAX_SESSION_QUERY_LIMIT,
   type SessionFilterInput,
@@ -20,6 +25,7 @@ export interface SelectedSessionListItem extends SelectedSessionSummary {
 
 export interface ListSessionsResult {
   readonly sessions: readonly SelectedSessionListItem[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -39,7 +45,10 @@ export async function listSessions(input: {
   const state = await input.lifecycle.inspect(input.paths);
   if (state.status === "uninitialized") {
     if (query.cursor !== undefined) throw new SessionQueryOperationalError("stale-cursor");
-    return Object.freeze({ sessions: Object.freeze([]) });
+    return Object.freeze({
+      sessions: Object.freeze([]),
+      captureScope: createUninitializedCaptureScope(query.filter),
+    });
   }
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
@@ -47,6 +56,7 @@ export async function listSessions(input: {
     const page = await reader.query.list(query);
     return Object.freeze({
       sessions: Object.freeze(page.sessions.map(selectListItem)),
+      captureScope: copySessionCaptureScope(page.captureScope),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     });
   });

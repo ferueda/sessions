@@ -34,6 +34,7 @@ import {
 import { createRetainedSessionRootResolver } from "./sqlite-query-lineage.ts";
 import { readSessionSummary } from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 
 const ORIGINS = new Set<ContentOrigin>([
   "human",
@@ -52,6 +53,7 @@ export function listSqliteSessionEntries(
   query: SessionEntryQuery,
 ): SessionEntryPage {
   const cursor = prepareEntryCursor(database, query);
+  const captureScope = readSqliteCaptureScope(database, query.filter);
   const rows = readEntryRows(database, query, cursor.offset);
   const pageRows = rows.slice(0, query.limit);
   const entries = pageRows.length === 0 ? [] : hydrateEntries(database, pageRows, query);
@@ -68,6 +70,7 @@ export function listSqliteSessionEntries(
       : undefined;
   return Object.freeze({
     entries: Object.freeze(entries),
+    captureScope,
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }

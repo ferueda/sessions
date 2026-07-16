@@ -145,8 +145,8 @@ async function runSource(
       await index.replaceSession(run, replacement);
     }
 
-    const indexed = await index.listIndexedIdentities(selection.instance);
-    const ordered = validateIndexedIdentities(indexed, selection.instance);
+    const tracked = await index.listTrackedIdentities(selection.instance);
+    const ordered = validateTrackedIdentities(tracked, selection.instance);
     for (const identity of ordered) {
       if (!seen.has(identity.nativeId)) await index.recordMissing(run, identity);
     }
@@ -219,7 +219,7 @@ function matchesLastGoodRevision(freshness: SessionFreshness, revision: SessionR
   );
 }
 
-function validateIndexedIdentities(
+function validateTrackedIdentities(
   identities: readonly SessionIdentity[],
   source: SourceInstance,
 ): readonly SessionIdentity[] {
@@ -227,10 +227,10 @@ function validateIndexedIdentities(
   const result: SessionIdentity[] = [];
   for (const identity of identities) {
     if (!isSessionIdentity(identity) || !sameSource(identity.source, source)) {
-      throw new TypeError("Session repository returned an invalid indexed identity");
+      throw new TypeError("Session repository returned an invalid tracked identity");
     }
     if (nativeIds.has(identity.nativeId)) {
-      throw new TypeError("Session repository returned a duplicate indexed identity");
+      throw new TypeError("Session repository returned a duplicate tracked identity");
     }
     nativeIds.add(identity.nativeId);
     result.push({ source: { ...source }, nativeId: identity.nativeId });

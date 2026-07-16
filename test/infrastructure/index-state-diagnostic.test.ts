@@ -9,6 +9,7 @@ import type {
   IndexStateInspector,
 } from "../../src/application/ports/index-lifecycle.ts";
 import type { IndexState } from "../../src/domain/index-state.ts";
+import type { SessionCaptureScope } from "../../src/domain/session-capture-scope.ts";
 import { createIndexStateDiagnostic } from "../../src/infrastructure/state/index-state-diagnostic.ts";
 
 const paths: IndexPaths = {
@@ -68,6 +69,57 @@ describe("createIndexStateDiagnostic", () => {
         writerLease: "free",
         activeRuns: "0",
         interruptedRuns: "0",
+        captureStatus: "complete",
+        trackedSessions: "0",
+        retainedCurrentSessions: "0",
+        retainedStaleSessions: "0",
+        unindexedSessions: "0",
+        sourceStatePresentSessions: "0",
+        sourceStateMissingSessions: "0",
+        sourceStateUnknownSessions: "0",
+        sourceCoverageComplete: "1",
+        sourceCoverageUnknown: "0",
+        latestFailureUnavailable: "0",
+        latestFailureUnreadable: "0",
+        latestFailureMalformed: "0",
+        latestFailureSourceChanged: "0",
+        latestFailureUnsupportedFormat: "0",
+        latestFailureRepositoryWrite: "0",
+      },
+    });
+  });
+
+  test("warns without failing when ready-library evidence may be incomplete", async () => {
+    const outcome = await diagnosticFor(
+      {
+        status: "ready",
+        initialized: true,
+        schemaVersion: 1,
+        supportedSchemaVersion: 1,
+      },
+      { ...healthyIndex, captureScope: incompleteCaptureScope },
+    ).run();
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      summary: "Index schema 1 is ready; evidence may be incomplete",
+      details: {
+        captureStatus: "incomplete",
+        trackedSessions: "1",
+        retainedCurrentSessions: "0",
+        retainedStaleSessions: "0",
+        unindexedSessions: "1",
+        sourceStatePresentSessions: "1",
+        sourceStateMissingSessions: "0",
+        sourceStateUnknownSessions: "0",
+        sourceCoverageComplete: "1",
+        sourceCoverageUnknown: "0",
+        latestFailureUnavailable: "0",
+        latestFailureUnreadable: "1",
+        latestFailureMalformed: "0",
+        latestFailureSourceChanged: "0",
+        latestFailureUnsupportedFormat: "0",
+        latestFailureRepositoryWrite: "0",
       },
     });
   });
@@ -88,6 +140,7 @@ describe("createIndexStateDiagnostic", () => {
         writerLease: "expired",
         activeRuns: 1,
         interruptedRuns: 2,
+        captureScope: incompleteCaptureScope,
       },
     ).run();
 
@@ -113,6 +166,22 @@ describe("createIndexStateDiagnostic", () => {
         writerLease: "expired",
         activeRuns: "1",
         interruptedRuns: "2",
+        captureStatus: "incomplete",
+        trackedSessions: "1",
+        retainedCurrentSessions: "0",
+        retainedStaleSessions: "0",
+        unindexedSessions: "1",
+        sourceStatePresentSessions: "1",
+        sourceStateMissingSessions: "0",
+        sourceStateUnknownSessions: "0",
+        sourceCoverageComplete: "1",
+        sourceCoverageUnknown: "0",
+        latestFailureUnavailable: "0",
+        latestFailureUnreadable: "1",
+        latestFailureMalformed: "0",
+        latestFailureSourceChanged: "0",
+        latestFailureUnsupportedFormat: "0",
+        latestFailureRepositoryWrite: "0",
       },
     });
   });
@@ -259,6 +328,24 @@ describe("createIndexStateDiagnostic", () => {
 
 const healthyIndex: ReadyIndexHealth = {
   ok: true,
+  captureScope: {
+    status: "complete",
+    trackedSessions: 0,
+    retainedSessions: { current: 0, stale: 0 },
+    unindexedSessions: 0,
+    sourceState: { present: 0, missing: 0, unknown: 0 },
+    sourceCoverage: { complete: 1, unknown: 0 },
+    latestFailures: {
+      unavailable: 0,
+      unreadable: 0,
+      malformed: 0,
+      sourceChanged: 0,
+      unsupportedFormat: 0,
+      repositoryWrite: 0,
+    },
+    appliedFilters: [],
+    unassessedFilters: [],
+  },
   canonicalIntegrity: "ok",
   foreignKeys: "ok",
   contentReachability: "ok",
@@ -273,6 +360,25 @@ const healthyIndex: ReadyIndexHealth = {
   writerLease: "free",
   activeRuns: 0,
   interruptedRuns: 0,
+};
+
+const incompleteCaptureScope: SessionCaptureScope = {
+  status: "incomplete",
+  trackedSessions: 1,
+  retainedSessions: { current: 0, stale: 0 },
+  unindexedSessions: 1,
+  sourceState: { present: 1, missing: 0, unknown: 0 },
+  sourceCoverage: { complete: 1, unknown: 0 },
+  latestFailures: {
+    unavailable: 0,
+    unreadable: 1,
+    malformed: 0,
+    sourceChanged: 0,
+    unsupportedFormat: 0,
+    repositoryWrite: 0,
+  },
+  appliedFilters: [],
+  unassessedFilters: [],
 };
 
 function diagnosticFor(state: IndexState, health: ReadyIndexHealth = healthyIndex) {

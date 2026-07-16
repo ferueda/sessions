@@ -12,6 +12,7 @@ import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { SelectedText } from "../application/session-presentation.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
+import type { SessionCaptureScope } from "../domain/session-capture-scope.ts";
 import type { SessionRootResolution } from "../domain/session-lineage.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
 import {
@@ -104,23 +105,26 @@ export function renderDataRepairOrphans(
 }
 
 export function renderList(result: ListSessionsResult): string {
-  if (result.sessions.length === 0) return "No sessions found.\n";
-  const lines = result.sessions.map((session) => {
-    const identity = renderScalar(formatSessionIdentity(session.identity));
-    const title = session.title === undefined ? "(untitled)" : renderSelectedText(session.title);
-    const capture = session.capturedAt;
-    return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]\n${renderRoot(session.root)}`;
-  });
-  if (result.nextCursor !== undefined) {
+  const lines =
+    result.sessions.length === 0
+      ? ["No sessions found."]
+      : result.sessions.map((session) => {
+          const identity = renderScalar(formatSessionIdentity(session.identity));
+          const title =
+            session.title === undefined ? "(untitled)" : renderSelectedText(session.title);
+          const capture = session.capturedAt;
+          return `${identity}  ${title}  [${session.freshness}; ${session.sourceState}; ${capture}]\n${renderRoot(session.root)}`;
+        });
+  if (result.sessions.length > 0 && result.nextCursor !== undefined) {
     lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
   }
+  appendCaptureScopeWarning(lines, result.captureScope);
   return `${lines.join("\n")}\n`;
 }
 
 export function renderSearch(result: SearchSessionsResult): string {
-  if (result.hits.length === 0) return "No matches found.\n";
-
   const lines: string[] = [];
+  if (result.hits.length === 0) lines.push("No matches found.");
   for (const [index, hit] of result.hits.entries()) {
     if (index > 0) lines.push("");
     const identity = renderScalar(formatSessionIdentity(hit.session.identity));
@@ -154,20 +158,22 @@ export function renderSearch(result: SearchSessionsResult): string {
     }
   }
 
-  lines.push(
-    "",
-    `Support: ${String(result.support.occurrences)} occurrence(s); ${String(result.support.uniqueContent)} unique content value(s); ${String(result.support.uniqueKnownRoots)} known root(s); ${String(result.support.unknownLineageSessions)} unknown-lineage session(s)`,
-  );
-  if (result.nextCursor !== undefined) {
+  if (result.hits.length > 0) {
+    lines.push(
+      "",
+      `Support: ${String(result.support.occurrences)} occurrence(s); ${String(result.support.uniqueContent)} unique content value(s); ${String(result.support.uniqueKnownRoots)} known root(s); ${String(result.support.unknownLineageSessions)} unknown-lineage session(s)`,
+    );
+  }
+  if (result.hits.length > 0 && result.nextCursor !== undefined) {
     lines.push(`Next cursor: ${renderScalar(result.nextCursor)}`);
   }
+  appendCaptureScopeWarning(lines, result.captureScope);
   return `${lines.join("\n")}\n`;
 }
 
 export function renderEntries(result: ListSessionEntriesResult): string {
-  if (result.entries.length === 0) return "No entries found.\n";
-
   const lines: string[] = [];
+  if (result.entries.length === 0) lines.push("No entries found.");
   for (const [index, item] of result.entries.entries()) {
     if (index > 0) lines.push("");
     const identity = renderScalar(formatSessionIdentity(item.session.identity));
@@ -183,9 +189,10 @@ export function renderEntries(result: ListSessionEntriesResult): string {
       `Content: ${String(item.content.textSegmentCount)} text segment(s); ${String(item.content.omittedSegmentCount)} omitted segment(s); ${String(item.content.unpreviewedTextSegmentCount)} unpreviewed text segment(s)`,
     );
   }
-  if (result.nextCursor !== undefined) {
+  if (result.entries.length > 0 && result.nextCursor !== undefined) {
     lines.push("", `Next cursor: ${renderScalar(result.nextCursor)}`);
   }
+  appendCaptureScopeWarning(lines, result.captureScope);
   return `${lines.join("\n")}\n`;
 }
 
@@ -235,6 +242,16 @@ function renderRoot(root: SessionRootResolution): string {
   return root.kind === "known"
     ? `Root: ${renderScalar(formatSessionIdentity(root.root))}`
     : "Root: unknown";
+}
+
+function appendCaptureScopeWarning(lines: string[], scope: SessionCaptureScope): void {
+  if (scope.status === "complete") return;
+  const warning =
+    scope.status === "uninitialized"
+      ? "Warning: retained evidence may be incomplete (capture scope is uninitialized)."
+      : `Warning: retained evidence may be incomplete (${String(scope.retainedSessions.stale)} stale, ${String(scope.unindexedSessions)} unindexed, ${String(scope.sourceCoverage.unknown)} source(s) with unknown coverage).`;
+  if (lines.length > 0) lines.push("");
+  lines.push(warning);
 }
 
 function renderSelectedText(value: SelectedText): string {

@@ -1,4 +1,5 @@
 import type {
+  IndexCaptureScopeHealth,
   IndexHealthInspector,
   ReadyIndexHealth,
 } from "../../application/ports/index-health.ts";
@@ -21,9 +22,11 @@ export function createIndexStateDiagnostic(
           const health = await inspector.inspectHealth(paths);
           return {
             ok: health.ok,
-            summary: health.ok
-              ? `Index schema ${String(state.schemaVersion)} is ready`
-              : `Index schema ${String(state.schemaVersion)} failed health checks`,
+            summary: !health.ok
+              ? `Index schema ${String(state.schemaVersion)} failed health checks`
+              : health.captureScope.status === "incomplete"
+                ? `Index schema ${String(state.schemaVersion)} is ready; evidence may be incomplete`
+                : `Index schema ${String(state.schemaVersion)} is ready`,
             details: { ...detailsFor(state), ...healthDetails(health) },
           };
         } catch {
@@ -59,6 +62,48 @@ function healthDetails(health: ReadyIndexHealth): Readonly<Record<string, string
     writerLease: health.writerLease,
     activeRuns: String(health.activeRuns),
     interruptedRuns: String(health.interruptedRuns),
+    ...captureScopeDetails(health.captureScope),
+  };
+}
+
+function captureScopeDetails(scope: IndexCaptureScopeHealth): Readonly<Record<string, string>> {
+  if (scope.status === "inspection-failed") {
+    return {
+      captureStatus: scope.status,
+      trackedSessions: "unknown",
+      retainedCurrentSessions: "unknown",
+      retainedStaleSessions: "unknown",
+      unindexedSessions: "unknown",
+      sourceStatePresentSessions: "unknown",
+      sourceStateMissingSessions: "unknown",
+      sourceStateUnknownSessions: "unknown",
+      sourceCoverageComplete: "unknown",
+      sourceCoverageUnknown: "unknown",
+      latestFailureUnavailable: "unknown",
+      latestFailureUnreadable: "unknown",
+      latestFailureMalformed: "unknown",
+      latestFailureSourceChanged: "unknown",
+      latestFailureUnsupportedFormat: "unknown",
+      latestFailureRepositoryWrite: "unknown",
+    };
+  }
+  return {
+    captureStatus: scope.status,
+    trackedSessions: String(scope.trackedSessions),
+    retainedCurrentSessions: String(scope.retainedSessions.current),
+    retainedStaleSessions: String(scope.retainedSessions.stale),
+    unindexedSessions: String(scope.unindexedSessions),
+    sourceStatePresentSessions: String(scope.sourceState.present),
+    sourceStateMissingSessions: String(scope.sourceState.missing),
+    sourceStateUnknownSessions: String(scope.sourceState.unknown),
+    sourceCoverageComplete: String(scope.sourceCoverage.complete),
+    sourceCoverageUnknown: String(scope.sourceCoverage.unknown),
+    latestFailureUnavailable: String(scope.latestFailures.unavailable),
+    latestFailureUnreadable: String(scope.latestFailures.unreadable),
+    latestFailureMalformed: String(scope.latestFailures.malformed),
+    latestFailureSourceChanged: String(scope.latestFailures.sourceChanged),
+    latestFailureUnsupportedFormat: String(scope.latestFailures.unsupportedFormat),
+    latestFailureRepositoryWrite: String(scope.latestFailures.repositoryWrite),
   };
 }
 

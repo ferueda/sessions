@@ -29,6 +29,8 @@ const ACTIVITY_AFTER = "2025-07-14T14:19:59.999Z";
 const ACTIVITY_BEFORE = "2025-07-14T14:20:00.001Z";
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
 const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
+const UNINITIALIZED_LIST_OUTPUT =
+  "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n";
 
 /** Exercise the complete distribution journey through a spawned CLI, never through imports. */
 export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<void> {
@@ -109,7 +111,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "list",
     ]);
     assertCommand(freshList, 0, "fresh list");
-    assert.equal(freshList.stdout, "No sessions found.\n");
+    assert.equal(freshList.stdout, UNINITIALIZED_LIST_OUTPUT);
     assert.equal(existsSync(dataDirectory), false, "fresh list created Sessions state");
 
     const doctor = await stableProviderCommand(options, fixture.codexHome, environment, [
@@ -675,7 +677,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "list",
     ]);
     assertCommand(afterClear, 0, "list after data clear");
-    assert.equal(afterClear.stdout, "No sessions found.\n");
+    assert.equal(afterClear.stdout, UNINITIALIZED_LIST_OUTPUT);
     assert.equal(existsSync(oldCacheDirectory), false, "CLI read or wrote the old cache location");
   } finally {
     await fixture.dispose();

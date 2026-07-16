@@ -25,6 +25,10 @@ import {
   type StructuredSessionSummaryInputV1,
   type StructuredSnapshotInputV1,
 } from "../src/cli/structured-output.ts";
+import {
+  completeCaptureScope as baseCompleteCaptureScope,
+  uninitializedCaptureScope,
+} from "./fixtures/session-capture-scope.ts";
 
 const documentDigest = {
   scheme: "sha256-sessions-document-jcs-v1",
@@ -35,11 +39,17 @@ const identity = {
   source: { kind: "synthetic", instanceId: "instance one" },
   nativeId: "session/one",
 } as const;
+const completeCaptureScope = {
+  ...baseCompleteCaptureScope,
+  appliedFilters: ["source", "nativeId"],
+  unassessedFilters: ["workspace", "searchText"],
+} as const;
 
 describe("schema-1 structured output", () => {
   it("builds an exact list bundle and attributable JSONL records", () => {
     const input: StructuredListInputV1 = {
       sessions: [listedSummary()],
+      captureScope: completeCaptureScope,
       nextCursor: "next-page",
     };
 
@@ -52,6 +62,7 @@ describe("schema-1 structured output", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: "next-page",
+      captureScope: completeCaptureScope,
       sessions: [publicListedSummary()],
     });
     expect(jsonl).toEqual([
@@ -62,6 +73,7 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         sessionCount: 1,
         nextCursor: "next-page",
+        captureScope: completeCaptureScope,
       },
       {
         schemaVersion: 1,
@@ -81,11 +93,14 @@ describe("schema-1 structured output", () => {
   });
 
   it("emits an explicit empty page and nullable cursor", () => {
-    expect(buildListJsonV1({ sessions: [] })).toMatchObject({
+    expect(
+      buildListJsonV1({ sessions: [], captureScope: uninitializedCaptureScope }),
+    ).toMatchObject({
       nextCursor: null,
+      captureScope: uninitializedCaptureScope,
       sessions: [],
     });
-    expect(buildListJsonlV1({ sessions: [] })).toEqual([
+    expect(buildListJsonlV1({ sessions: [], captureScope: uninitializedCaptureScope })).toEqual([
       {
         schemaVersion: 1,
         command: "list",
@@ -93,6 +108,7 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         sessionCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
       },
     ]);
   });
@@ -108,6 +124,7 @@ describe("schema-1 structured output", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: null,
+      captureScope: completeCaptureScope,
       support: input.support,
     });
     expect(json.hits[0]).toEqual({
@@ -147,7 +164,13 @@ describe("schema-1 structured output", () => {
       ],
       linkedContextTruncated: false,
     });
-    expect(jsonl[0]).toMatchObject({ command: "search", type: "page", hitCount: 1 });
+    expect(jsonl[0]).toMatchObject({
+      command: "search",
+      type: "page",
+      hitCount: 1,
+      captureScope: completeCaptureScope,
+    });
+    expect(jsonl[1]).not.toHaveProperty("captureScope");
     expect(jsonl[1]).toEqual({
       schemaVersion: 1,
       command: "search",
@@ -160,6 +183,7 @@ describe("schema-1 structured output", () => {
   it("emits one search page when no hits match", () => {
     const input: StructuredSearchInputV1 = {
       hits: [],
+      captureScope: uninitializedCaptureScope,
       support: {
         occurrences: 0,
         uniqueContent: 0,
@@ -177,6 +201,7 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         hitCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
         support: input.support,
       },
     ]);
@@ -193,6 +218,7 @@ describe("schema-1 structured output", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: "next-entry-page",
+      captureScope: completeCaptureScope,
       entries: [
         {
           session: publicSummary(),
@@ -236,6 +262,7 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         entryCount: 1,
         nextCursor: "next-entry-page",
+        captureScope: completeCaptureScope,
       },
       {
         schemaVersion: 1,
@@ -247,14 +274,18 @@ describe("schema-1 structured output", () => {
     ]);
     expectRecursivelyFrozen(json);
     expectRecursivelyFrozen(jsonl);
+    expect(jsonl[1]).not.toHaveProperty("captureScope");
   });
 
   it("emits one entries page for an empty result", () => {
-    expect(buildEntriesJsonV1({ entries: [] })).toMatchObject({
+    expect(
+      buildEntriesJsonV1({ entries: [], captureScope: uninitializedCaptureScope }),
+    ).toMatchObject({
       entries: [],
+      captureScope: uninitializedCaptureScope,
       nextCursor: null,
     });
-    expect(buildEntriesJsonlV1({ entries: [] })).toEqual([
+    expect(buildEntriesJsonlV1({ entries: [], captureScope: uninitializedCaptureScope })).toEqual([
       {
         schemaVersion: 1,
         command: "entries",
@@ -262,6 +293,7 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         entryCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
       },
     ]);
   });
@@ -328,6 +360,12 @@ describe("schema-1 structured output", () => {
     };
     const input = {
       sessions: [unsafeSummary],
+      captureScope: {
+        ...completeCaptureScope,
+        privateIdentity: privateMarker,
+        retainedSessions: { ...completeCaptureScope.retainedSessions, privateMarker },
+        latestFailures: { ...completeCaptureScope.latestFailures, privateMarker },
+      },
       diagnostic: privateMarker,
     };
 
@@ -347,6 +385,111 @@ describe("schema-1 structured output", () => {
       "freshness",
       "root",
     ]);
+    expect(Object.keys(JSON.parse(encoded).captureScope)).toEqual([
+      "status",
+      "trackedSessions",
+      "retainedSessions",
+      "unindexedSessions",
+      "sourceState",
+      "sourceCoverage",
+      "latestFailures",
+      "appliedFilters",
+      "unassessedFilters",
+    ]);
+  });
+
+  it("defensively copies capture scope and validates its fixed invariants", () => {
+    const mutableScope = {
+      ...completeCaptureScope,
+      retainedSessions: { ...completeCaptureScope.retainedSessions },
+      sourceState: { ...completeCaptureScope.sourceState },
+      sourceCoverage: { ...completeCaptureScope.sourceCoverage },
+      latestFailures: { ...completeCaptureScope.latestFailures },
+      appliedFilters: [...completeCaptureScope.appliedFilters],
+      unassessedFilters: [...completeCaptureScope.unassessedFilters],
+    };
+    const output = buildListJsonV1({ sessions: [], captureScope: mutableScope });
+
+    Reflect.set(mutableScope.retainedSessions, "current", 0);
+    Reflect.set(mutableScope.sourceState, "present", 0);
+    mutableScope.appliedFilters.push("source");
+
+    expect(output.captureScope).toEqual(completeCaptureScope);
+    expectRecursivelyFrozen(output.captureScope);
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: { ...completeCaptureScope, trackedSessions: 2 },
+      }),
+    ).toThrow("do not partition tracked sessions");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          sourceState: { ...completeCaptureScope.sourceState, present: 0 },
+        },
+      }),
+    ).toThrow("source-state counts");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          latestFailures: { ...completeCaptureScope.latestFailures, malformed: 1 },
+        },
+      }),
+    ).toThrow("failure counts");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          latestFailures: {
+            ...completeCaptureScope.latestFailures,
+            repositoryWrite: Number.MAX_SAFE_INTEGER + 1,
+          },
+        },
+      }),
+    ).toThrow("non-negative safe integers");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          appliedFilters: ["nativeId", "source"],
+        },
+      }),
+    ).toThrow("canonical order");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          appliedFilters: ["private-filter"] as never,
+        },
+      }),
+    ).toThrow("canonical order");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          appliedFilters: ["source"],
+          unassessedFilters: ["nativeId", "workspace"],
+        },
+      }),
+    ).toThrow("classification is invalid");
+    expect(() =>
+      buildListJsonV1({
+        sessions: [],
+        captureScope: {
+          ...completeCaptureScope,
+          appliedFilters: ["workspace"],
+          unassessedFilters: ["searchText"],
+        },
+      }),
+    ).toThrow("classification is invalid");
   });
 
   it("removes private markers at every transcript nesting level", () => {
@@ -397,8 +540,8 @@ describe("schema-1 structured output", () => {
     );
 
     expect(encoded).not.toContain(marker);
-    expect(encoded).not.toContain("workspace");
     expect(encoded).not.toContain("sourceLocator");
+    expect(JSON.parse(encoded).entries[0].session).not.toHaveProperty("workspace");
     expect(() =>
       buildEntriesJsonV1({
         ...base,
@@ -414,6 +557,7 @@ describe("schema-1 structured output", () => {
 
   it("omits optional members instead of serializing null", () => {
     const value = buildListJsonV1({
+      captureScope: completeCaptureScope,
       sessions: [
         {
           identity,
@@ -438,6 +582,7 @@ describe("schema-1 structured output", () => {
   it("rejects inconsistent or unsafe application values", () => {
     expect(() =>
       buildListJsonV1({
+        captureScope: completeCaptureScope,
         sessions: [
           {
             ...listedSummary(),
@@ -448,6 +593,7 @@ describe("schema-1 structured output", () => {
     ).toThrow("byte accounting");
     expect(() =>
       buildListJsonV1({
+        captureScope: completeCaptureScope,
         sessions: [{ ...listedSummary(), documentDigest: { ...documentDigest, digest: "0" } }],
       }),
     ).toThrow("document digest");
@@ -471,6 +617,7 @@ describe("schema-1 structured output", () => {
     ).toThrow("single search terms");
     expect(() =>
       buildListJsonV1({
+        captureScope: completeCaptureScope,
         sessions: [{ ...listedSummary(), root: { kind: "invalid" } as never }],
       }),
     ).toThrow("session root");
@@ -495,7 +642,9 @@ describe("structured encoders", () => {
   });
 
   it("pretty-prints JSON with one trailing newline", () => {
-    const encoded = encodeStructuredJson(buildListJsonV1({ sessions: [] }));
+    const encoded = encodeStructuredJson(
+      buildListJsonV1({ sessions: [], captureScope: uninitializedCaptureScope }),
+    );
 
     expect(encoded).toBe(
       `${JSON.stringify(
@@ -505,6 +654,7 @@ describe("structured encoders", () => {
           type: "page",
           disposition: "untrusted-history",
           nextCursor: null,
+          captureScope: uninitializedCaptureScope,
           sessions: [],
         },
         null,
@@ -525,15 +675,27 @@ describe("structured encoders", () => {
   });
 
   it.each([
-    ["json", () => encodeStructuredJson(buildListJsonV1({ sessions: [listedSummary()] }))],
-    ["jsonl", () => encodeStructuredJsonl(buildListJsonlV1({ sessions: [listedSummary()] }))],
+    [
+      "json",
+      () =>
+        encodeStructuredJson(
+          buildListJsonV1({ sessions: [listedSummary()], captureScope: completeCaptureScope }),
+        ),
+    ],
+    [
+      "jsonl",
+      () =>
+        encodeStructuredJsonl(
+          buildListJsonlV1({ sessions: [listedSummary()], captureScope: completeCaptureScope }),
+        ),
+    ],
   ] as const)("admits %s exactly at its UTF-8 cap and rejects one byte less", (_name, encode) => {
     const unbounded = encode();
     const bytes = Buffer.byteLength(unbounded, "utf8");
     const value =
       _name === "json"
-        ? buildListJsonV1({ sessions: [listedSummary()] })
-        : buildListJsonlV1({ sessions: [listedSummary()] });
+        ? buildListJsonV1({ sessions: [listedSummary()], captureScope: completeCaptureScope })
+        : buildListJsonlV1({ sessions: [listedSummary()], captureScope: completeCaptureScope });
     const atBoundary =
       _name === "json"
         ? encodeStructuredJson(value as ReturnType<typeof buildListJsonV1>, {
@@ -574,6 +736,7 @@ describe("structured encoders", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: null,
+      captureScope: completeCaptureScope,
       sessions: [],
     } as const;
 
@@ -646,6 +809,7 @@ function publicSummary() {
 
 function searchInput(): StructuredSearchInputV1 {
   return {
+    captureScope: completeCaptureScope,
     hits: [
       {
         session: summary(),
@@ -695,6 +859,7 @@ function searchInput(): StructuredSearchInputV1 {
 
 function entriesInput(): StructuredEntriesInputV1 {
   return {
+    captureScope: completeCaptureScope,
     entries: [
       {
         session: summary(),

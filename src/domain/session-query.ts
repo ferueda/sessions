@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { isCanonicalTimestamp } from "./canonical-timestamp.ts";
 import type { ContentHash } from "./content-hash.ts";
 import type { SessionDocumentDigest } from "./public-session-document.ts";
+import type { SessionCaptureScope } from "./session-capture-scope.ts";
 import type { SessionRootResolution } from "./session-lineage.ts";
 import { isSessionIdentity } from "./session-identity.ts";
 import type { Actor, ContentOrigin, OriginConfidence, SessionIdentity } from "./session.ts";
@@ -133,6 +134,7 @@ export interface SessionListItem extends SessionQuerySummary {
 
 export interface SessionListPage {
   readonly sessions: readonly SessionListItem[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -184,6 +186,7 @@ export interface SessionSearchSupport {
 export interface SessionSearchPage {
   readonly hits: readonly SessionSearchHit[];
   readonly support: SessionSearchSupport;
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -212,6 +215,7 @@ export interface SessionEntryInventoryItem {
 
 export interface SessionEntryPage {
   readonly entries: readonly SessionEntryInventoryItem[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 

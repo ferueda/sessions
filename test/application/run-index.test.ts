@@ -216,7 +216,7 @@ describe("runIndex", () => {
         counts: { discovered: 1, updated: 1 },
       });
       expect(failed.readNativeIds).toEqual([]);
-      await expect(harness.index.listIndexedIdentities(failed.instance)).resolves.toEqual([]);
+      await expect(harness.index.listTrackedIdentities(failed.instance)).resolves.toEqual([]);
       expect(ready.readNativeIds).toEqual(["indexed"]);
     },
   );
@@ -288,12 +288,12 @@ describe("runIndex", () => {
       counts: emptyCounts(),
     });
     expect(source.readNativeIds).toHaveLength(readsBefore);
-    expect(await harness.index.listIndexedIdentities(source.instance)).toHaveLength(2);
+    expect(await harness.index.listTrackedIdentities(source.instance)).toHaveLength(2);
 
     source.setDiscovery([source.candidate("kept", "revision-two")]);
     const complete = await execute(harness, [source.selected]);
     expect(complete.counts).toMatchObject({ discovered: 1, updated: 1, missing: 1 });
-    expect(await harness.index.listIndexedIdentities(source.instance)).toHaveLength(2);
+    expect(await harness.index.listTrackedIdentities(source.instance)).toHaveLength(2);
   });
 
   test("does not record a second failure after repository replacement rejects", async () => {
@@ -481,11 +481,9 @@ class MemorySessionIndex implements SessionIndexWriter {
     return undefined;
   }
 
-  async listIndexedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]> {
+  async listTrackedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]> {
     return [...this.#sessions.values()]
-      .filter(
-        (stored) => stored.lastGood !== undefined && sameSource(stored.identity.source, source),
-      )
+      .filter((stored) => sameSource(stored.identity.source, source))
       .map(({ identity: value }) => value)
       .sort((left, right) =>
         left.nativeId < right.nativeId ? -1 : left.nativeId > right.nativeId ? 1 : 0,
@@ -539,9 +537,7 @@ class MemorySessionIndex implements SessionIndexWriter {
   async recordMissing(run: SessionIndexRun, sessionIdentity: SessionIdentity) {
     const active = this.#run(run);
     const stored = this.#sessions.get(formatSessionIdentity(sessionIdentity));
-    if (stored === undefined || stored.lastGood === undefined) {
-      return;
-    }
+    if (stored === undefined) return;
     stored.presence = "missing";
     active.counts.missing += 1;
     active.items.push({ identity: sessionIdentity, outcome: "missing" });

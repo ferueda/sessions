@@ -12,6 +12,10 @@ import {
   renderSearch,
   renderShow,
 } from "../src/cli/render.ts";
+import {
+  completeCaptureScope,
+  uninitializedCaptureScope,
+} from "./fixtures/session-capture-scope.ts";
 
 const identity = {
   source: { kind: "synthetic", instanceId: "one" },
@@ -26,7 +30,24 @@ const retainedAttribution = {
     digest: "0".repeat(64),
   },
 } as const;
-
+const incompleteCaptureScope = {
+  status: "incomplete",
+  trackedSessions: 3,
+  retainedSessions: { current: 1, stale: 1 },
+  unindexedSessions: 1,
+  sourceState: { present: 1, missing: 0, unknown: 2 },
+  sourceCoverage: { complete: 0, unknown: 1 },
+  latestFailures: {
+    unavailable: 0,
+    unreadable: 0,
+    malformed: 1,
+    sourceChanged: 1,
+    unsupportedFormat: 0,
+    repositoryWrite: 0,
+  },
+  appliedFilters: [],
+  unassessedFilters: [],
+} as const;
 function selectedText(
   text: string,
   options: { readonly truncated?: boolean; readonly originalUtf8Bytes?: number } = {},
@@ -207,6 +228,7 @@ describe("human CLI rendering", () => {
       originalUtf8Bytes: Buffer.byteLength(oversized, "utf8"),
     });
     const list = renderList({
+      captureScope: completeCaptureScope,
       sessions: [
         {
           identity,
@@ -311,6 +333,7 @@ describe("human CLI rendering", () => {
 
   test("renders bounded search evidence, linked context, support, and continuation", () => {
     const output = renderSearch({
+      captureScope: completeCaptureScope,
       hits: [
         {
           session: {
@@ -400,9 +423,12 @@ describe("human CLI rendering", () => {
   });
 
   test("renders empty and textless entry inventory states exactly", () => {
-    expect(renderEntries({ entries: [] })).toBe("No entries found.\n");
+    expect(renderEntries({ entries: [], captureScope: completeCaptureScope })).toBe(
+      "No entries found.\n",
+    );
     expect(
       renderEntries({
+        captureScope: completeCaptureScope,
         entries: [
           {
             ...entryInventoryResult().entries[0]!,
@@ -417,10 +443,55 @@ describe("human CLI rendering", () => {
       }),
     ).toContain("Root: unknown\n(no text preview)\nContent: 0 text segment(s)");
   });
+
+  test("warns once for incomplete or uninitialized capture scope, including empty results", () => {
+    const privateMarkers = [
+      "private-identity",
+      "private-filter-value",
+      "/private/workspace",
+      "/private/source/path",
+      "private transcript text",
+    ];
+    const scopeWithPrivateFields = {
+      ...incompleteCaptureScope,
+      privateIdentity: privateMarkers[0],
+      filterValue: privateMarkers[1],
+      workspace: privateMarkers[2],
+      path: privateMarkers[3],
+      transcript: privateMarkers[4],
+    };
+    const expectedWarning =
+      "Warning: retained evidence may be incomplete (1 stale, 1 unindexed, 1 source(s) with unknown coverage).";
+    const outputs = [
+      renderList({ sessions: [], captureScope: scopeWithPrivateFields }),
+      renderSearch({
+        hits: [],
+        support: {
+          occurrences: 0,
+          uniqueContent: 0,
+          uniqueKnownRoots: 0,
+          unknownLineageSessions: 0,
+        },
+        captureScope: scopeWithPrivateFields,
+      }),
+      renderEntries({ entries: [], captureScope: scopeWithPrivateFields }),
+    ];
+
+    expect(outputs).toEqual([
+      `No sessions found.\n\n${expectedWarning}\n`,
+      `No matches found.\n\n${expectedWarning}\n`,
+      `No entries found.\n\n${expectedWarning}\n`,
+    ]);
+    for (const marker of privateMarkers) expect(outputs.join("\n")).not.toContain(marker);
+    expect(renderList({ sessions: [], captureScope: uninitializedCaptureScope })).toBe(
+      "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n",
+    );
+  });
 });
 
 function entryInventoryResult(): ListSessionEntriesResult {
   return {
+    captureScope: completeCaptureScope,
     entries: [
       {
         session: {
