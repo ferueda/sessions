@@ -103,8 +103,8 @@ underlying command result.
 
 The accepted baseline selected writer open as the measured owner. After the
 clean-generation fast path, a fixed synthetic 2,000-session exact-equality run
-used 2.525 ms for writer open and 261.254 ms total. An authorized read-only real
-Codex 120-session exact-cohort run used 14.008 ms and 381.767 ms, with zero
+used 2.767 ms for writer open and 264.666 ms total. An authorized read-only real
+Codex 120-session exact-cohort run used 3.262 ms and 366.055 ms, with zero
 changed reads. Both local budgets passed. These measurements are implementation
 evidence, not public performance guarantees.
 

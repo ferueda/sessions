@@ -1057,9 +1057,9 @@ CLI, application, adapter, query, JSON/JSONL, or provider behavior. Because the
 project is pre-launch, it replaces the single current baseline and checksum with
 no compatibility migration; older development libraries fail closed and require
 a fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
-reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.525
-ms writer open / 261.254 ms total. The authorized read-only real Codex
-120-session exact-cohort proof measured 14.008 ms / 381.767 ms with zero changed
+reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.767
+ms writer open / 264.666 ms total. The authorized read-only real Codex
+120-session exact-cohort proof measured 3.262 ms / 366.055 ms with zero changed
 reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
 correctness remains their only gate.
 

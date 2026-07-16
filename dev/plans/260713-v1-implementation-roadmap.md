@@ -180,9 +180,9 @@ freshness reads 3.072 ms, unchanged writes 11.863 ms, and close 3.542 ms. Exact
 control/timed semantics, selected observations and rollout bytes, library health,
 and zero changed reads all passed. These machine-local values are design
 evidence, not public guarantees. The completed clean-generation path reduced the
-same fixed synthetic proof to 2.525 ms writer open / 261.254 ms total. An
-authorized read-only real Codex 120-session exact-cohort proof used 14.008 ms /
-381.767 ms with zero changed reads. Both budgets and exact semantic comparisons
+same fixed synthetic proof to 2.767 ms writer open / 264.666 ms total. An
+authorized read-only real Codex 120-session exact-cohort proof used 3.262 ms /
+366.055 ms with zero changed reads. Both budgets and exact semantic comparisons
 passed. Per-candidate batching remains unjustified by this evidence.
 
 Near-term candidates remain evidence-gated rather than M10 commitments:
@@ -1231,8 +1231,8 @@ Exit gate:
 - `pnpm check` passes.
 
 Completion evidence: the fixed synthetic 2,000-session exact-equality proof
-measured 2.525 ms writer open and 261.254 ms total. The authorized read-only real
-Codex 120-session exact-cohort proof measured 14.008 ms writer open and 381.767
+measured 2.767 ms writer open and 264.666 ms total. The authorized read-only real
+Codex 120-session exact-cohort proof measured 3.262 ms writer open and 366.055
 ms total, performed zero changed reads, and passed the 800 ms / 1.25 second local
 budgets without changing canonical, query, failure, lease, or provider evidence.
 

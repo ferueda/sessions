@@ -213,8 +213,8 @@ sessions index --source cursor
 
 M9 packaged Agent Skill work and M10 capture/routine-index hardening are
 complete. The clean-open proof reduced a fixed synthetic 2,000-session run to
-2.525 ms writer open / 261.254 ms total, and an authorized read-only real Codex
-120-session run to 14.008 ms / 381.767 ms with zero changed reads and exact
+2.767 ms writer open / 264.666 ms total, and an authorized read-only real Codex
+120-session run to 3.262 ms / 366.055 ms with zero changed reads and exact
 cohort equality. M11 Cursor parity is next. Markdown remains deferred beyond V1;
 `--format md` is not accepted today.
 
