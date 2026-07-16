@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, type BigIntStats, type Dirent } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
   captureCodexEnvironment,
+  describeRollout,
   resolveCodexPaths,
+  rolloutDescriptorTuple,
   type ResolvedCodexPaths,
 } from "../src/adapters/codex/paths.ts";
+import { fingerprintCodexTuple } from "../src/adapters/codex/fingerprint.ts";
 import { createCodexSource } from "../src/adapters/codex/source.ts";
 import { compareBinaryStrings } from "../src/application/discover-sessions.ts";
 import { timeIndexOperation } from "../src/application/index-timing.ts";
@@ -32,6 +35,16 @@ const PRIVATE_RESIDUE_WARNING =
   "sessions: Codex indexing measurement failed. An uncatchable process or machine failure can leave private temporary residue.\n";
 
 type MeasurementFailureCode = "acknowledgement-required" | "unsupported-platform";
+type MeasurementStage =
+  | "temporary-state"
+  | "seed-index"
+  | "stable-index"
+  | "selected-provider-after"
+  | "provider-stability"
+  | "seed-admission"
+  | "stable-admission"
+  | "timing-admission"
+  | "library-health";
 
 class MeasurementFailure extends Error {
   readonly code: MeasurementFailureCode;
@@ -43,21 +56,25 @@ class MeasurementFailure extends Error {
   }
 }
 
+class MeasurementStageFailure extends Error {
+  readonly stage: MeasurementStage;
+
+  constructor(stage: MeasurementStage, cause: unknown) {
+    super("Codex indexing measurement stage failed", { cause });
+    this.name = "MeasurementStageFailure";
+    this.stage = stage;
+  }
+}
+
 interface OwnedTemporaryRoot {
   readonly path: string;
   readonly dev?: bigint;
   readonly ino?: bigint;
 }
 
-interface ProviderSnapshot {
-  readonly digest: string;
-  readonly fileCount: number;
-  readonly bytes: number;
-}
-
-interface ProviderSnapshotEntry {
-  readonly key: string;
-  readonly kind: "directory" | "file" | "missing";
+interface SelectedRolloutSnapshot {
+  readonly candidateSignature: string;
+  readonly descriptorFingerprint: string;
   readonly dev?: string;
   readonly ino?: string;
   readonly mode?: string;
@@ -66,6 +83,12 @@ interface ProviderSnapshotEntry {
   readonly ctimeNs?: string;
   readonly birthtimeNs?: string;
   readonly contentDigest?: string;
+}
+
+interface SelectedCohort {
+  readonly candidates: readonly DiscoveredSession[];
+  readonly candidateSignatures: readonly string[];
+  readonly rolloutSnapshots: readonly SelectedRolloutSnapshot[];
 }
 
 let ownedTemporaryRoot: OwnedTemporaryRoot | undefined;
@@ -99,7 +122,7 @@ if (failure !== undefined) {
 }
 
 async function measureCodexIndexing(platform: "darwin" | "linux") {
-  const temporary = await createOwnedTemporaryRoot();
+  const temporary = await runStage("temporary-state", createOwnedTemporaryRoot);
   const dataDirectory = path.join(temporary.path, "sessions-data");
   await createPrivateDirectory(dataDirectory);
   const environment = captureCodexEnvironment();
@@ -116,64 +139,98 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     indexPaths.shm,
   );
 
-  // Path resolution reads only Codex configuration; the snapshot below is
-  // limited to provider state and rollouts and never walks the Codex home.
+  // Path resolution reads only Codex configuration. Cohort capture below uses
+  // the production adapter observations and hashes only selected rollouts.
   const codexPaths = await resolveCodexPaths(environment);
-  const providerBefore = await snapshotCodexProvider(codexPaths);
   const lifecycle = createSqliteIndexLifecycle({ platform });
   const clock = Object.freeze({ now: () => new Date() });
 
-  const seedSource = limitDiscovery(await createCodexSource(environment));
-  const seed = await runIndex({
-    paths: indexPaths,
-    sources: [seedSource],
-    lifecycle,
-    clock,
+  let seedCohort: SelectedCohort | undefined;
+  const seedSource = limitDiscovery(await createCodexSource(environment), codexPaths, (cohort) => {
+    seedCohort = cohort;
   });
-
-  const timings = createIndexTimingCollector();
-  const stable = await timeIndexOperation(timings.recorder, "total", async () => {
-    const selected = await timeIndexOperation(timings.recorder, "sourceResolution", () =>
-      createCodexSource(environment),
-    );
-    return runIndex({
+  const seed = await runStage("seed-index", () =>
+    runIndex({
       paths: indexPaths,
-      sources: [limitDiscovery(selected)],
+      sources: [seedSource],
       lifecycle,
       clock,
-      timing: timings.recorder,
+    }),
+  );
+
+  const timings = createIndexTimingCollector();
+  let stableCohort: SelectedCohort | undefined;
+  const stable = await runStage("stable-index", () =>
+    timeIndexOperation(timings.recorder, "total", async () => {
+      const selected = await timeIndexOperation(timings.recorder, "sourceResolution", () =>
+        createCodexSource(environment),
+      );
+      return runIndex({
+        paths: indexPaths,
+        sources: [
+          limitDiscovery(selected, codexPaths, (cohort) => {
+            stableCohort = cohort;
+          }),
+        ],
+        lifecycle,
+        clock,
+        timing: timings.recorder,
+      });
+    }),
+  );
+  const admittedSeedCohort = requireCapturedCohort(seedCohort);
+  const admittedStableCohort = requireCapturedCohort(stableCohort);
+  const cohortEqual = sameSelectedCohort(admittedSeedCohort, admittedStableCohort);
+  const providerAfter = await runStage("selected-provider-after", () =>
+    captureSelectedCohort(admittedStableCohort.candidates, codexPaths),
+  );
+  const selectedRolloutBytesEqual = sameSelectedRolloutSnapshots(
+    admittedSeedCohort.rolloutSnapshots,
+    admittedStableCohort.rolloutSnapshots,
+    providerAfter.rolloutSnapshots,
+  );
+  await runStage("provider-stability", async () => {
+    requireCondition(cohortEqual && selectedRolloutBytesEqual);
+  });
+  await runStage("seed-admission", async () => {
+    requireCompleteReport(seed, {
+      discovered: COHORT_SESSIONS,
+      unchanged: 0,
+      updated: COHORT_SESSIONS,
+      failed: 0,
+      missing: 0,
+      stale: 0,
     });
   });
-  const providerAfter = await snapshotCodexProvider(codexPaths);
-  const providerSnapshotEqual = sameProviderSnapshot(providerBefore, providerAfter);
-  requireCondition(providerSnapshotEqual);
-
-  requireCompleteReport(seed, {
-    discovered: COHORT_SESSIONS,
-    unchanged: 0,
-    updated: COHORT_SESSIONS,
-    failed: 0,
-    missing: 0,
-    stale: 0,
+  await runStage("stable-admission", async () => {
+    requireCompleteReport(stable, {
+      discovered: COHORT_SESSIONS,
+      unchanged: COHORT_SESSIONS,
+      updated: 0,
+      failed: 0,
+      missing: 0,
+      stale: 0,
+    });
   });
-  requireCompleteReport(stable, {
-    discovered: COHORT_SESSIONS,
-    unchanged: COHORT_SESSIONS,
-    updated: 0,
-    failed: 0,
-    missing: 0,
-    stale: 0,
+  await runStage("library-health", async () => {
+    const health = await lifecycle.inspectHealth(indexPaths);
+    requireCondition(health.ok && health.writerLease === "free");
   });
-  const health = await lifecycle.inspectHealth(indexPaths);
-  requireCondition(health.ok && health.writerLease === "free");
 
   const timingSnapshot = timings.snapshot();
-  requireCondition(timingSnapshot.phases.changedReadAndNormalize.calls === 0);
+  await runStage("timing-admission", async () =>
+    requireCondition(timingSnapshot.phases.changedReadAndNormalize.calls === 0),
+  );
+  const selectedRolloutBytes = admittedSeedCohort.rolloutSnapshots.reduce(
+    (sum, snapshot) => addSafeInteger(sum, parseSafeBytes(snapshot.size)),
+    0,
+  );
   return Object.freeze({
     cohortSessions: COHORT_SESSIONS,
-    sourceFiles: providerBefore.fileCount,
-    sourceBytes: providerBefore.bytes,
-    providerSnapshotEqual,
+    selectedRolloutFiles: admittedSeedCohort.rolloutSnapshots.length,
+    selectedRolloutBytes,
+    cohortEqual,
+    selectedRolloutBytesEqual,
     seedComplete: true,
     seedCounts: seed.counts,
     stableComplete: true,
@@ -183,7 +240,11 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
   });
 }
 
-function limitDiscovery(selected: SelectedSessionSource): SelectedSessionSource {
+function limitDiscovery(
+  selected: SelectedSessionSource,
+  paths: ResolvedCodexPaths,
+  capture: (cohort: SelectedCohort) => void,
+): SelectedSessionSource {
   const adapter: SessionSource = Object.freeze({
     kind: selected.adapter.kind,
     probe: () => selected.adapter.probe(),
@@ -195,11 +256,142 @@ function limitDiscovery(selected: SelectedSessionSource): SelectedSessionSource 
       completeGeneration.sort((left, right) =>
         compareBinaryStrings(left.identity.nativeId, right.identity.nativeId),
       );
-      yield* completeGeneration.slice(0, COHORT_SESSIONS);
+      const cohort = completeGeneration.slice(0, COHORT_SESSIONS);
+      capture(await captureSelectedCohort(cohort, paths));
+      yield* cohort;
     },
     read: (candidate: DiscoveredSession) => selected.adapter.read(candidate),
   });
   return Object.freeze({ instance: selected.instance, adapter });
+}
+
+async function captureSelectedCohort(
+  candidates: readonly DiscoveredSession[],
+  paths: ResolvedCodexPaths,
+): Promise<SelectedCohort> {
+  const logicalNames = candidates.map(rolloutLogicalName);
+  const filesByLogicalName = await findSelectedRolloutFiles(paths, logicalNames);
+  const rolloutSnapshots: SelectedRolloutSnapshot[] = [];
+  for (const candidate of candidates) {
+    rolloutSnapshots.push(await snapshotCandidateRollout(candidate, paths, filesByLogicalName));
+  }
+  return Object.freeze({
+    candidates: Object.freeze([...candidates]),
+    candidateSignatures: Object.freeze(candidates.map(candidateSignature)),
+    rolloutSnapshots: Object.freeze(rolloutSnapshots),
+  });
+}
+
+function candidateSignature(candidate: DiscoveredSession): string {
+  return JSON.stringify([
+    candidate.identity.source.kind,
+    candidate.identity.source.instanceId,
+    candidate.identity.nativeId,
+    candidate.adapterVersion,
+    candidate.aggregateFingerprint.scheme,
+    candidate.aggregateFingerprint.digest,
+    candidate.inputs.map((input) => [
+      input.role,
+      input.locator.uri,
+      input.locator.recordId ?? null,
+      input.fingerprint,
+    ]),
+  ]);
+}
+
+function rolloutLogicalName(candidate: DiscoveredSession): string {
+  const uri = rolloutInput(candidate).locator.uri;
+  const prefix = "codex://rollout/";
+  requireCondition(uri !== undefined && uri.startsWith(prefix));
+  const logicalName = decodeURIComponent(uri.slice(prefix.length));
+  requireCondition(
+    logicalName.length > 0 &&
+      logicalName.isWellFormed() &&
+      !logicalName.includes("/") &&
+      !logicalName.includes("\\"),
+  );
+  return logicalName;
+}
+
+function rolloutInput(candidate: DiscoveredSession) {
+  const rolloutInputs = candidate.inputs.filter((input) => input.role === "rollout");
+  requireCondition(rolloutInputs.length === 1 && rolloutInputs[0] !== undefined);
+  return rolloutInputs[0];
+}
+
+async function findSelectedRolloutFiles(
+  paths: ResolvedCodexPaths,
+  logicalNames: readonly string[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const uniqueNames = new Set(logicalNames);
+  requireCondition(uniqueNames.size === logicalNames.length);
+  const matches = new Map<string, string[]>([...uniqueNames].map((name) => [name, []]));
+  await collectSelectedRolloutFiles(paths.sessionsRoot, uniqueNames, matches);
+  await collectSelectedRolloutFiles(paths.archivedSessionsRoot, uniqueNames, matches);
+  return matches;
+}
+
+async function collectSelectedRolloutFiles(
+  directory: string,
+  logicalNames: ReadonlySet<string>,
+  matches: Map<string, string[]>,
+): Promise<void> {
+  const children = await readDirectoryEntries(directory);
+  children.sort((left, right) => compareBinaryStrings(left.name, right.name));
+  for (const child of children) {
+    const childPath = path.join(directory, child.name);
+    if (child.isDirectory()) {
+      const stats = await lstat(childPath, { bigint: true });
+      requireCondition(stats.isDirectory());
+      await collectSelectedRolloutFiles(childPath, logicalNames, matches);
+      continue;
+    }
+    const logicalName = child.name.endsWith(".zst") ? child.name.slice(0, -4) : child.name;
+    if (!logicalNames.has(logicalName)) continue;
+    const stats = await lstat(childPath, { bigint: true });
+    requireCondition(stats.isFile());
+    matches.get(logicalName)?.push(childPath);
+  }
+}
+
+async function readDirectoryEntries(directory: string): Promise<Dirent<string>[]> {
+  try {
+    return await readdir(directory, { encoding: "utf8", withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return [];
+    throw error;
+  }
+}
+
+async function snapshotCandidateRollout(
+  candidate: DiscoveredSession,
+  paths: ResolvedCodexPaths,
+  filesByLogicalName: ReadonlyMap<string, readonly string[]>,
+): Promise<SelectedRolloutSnapshot> {
+  const input = rolloutInput(candidate);
+  const logicalName = rolloutLogicalName(candidate);
+  const matchingDescriptors = new Map<string, Awaited<ReturnType<typeof describeRollout>>>();
+  for (const file of filesByLogicalName.get(logicalName) ?? []) {
+    const descriptor = await describeRollout(paths, file, candidate.identity.nativeId);
+    if (
+      descriptor.status === "ready" &&
+      descriptor.file !== undefined &&
+      fingerprintCodexTuple(rolloutDescriptorTuple(descriptor)) === input.fingerprint
+    ) {
+      matchingDescriptors.set(descriptor.file, descriptor);
+    }
+  }
+  requireCondition(matchingDescriptors.size === 1);
+  const descriptor = matchingDescriptors.values().next().value;
+  requireCondition(descriptor?.file !== undefined);
+  const descriptorFingerprint = fingerprintCodexTuple(rolloutDescriptorTuple(descriptor));
+  const pathStats = await lstat(descriptor.file, { bigint: true });
+  return snapshotRegularFile(
+    descriptor.file,
+    candidateSignature(candidate),
+    descriptorFingerprint,
+    pathStats,
+  );
 }
 
 function requireCompleteReport(report: IndexReport, counts: IndexReport["counts"]): void {
@@ -226,103 +418,12 @@ function sameCounts(left: IndexReport["counts"], right: IndexReport["counts"]): 
   );
 }
 
-async function snapshotCodexProvider(paths: ResolvedCodexPaths): Promise<ProviderSnapshot> {
-  const entries: ProviderSnapshotEntry[] = [];
-  await snapshotRequiredFile(paths.stateDatabase, "state/database", entries);
-  await snapshotOptionalFile(`${paths.stateDatabase}-wal`, "state/database-wal", entries);
-  await snapshotOptionalTree(paths.sessionsRoot, "rollouts/sessions", entries);
-  await snapshotOptionalTree(paths.archivedSessionsRoot, "rollouts/archived", entries);
-  entries.sort((left, right) => compareBinaryStrings(left.key, right.key));
-
-  let fileCount = 0;
-  let bytes = 0;
-  for (const entry of entries) {
-    if (entry.kind !== "file") continue;
-    fileCount = addSafeInteger(fileCount, 1);
-    bytes = addSafeInteger(bytes, parseSafeBytes(entry.size));
-  }
-  return Object.freeze({
-    digest: createHash("sha256").update(JSON.stringify(entries)).digest("hex"),
-    fileCount,
-    bytes,
-  });
-}
-
-async function snapshotRequiredFile(
-  file: string,
-  key: string,
-  entries: ProviderSnapshotEntry[],
-): Promise<void> {
-  const stats = await lstat(file, { bigint: true });
-  requireCondition(stats.isFile());
-  entries.push(await snapshotRegularFile(file, key, stats));
-}
-
-async function snapshotOptionalFile(
-  file: string,
-  key: string,
-  entries: ProviderSnapshotEntry[],
-): Promise<void> {
-  let stats: BigIntStats;
-  try {
-    stats = await lstat(file, { bigint: true });
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-    entries.push({ key, kind: "missing" });
-    return;
-  }
-  requireCondition(stats.isFile());
-  entries.push(await snapshotRegularFile(file, key, stats));
-}
-
-async function snapshotOptionalTree(
-  root: string,
-  key: string,
-  entries: ProviderSnapshotEntry[],
-): Promise<void> {
-  let stats: BigIntStats;
-  try {
-    stats = await lstat(root, { bigint: true });
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-    entries.push({ key, kind: "missing" });
-    return;
-  }
-  requireCondition(stats.isDirectory());
-  await snapshotTree(root, key, stats, entries);
-}
-
-async function snapshotTree(
-  directory: string,
-  key: string,
-  initialStats: BigIntStats,
-  entries: ProviderSnapshotEntry[],
-): Promise<void> {
-  requireCondition(initialStats.isDirectory());
-  entries.push({ key, kind: "directory", ...snapshotMetadata(initialStats) });
-
-  const children = (await readdir(directory)).sort(compareBinaryStrings);
-  requireCondition(sameSnapshotStat(initialStats, await lstat(directory, { bigint: true })));
-  for (const child of children) {
-    const childPath = path.join(directory, child);
-    const childKey = `${key}/${child}`;
-    const stats = await lstat(childPath, { bigint: true });
-    if (stats.isDirectory()) {
-      await snapshotTree(childPath, childKey, stats, entries);
-    } else {
-      // Symlinks and special files are deliberately rejected rather than followed.
-      requireCondition(stats.isFile());
-      entries.push(await snapshotRegularFile(childPath, childKey, stats));
-    }
-  }
-  requireCondition(sameSnapshotStat(initialStats, await lstat(directory, { bigint: true })));
-}
-
 async function snapshotRegularFile(
   file: string,
-  key: string,
+  candidateSignature: string,
+  descriptorFingerprint: string,
   pathStats: BigIntStats,
-): Promise<ProviderSnapshotEntry> {
+): Promise<SelectedRolloutSnapshot> {
   requireCondition(pathStats.isFile());
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   let operationError: unknown;
@@ -357,8 +458,8 @@ async function snapshotRegularFile(
     throw operationError ?? closeError ?? new Error("Provider snapshot failed");
   }
   return {
-    key,
-    kind: "file",
+    candidateSignature,
+    descriptorFingerprint,
     ...snapshotMetadata(pathStats),
     contentDigest,
   };
@@ -390,10 +491,26 @@ function sameSnapshotStat(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
-function sameProviderSnapshot(left: ProviderSnapshot, right: ProviderSnapshot): boolean {
-  return (
-    left.digest === right.digest && left.fileCount === right.fileCount && left.bytes === right.bytes
-  );
+function requireCapturedCohort(cohort: SelectedCohort | undefined): SelectedCohort {
+  requireCondition(cohort !== undefined);
+  return cohort;
+}
+
+function sameSelectedCohort(left: SelectedCohort, right: SelectedCohort): boolean {
+  return sameStringArrays(left.candidateSignatures, right.candidateSignatures);
+}
+
+function sameSelectedRolloutSnapshots(
+  first: readonly SelectedRolloutSnapshot[],
+  second: readonly SelectedRolloutSnapshot[],
+  third: readonly SelectedRolloutSnapshot[],
+): boolean {
+  const expected = JSON.stringify(first);
+  return expected === JSON.stringify(second) && expected === JSON.stringify(third);
+}
+
+function sameStringArrays(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 async function createOwnedTemporaryRoot(): Promise<OwnedTemporaryRoot> {
@@ -483,7 +600,8 @@ async function removeOwnedTemporaryRoot(): Promise<void> {
 }
 
 function admitInvocation(args: readonly string[], platform: NodeJS.Platform): "darwin" | "linux" {
-  if (args.length !== 1 || args[0] !== ACKNOWLEDGEMENT) {
+  const admittedArgs = args[0] === "--" ? args.slice(1) : args;
+  if (admittedArgs.length !== 1 || admittedArgs[0] !== ACKNOWLEDGEMENT) {
     throw new MeasurementFailure("acknowledgement-required");
   }
   if (platform !== "darwin" && platform !== "linux") {
@@ -498,7 +616,19 @@ function failureMessage(error: unknown): string {
       ? `sessions: Codex indexing measurement requires exactly ${ACKNOWLEDGEMENT}.\n`
       : "sessions: Codex indexing measurement is supported only on macOS and Linux.\n";
   }
+  if (error instanceof MeasurementStageFailure) {
+    return `sessions: Codex indexing measurement failed at ${error.stage}. An uncatchable process or machine failure can leave private temporary residue.\n`;
+  }
   return PRIVATE_RESIDUE_WARNING;
+}
+
+async function runStage<T>(stage: MeasurementStage, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof MeasurementStageFailure) throw error;
+    throw new MeasurementStageFailure(stage, error);
+  }
 }
 
 function parseSafeBytes(value: string | undefined): number {
