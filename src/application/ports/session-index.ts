@@ -149,7 +149,7 @@ export interface SessionIndexReader {
 }
 
 export interface SessionIndexWriter extends SessionIndexReader {
-  listIndexedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]>;
+  listTrackedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]>;
   startRun(input: StartIndexRunInput): Promise<SessionIndexRun>;
   recordUnchanged(run: SessionIndexRun, observation: SessionObservation): Promise<void>;
   recordFailure(

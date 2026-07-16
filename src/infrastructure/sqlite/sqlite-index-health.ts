@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type {
   IndexContentReachabilityHealth,
+  IndexCaptureScopeHealth,
   IndexHealthCheck,
   IndexFtsSecureDeleteHealth,
   IndexWriterLeaseHealth,
@@ -20,6 +21,7 @@ import { readCanonicalDocument } from "./sqlite-session-document.ts";
 import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import { ftsProjectionContentIsValid, ftsProjectionStructureIsValid } from "./fts-projection.ts";
+import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
@@ -61,6 +63,7 @@ function inspectDatabaseHealth(
   fts5SecureDeleteRequired: boolean,
 ): ReadyIndexHealth {
   const canonicalIntegrity = check(() => canonicalIntegrityIsValid(database));
+  const captureScope = inspectCaptureScope(database, canonicalIntegrity);
   const foreignKeys = check(() => foreignKeysAreValid(database));
   const contentReachability = inspectContentReachability(database);
   const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
@@ -76,6 +79,7 @@ function inspectDatabaseHealth(
   const activeRunHasLiveIndexLease = runs.active === 0 || writerLease === "index-live";
   const ok =
     canonicalIntegrity === "ok" &&
+    captureScope.status !== "inspection-failed" &&
     foreignKeys === "ok" &&
     contentReachability.status === "ok" &&
     ftsStructure === "ok" &&
@@ -88,6 +92,7 @@ function inspectDatabaseHealth(
 
   return Object.freeze({
     ok,
+    captureScope,
     canonicalIntegrity,
     foreignKeys,
     contentReachability: contentReachability.status,
@@ -103,6 +108,20 @@ function inspectDatabaseHealth(
     activeRuns: runs.active,
     interruptedRuns: runs.interrupted,
   });
+}
+
+function inspectCaptureScope(
+  database: DatabaseSync,
+  canonicalIntegrity: IndexHealthCheck,
+): IndexCaptureScopeHealth {
+  if (canonicalIntegrity !== "ok") return { status: "inspection-failed" };
+  try {
+    const scope = readSqliteCaptureScope(database);
+    if (scope.status === "uninitialized") return { status: "inspection-failed" };
+    return { ...scope, status: scope.status };
+  } catch {
+    return { status: "inspection-failed" };
+  }
 }
 
 export function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
@@ -195,7 +214,6 @@ function sessionTrackingIsValid(database: DatabaseSync): boolean {
       return false;
     }
     if (row.captured_at !== null) return false;
-    if (freshness.status === "unindexed" && row.presence_status !== "present") return false;
   }
   return true;
 }

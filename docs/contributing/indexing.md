@@ -20,8 +20,10 @@ never writes to the provider.
 5. Read and validate each changed candidate. Replace its canonical document,
    public-document digest, tracking state, interned text, and FTS rows in one
    leased transaction.
-6. Only after complete discovery, mark retained identities absent from that
-   exact source instance as `missing`. Finish the run with `complete` coverage.
+6. Only after complete discovery, mark every tracked identity absent from that
+   exact source instance as `missing`. This includes a failed first capture that
+   has tracking evidence but no canonical document. Finish the run with
+   `complete` coverage.
 
 ## Guarantees and failures
 
@@ -33,10 +35,17 @@ never writes to the provider.
 - A replacement failure rolls back the replacement, records a
   `repository-write` failure when possible, and fails the indexing operation.
 - A complete scan may mark a session `missing`, but it does not delete its
-  canonical document. A later matching revision becomes current without a new
-  transcript read.
+  canonical document or tracking-only failure evidence. A failed first capture
+  can therefore be both `unindexed` and `missing`; later successful capture
+  creates its first retained document. A retained matching revision becomes
+  current without a new transcript read.
 - Source kind, source instance, and native ID form the tracking boundary. The
   writer lease prevents concurrent maintenance or indexing writes.
+
+List, search, and entries report a page-level capture scope built from this
+tracking state. Doctor reports the same global aggregate. Capture scope describes
+which evidence may be unavailable; it does not claim that an unindexed session
+matched or failed a canonical metadata or transcript filter.
 
 ## Cost and tradeoff
 

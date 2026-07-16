@@ -10,6 +10,11 @@ import {
   type SessionListPage,
   type SessionQuerySummary,
 } from "../../src/domain/session-query.ts";
+import {
+  completeCaptureScope,
+  emptyCompleteCaptureScope,
+  uninitializedCaptureScope,
+} from "../fixtures/session-capture-scope.ts";
 
 const paths: IndexPaths = {
   directory: "/data/sessions",
@@ -21,10 +26,14 @@ const paths: IndexPaths = {
 
 describe("listSessions", () => {
   test("returns an empty result without opening uninitialized state", async () => {
-    const lifecycle = lifecycleWith({ sessions: [] }, "uninitialized");
+    const lifecycle = lifecycleWith(
+      { sessions: [], captureScope: emptyCompleteCaptureScope },
+      "uninitialized",
+    );
 
     await expect(listSessions({ paths, lifecycle })).resolves.toEqual({
       sessions: [],
+      captureScope: uninitializedCaptureScope,
     });
     expect(lifecycle.openReader).not.toHaveBeenCalled();
   });
@@ -39,6 +48,7 @@ describe("listSessions", () => {
         },
         { ...listItem("a"), root: { kind: "unknown" as const } },
       ],
+      captureScope: completeCaptureScope,
       nextCursor: createSessionQueryCursor("next-page"),
     } satisfies SessionListPage;
     const lifecycle = lifecycleWith(page);
@@ -72,6 +82,8 @@ describe("listSessions", () => {
     expect(Object.isFrozen(result.sessions[0])).toBe(true);
     expect(Object.isFrozen(result.sessions[0]!.identity.source)).toBe(true);
     expect(Object.isFrozen(result.sessions[0]?.root)).toBe(true);
+    expect(result.captureScope).toEqual(completeCaptureScope);
+    expect(result.captureScope).not.toBe(page.captureScope);
     expect(
       result.sessions[0]?.root.kind === "known" &&
         Object.isFrozen(result.sessions[0].root.root.source),
@@ -92,13 +104,13 @@ describe("listSessions", () => {
   });
 
   test.each([0, 201, 1.5])("rejects invalid limit %s before inspection", async (limit) => {
-    const lifecycle = lifecycleWith({ sessions: [] });
+    const lifecycle = lifecycleWith({ sessions: [], captureScope: emptyCompleteCaptureScope });
     await expect(listSessions({ paths, lifecycle, limit })).rejects.toBeInstanceOf(TypeError);
     expect(lifecycle.inspect).not.toHaveBeenCalled();
   });
 
   test("preserves an undefined repository rejection as a failed read", async () => {
-    const lifecycle = lifecycleWith({ sessions: [] });
+    const lifecycle = lifecycleWith({ sessions: [], captureScope: emptyCompleteCaptureScope });
     const reader = await lifecycle.openReader(paths);
     vi.mocked(reader.query.list).mockRejectedValueOnce(undefined);
     lifecycle.openReader.mockClear();
@@ -113,7 +125,10 @@ describe("listSessions", () => {
   });
 
   test("treats a cursor against an absent library as stale", async () => {
-    const lifecycle = lifecycleWith({ sessions: [] }, "uninitialized");
+    const lifecycle = lifecycleWith(
+      { sessions: [], captureScope: emptyCompleteCaptureScope },
+      "uninitialized",
+    );
 
     await expect(listSessions({ paths, lifecycle, cursor: "old-page" })).rejects.toBeInstanceOf(
       SessionQueryOperationalError,
@@ -125,7 +140,10 @@ describe("listSessions", () => {
 function lifecycleWith(page: SessionListPage, state: "ready" | "uninitialized" = "ready") {
   const sessions = {} as SessionIndexReader;
   const query = {
-    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({ entries: [] })),
+    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({
+      entries: [],
+      captureScope: emptyCompleteCaptureScope,
+    })),
     list: vi.fn<SessionQueryRepository["list"]>(async () => page),
     search: vi.fn<SessionQueryRepository["search"]>(async () => ({
       hits: [],
@@ -135,6 +153,7 @@ function lifecycleWith(page: SessionListPage, state: "ready" | "uninitialized" =
         uniqueKnownRoots: 0,
         unknownLineageSessions: 0,
       },
+      captureScope: emptyCompleteCaptureScope,
     })),
   } satisfies SessionQueryRepository;
   const reader = {

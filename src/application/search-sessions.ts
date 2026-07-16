@@ -18,6 +18,11 @@ import {
   type SessionSearchTermMode,
 } from "../domain/session-query.ts";
 import type { SessionRootResolution } from "../domain/session-lineage.ts";
+import {
+  copySessionCaptureScope,
+  createUninitializedCaptureScope,
+  type SessionCaptureScope,
+} from "../domain/session-capture-scope.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = MAX_SESSION_QUERY_LIMIT;
@@ -37,6 +42,7 @@ export interface SelectedSessionSearchHit {
 export interface SearchSessionsResult {
   readonly hits: readonly SelectedSessionSearchHit[];
   readonly support: SessionSearchSupport;
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: SessionQueryCursor;
 }
 
@@ -70,6 +76,10 @@ export async function searchSessions(input: {
         uniqueKnownRoots: 0,
         unknownLineageSessions: 0,
       }),
+      captureScope: createUninitializedCaptureScope({
+        ...query.filter,
+        searchText: query.text,
+      }),
     });
   }
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
@@ -79,6 +89,7 @@ export async function searchSessions(input: {
     return Object.freeze({
       hits: Object.freeze(page.hits.map(selectSearchHit)),
       support: copySupport(page.support),
+      captureScope: copySessionCaptureScope(page.captureScope),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     });
   });

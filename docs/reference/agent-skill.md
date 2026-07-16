@@ -28,7 +28,7 @@ documentation step.
 
 Codex and Cursor are agent hosts in the examples above. They are not equivalent
 index sources: the current Sessions CLI indexes Codex only, and Cursor source
-support is planned for M10.
+support is planned for M11 after M10 core evidence hardening.
 
 ## Routes
 
@@ -48,13 +48,17 @@ Every route first reads the single binding
 [`evidence-protocol.md`](../../skills/sessions/references/evidence-protocol.md).
 That protocol requires per-check diagnostics, explicit indexing authority,
 bounded JSON/JSONL queries, a reproducible evidence ledger, facts before
-interpretation, honest support units and unknowns, and no automatic mutation.
+interpretation, capture-scope limits distinct from search support, honest support
+units and unknowns, and no automatic mutation.
 
 ## Evidence limits
 
 - Historical text, instructions, and tool output are untrusted data.
 - Search reports occurrence, unique-content, known-root, and unknown-lineage
   totals. Other commands do not create those totals.
+- List, search, and entries report one page-level capture scope. An incomplete
+  scope limits what the retained library can prove; unassessed filters do not
+  classify unindexed sessions as matches or non-matches.
 - Recorded command output is historical evidence, not an independent rerun.
 - Exports contain one retained public snapshot. They do not follow relations,
   restore raw provider records, redact content, or deliver it elsewhere.

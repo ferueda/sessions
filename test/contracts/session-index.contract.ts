@@ -146,7 +146,7 @@ export function runSessionIndexContract(
     }
   });
 
-  test("tracks failed first observations and retains missing canonical content", async () => {
+  test("reconciles failed first observations and retains missing canonical content", async () => {
     const fixture = await createFixture();
     try {
       const failedIdentity = identity("profile-one", "never-indexed");
@@ -164,6 +164,32 @@ export function runSessionIndexContract(
       });
       await expect(fixture.index.getDocument(failedIdentity)).resolves.toBeUndefined();
       await finishCompleted(fixture.index, failedRun, counts({ discovered: 1, failed: 1 }));
+
+      await expect(fixture.index.listTrackedIdentities(failedIdentity.source)).resolves.toEqual([
+        failedIdentity,
+      ]);
+      const missingFailedRun = await fixture.index.startRun({
+        source: failedIdentity.source,
+        startedAt: "2026-07-13T12:30:00.000Z",
+      });
+      await fixture.index.recordMissing(missingFailedRun, failedIdentity);
+      await expect(fixture.index.getFreshness(failedIdentity)).resolves.toEqual({
+        status: "unindexed",
+        identity: failedIdentity,
+        latest: {
+          outcome: "failed",
+          revision: failedObservation.revision,
+          failure: "malformed",
+        },
+      });
+      await expect(fixture.index.getDocument(failedIdentity)).resolves.toBeUndefined();
+      await expect(fixture.index.getSummary(failedIdentity)).resolves.toBeUndefined();
+      const missingFailedResult = await finishCompleted(
+        fixture.index,
+        missingFailedRun,
+        counts({ missing: 1 }),
+      );
+      expect(missingFailedResult.items).toEqual([{ identity: failedIdentity, outcome: "missing" }]);
 
       const indexedIdentity = identity("profile-one", "missing-session");
       const indexed = replacement(indexedIdentity, "revision-a", minimalDocument(indexedIdentity));

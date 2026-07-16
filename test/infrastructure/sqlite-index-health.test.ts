@@ -7,13 +7,14 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import type { SessionIndexFailureCode } from "../../src/application/ports/session-index.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import {
   digestPublicSessionDocument,
   projectPublicSessionDocument,
   SESSION_DOCUMENT_DIGEST_SCHEME,
 } from "../../src/domain/public-session-document.ts";
-import type { SessionDocument } from "../../src/domain/session.ts";
+import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
@@ -39,6 +40,24 @@ describe("SQLite ready-index health", () => {
 
     await expect(lifecycle.inspectHealth(paths)).resolves.toEqual({
       ok: true,
+      captureScope: {
+        status: "incomplete",
+        trackedSessions: 0,
+        retainedSessions: { current: 0, stale: 0 },
+        unindexedSessions: 0,
+        sourceState: { present: 0, missing: 0, unknown: 0 },
+        sourceCoverage: { complete: 0, unknown: 0 },
+        latestFailures: {
+          unavailable: 0,
+          unreadable: 0,
+          malformed: 0,
+          sourceChanged: 0,
+          unsupportedFormat: 0,
+          repositoryWrite: 0,
+        },
+        appliedFilters: [],
+        unassessedFilters: [],
+      },
       canonicalIntegrity: "ok",
       foreignKeys: "ok",
       contentReachability: "ok",
@@ -171,9 +190,111 @@ describe("SQLite ready-index health", () => {
     await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
       ok: true,
       canonicalIntegrity: "ok",
+      captureScope: {
+        status: "incomplete",
+        trackedSessions: 1,
+        retainedSessions: { current: 0, stale: 0 },
+        unindexedSessions: 1,
+        sourceState: { present: 0, missing: 0, unknown: 1 },
+        sourceCoverage: { complete: 0, unknown: 1 },
+        latestFailures: { unreadable: 1 },
+        appliedFilters: [],
+        unassessedFilters: [],
+      },
       ftsStructure: "ok",
       ftsContent: "ok",
     });
+  });
+
+  test("accepts and reports a missing first-seen failure without canonical data", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database);
+      const observedAt = "2026-07-14T12:00:00.000Z";
+      database
+        .prepare(
+          `UPDATE sessions_source_instances
+           SET coverage_status = 'complete', coverage_observed_at = ?
+           WHERE source_instance_id = ?`,
+        )
+        .run(observedAt, fixture.sourceInstanceId);
+      database
+        .prepare(
+          `UPDATE sessions_session_tracking
+           SET presence_status = 'missing', presence_observed_at = ?
+           WHERE session_id = ?`,
+        )
+        .run(observedAt, fixture.sessionId);
+    });
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      canonicalIntegrity: "ok",
+      captureScope: {
+        status: "incomplete",
+        trackedSessions: 1,
+        retainedSessions: { current: 0, stale: 0 },
+        unindexedSessions: 1,
+        sourceState: { present: 0, missing: 1, unknown: 0 },
+        sourceCoverage: { complete: 1, unknown: 0 },
+        latestFailures: { unreadable: 1 },
+      },
+    });
+  });
+
+  test("reports exact global capture partitions and failure counts without identities", async () => {
+    const paths = await initializedPaths();
+    const privateMarker = "private-capture-scope-marker";
+    mutateDatabase(paths.database, (database) => {
+      const failures = [
+        "unavailable",
+        "unreadable",
+        "malformed",
+        "source-changed",
+        "unsupported-format",
+        "repository-write",
+      ] as const;
+      for (const failure of failures) {
+        const fixture = seedValidTrackingOnly(database, {
+          instanceId: `${privateMarker}-${failure}`,
+          failure,
+        });
+        markSourceCoverageComplete(database, fixture);
+        if (failure === "unavailable") attachEmptyCanonical(database, fixture, "stale");
+        if (failure === "repository-write") markTrackingMissing(database, fixture);
+      }
+      const current = seedValidTrackingOnly(database, {
+        instanceId: `${privateMarker}-current`,
+      });
+      markSourceCoverageComplete(database, current);
+      attachEmptyCanonical(database, current, "current");
+    });
+
+    const health = await createSqliteIndexLifecycle().inspectHealth(paths);
+
+    expect(health).toMatchObject({
+      ok: true,
+      canonicalIntegrity: "ok",
+      captureScope: {
+        status: "incomplete",
+        trackedSessions: 7,
+        retainedSessions: { current: 1, stale: 1 },
+        unindexedSessions: 5,
+        sourceState: { present: 6, missing: 1, unknown: 0 },
+        sourceCoverage: { complete: 7, unknown: 0 },
+        latestFailures: {
+          unavailable: 1,
+          unreadable: 1,
+          malformed: 1,
+          sourceChanged: 1,
+          unsupportedFormat: 1,
+          repositoryWrite: 1,
+        },
+        appliedFilters: [],
+        unassessedFilters: [],
+      },
+    });
+    expect(JSON.stringify(health.captureScope)).not.toContain(privateMarker);
   });
 
   test("validates source instances even when they have no tracking rows", async () => {
@@ -519,15 +640,26 @@ function mutateDatabase(file: string, mutate: (database: DatabaseSync) => void):
 interface TrackingOnlyFixture {
   readonly sessionId: number | bigint;
   readonly sourceInstanceId: number | bigint;
+  readonly identity: SessionIdentity;
 }
 
-function seedValidTrackingOnly(database: DatabaseSync): TrackingOnlyFixture {
+function seedValidTrackingOnly(
+  database: DatabaseSync,
+  options: {
+    readonly instanceId?: string;
+    readonly nativeId?: string;
+    readonly failure?: SessionIndexFailureCode;
+  } = {},
+): TrackingOnlyFixture {
+  const instanceId = options.instanceId ?? "tracking-only";
+  const nativeId = options.nativeId ?? "failed-session";
+  const failure = options.failure ?? "unreadable";
   const source = database
     .prepare(
       `INSERT INTO sessions_source_instances (kind, instance_id)
-       VALUES ('synthetic', 'tracking-only')`,
+       VALUES ('synthetic', ?)`,
     )
-    .run();
+    .run(instanceId);
   const tracking = database
     .prepare(
       `INSERT INTO sessions_session_tracking (
@@ -538,23 +670,51 @@ function seedValidTrackingOnly(database: DatabaseSync): TrackingOnlyFixture {
          latest_adapter_version,
          latest_outcome,
          latest_failure_code
-       ) VALUES (?, 'failed-session', 'sha256-json-v1', ?, 'fixture-v1', 'failed', 'unreadable')`,
+       ) VALUES (?, ?, 'sha256-json-v1', ?, 'fixture-v1', 'failed', ?)`,
     )
-    .run(source.lastInsertRowid, "a".repeat(64));
+    .run(source.lastInsertRowid, nativeId, "a".repeat(64), failure);
   return {
     sourceInstanceId: source.lastInsertRowid,
     sessionId: tracking.lastInsertRowid,
+    identity: { source: { kind: "synthetic", instanceId }, nativeId },
   };
 }
 
 function seedValidEmptyCanonicalSession(database: DatabaseSync): void {
   const fixture = seedValidTrackingOnly(database);
+  markSourceCoverageComplete(database, fixture);
+  attachEmptyCanonical(database, fixture, "current");
+}
+
+function markSourceCoverageComplete(database: DatabaseSync, fixture: TrackingOnlyFixture): void {
+  const observedAt = "2026-07-14T12:00:00.000Z";
+  database
+    .prepare(
+      `UPDATE sessions_source_instances
+       SET coverage_status = 'complete', coverage_observed_at = ?
+       WHERE source_instance_id = ?`,
+    )
+    .run(observedAt, fixture.sourceInstanceId);
+}
+
+function markTrackingMissing(database: DatabaseSync, fixture: TrackingOnlyFixture): void {
+  database
+    .prepare(
+      `UPDATE sessions_session_tracking
+       SET presence_status = 'missing', presence_observed_at = ?
+       WHERE session_id = ?`,
+    )
+    .run("2026-07-14T12:00:00.000Z", fixture.sessionId);
+}
+
+function attachEmptyCanonical(
+  database: DatabaseSync,
+  fixture: TrackingOnlyFixture,
+  freshness: "current" | "stale",
+): void {
   const observedAt = "2026-07-14T12:00:00.000Z";
   const document: SessionDocument = {
-    identity: {
-      source: { kind: "synthetic", instanceId: "tracking-only" },
-      nativeId: "failed-session",
-    },
+    identity: fixture.identity,
     lineageCoverage: "unknown",
     relations: [],
     entries: [],
@@ -562,25 +722,18 @@ function seedValidEmptyCanonicalSession(database: DatabaseSync): void {
   const digest = digestPublicSessionDocument(projectPublicSessionDocument(document));
   database
     .prepare(
-      `UPDATE sessions_source_instances
-       SET coverage_observed_at = ?
-       WHERE source_instance_id = ?`,
-    )
-    .run(observedAt, fixture.sourceInstanceId);
-  database
-    .prepare(
       `UPDATE sessions_session_tracking
        SET last_good_fingerprint_scheme = latest_fingerprint_scheme,
            last_good_fingerprint_digest = latest_fingerprint_digest,
            last_good_adapter_version = latest_adapter_version,
-           latest_outcome = 'indexed',
-           latest_failure_code = NULL,
            presence_observed_at = ?,
            captured_at = ?,
-           last_seen_at = ?
+           last_seen_at = ?,
+           latest_outcome = CASE WHEN ? = 'current' THEN 'indexed' ELSE latest_outcome END,
+           latest_failure_code = CASE WHEN ? = 'current' THEN NULL ELSE latest_failure_code END
        WHERE session_id = ?`,
     )
-    .run(observedAt, observedAt, observedAt, fixture.sessionId);
+    .run(observedAt, observedAt, observedAt, freshness, freshness, fixture.sessionId);
   const stored = Buffer.from(digest.digest, "hex");
   database
     .prepare(
@@ -624,6 +777,7 @@ function corruptObservationTimestamp(
 async function expectCanonicalIntegrityFailure(paths: IndexPaths): Promise<void> {
   await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
     ok: false,
+    captureScope: { status: "inspection-failed" },
     canonicalIntegrity: "failed",
     foreignKeys: "ok",
     ftsStructure: "ok",

@@ -10,6 +10,10 @@ import {
   type SessionSearchPage,
   type SessionQuerySummary,
 } from "../../src/domain/session-query.ts";
+import {
+  completeCaptureScope,
+  emptyCompleteCaptureScope,
+} from "../fixtures/session-capture-scope.ts";
 
 const paths: IndexPaths = {
   directory: "/data/sessions",
@@ -30,6 +34,12 @@ describe("searchSessions", () => {
         uniqueContent: 0,
         uniqueKnownRoots: 0,
         unknownLineageSessions: 0,
+      },
+      captureScope: {
+        ...emptyCompleteCaptureScope,
+        status: "uninitialized",
+        sourceCoverage: { complete: 0, unknown: 0 },
+        unassessedFilters: ["searchText"],
       },
     });
     expect(lifecycle.openReader).not.toHaveBeenCalled();
@@ -104,6 +114,7 @@ describe("searchSessions", () => {
         uniqueKnownRoots: 1,
         unknownLineageSessions: 0,
       },
+      captureScope: completeCaptureScope,
     });
 
     const result = await searchSessions({ paths, lifecycle, text: "needle" });
@@ -123,6 +134,7 @@ describe("searchSessions", () => {
     expect(Object.isFrozen(result.hits[0]?.root)).toBe(true);
     expect(Object.isFrozen(result.hits[0]?.matchedTerms)).toBe(true);
     expect(result.hits[0]?.matchedTerms).not.toBe(hit.matchedTerms);
+    expect(result.captureScope).toEqual(completeCaptureScope);
   });
 
   test("forwards explicit any-term mode", async () => {
@@ -167,8 +179,14 @@ describe("searchSessions", () => {
 
 function lifecycleWith(page: SessionSearchPage, state: "ready" | "uninitialized" = "ready") {
   const query = {
-    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({ entries: [] })),
-    list: vi.fn<SessionQueryRepository["list"]>(async () => ({ sessions: [] })),
+    entries: vi.fn<SessionQueryRepository["entries"]>(async () => ({
+      entries: [],
+      captureScope: emptyCompleteCaptureScope,
+    })),
+    list: vi.fn<SessionQueryRepository["list"]>(async () => ({
+      sessions: [],
+      captureScope: emptyCompleteCaptureScope,
+    })),
     search: vi.fn<SessionQueryRepository["search"]>(async () => page),
   } satisfies SessionQueryRepository;
   const reader = {
@@ -208,6 +226,7 @@ function emptyPage(): SessionSearchPage {
       uniqueKnownRoots: 0,
       unknownLineageSessions: 0,
     },
+    captureScope: emptyCompleteCaptureScope,
   };
 }
 

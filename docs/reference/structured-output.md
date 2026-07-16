@@ -1,14 +1,14 @@
 # Structured output contract
 
 - Status: current schema 1 behavior
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 
 This reference owns the machine-readable output of `sessions list`,
 `sessions search`, `sessions entries`, `sessions show`, and `sessions export`. JSON is one bundle.
 JSONL is one compact JSON object per physical line, with one trailing newline per
 record. Embedded newlines are JSON escapes, so they never split a JSONL record.
 For a command result, JSON and JSONL encode the same eligible evidence, selection,
-and persisted document digest.
+persisted document digest, and page-level capture scope.
 
 Pre-alpha schemas may reset before publication. Compatibility starts with the
 first published contract. Removing a field, changing a field's meaning, or
@@ -143,6 +143,14 @@ entry, and a query-derived root.
 List, search, and entries include a query-derived known retained root or
 `unknown`. Show and export do not. Root attribution does not alter the complete
 document projection or digest.
+
+List, search, and entries also include one page-level `captureScope`. It reports
+aggregate evidence availability from registered sources and tracking state, not
+another set of retained matches. Source, instance, native-ID, source-state, and
+canonical-session filters can be applied to tracking evidence. Active canonical
+metadata, entry, actor/origin/tool, time, and search-text filters are listed in
+`unassessedFilters`; an unindexed session is never classified as matching or not
+matching them. Filter names are reported without values.
 
 Entries keeps binary source kind, source instance, native ID, and canonical
 entry-ordinal order. It emits one optional 512-byte UTF-8 preview only after the
@@ -344,6 +352,51 @@ interface SearchSupportV1 {
   readonly unknownLineageSessions: number;
 }
 
+type CaptureScopeFilterNameV1 =
+  | "source"
+  | "instance"
+  | "nativeId"
+  | "sourceState"
+  | "workspace"
+  | "activityAfter"
+  | "activityBefore"
+  | "capturedAfter"
+  | "capturedBefore"
+  | "observedAfter"
+  | "observedBefore"
+  | "session"
+  | "entryAfter"
+  | "entryBefore"
+  | "actor"
+  | "origin"
+  | "entryKind"
+  | "toolName"
+  | "toolNamespace"
+  | "searchText";
+
+interface SessionCaptureScopeV1 {
+  readonly status: "uninitialized" | "complete" | "incomplete";
+  readonly trackedSessions: number;
+  readonly retainedSessions: { readonly current: number; readonly stale: number };
+  readonly unindexedSessions: number;
+  readonly sourceState: {
+    readonly present: number;
+    readonly missing: number;
+    readonly unknown: number;
+  };
+  readonly sourceCoverage: { readonly complete: number; readonly unknown: number };
+  readonly latestFailures: {
+    readonly unavailable: number;
+    readonly unreadable: number;
+    readonly malformed: number;
+    readonly sourceChanged: number;
+    readonly unsupportedFormat: number;
+    readonly repositoryWrite: number;
+  };
+  readonly appliedFilters: readonly CaptureScopeFilterNameV1[];
+  readonly unassessedFilters: readonly CaptureScopeFilterNameV1[];
+}
+
 interface PublicEntryInventoryV1 {
   readonly session: PublicSessionSummaryV1;
   readonly root: PublicSessionRootV1;
@@ -379,17 +432,20 @@ interface PublicEntryInventoryV1 {
 ```ts
 type ListJsonV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
   readonly sessions: readonly PublicListSessionV1[];
 };
 
 type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
   readonly support: SearchSupportV1;
   readonly hits: readonly PublicSearchHitV1[];
 };
 
 type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
   readonly entries: readonly PublicEntryInventoryV1[];
 };
 
@@ -412,6 +468,7 @@ type ExportJsonV1 = StructuredHeaderV1<"export", "snapshot"> & {
 type ListPageJsonlV1 = StructuredHeaderV1<"list", "page"> & {
   readonly sessionCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
 };
 type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
   readonly summary: PublicListSessionV1;
@@ -420,6 +477,7 @@ type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
 type SearchPageJsonlV1 = StructuredHeaderV1<"search", "page"> & {
   readonly hitCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
   readonly support: SearchSupportV1;
 };
 type SearchHitJsonlV1 = StructuredHeaderV1<"search", "hit"> & {
@@ -429,6 +487,7 @@ type SearchHitJsonlV1 = StructuredHeaderV1<"search", "hit"> & {
 type EntriesPageJsonlV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly entryCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: SessionCaptureScopeV1;
 };
 type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
   readonly entry: PublicEntryInventoryV1;
@@ -465,6 +524,17 @@ are always present. Optional title/provider timestamp/tool/preview fields are om
 when absent. All other members are required. Counts and byte totals are
 non-negative safe integers.
 
+Capture-scope counts obey three exact partitions:
+`trackedSessions = retainedSessions.current + retainedSessions.stale +
+unindexedSessions`; tracked sessions also equal the sum of the three
+`sourceState` counts; and stale plus unindexed sessions equal the sum of the six
+`latestFailures` counts. `sourceCoverage` counts registered source instances,
+not sessions. `complete` requires at least one applicable source, no unknown
+coverage, and no stale or unindexed session in the assessed tracking scope.
+`uninitialized` has all-zero evidence counts. `appliedFilters` and
+`unassessedFilters` are disjoint, use the union's canonical order, and contain no
+filter values.
+
 Roots are required on list sessions, search hits, and entry records. Search
 `matchedTerms` is required, non-empty, unique, in first-query order, and contains
 at most 32 exact query terms.
@@ -482,6 +552,9 @@ empty show/export snapshot emits one JSONL session envelope. Each JSONL
 relation/entry repeats the session reference and document digest, so it remains
 attributable without prior lines. Nested JSON relations/entries inherit the one
 snapshot identity and digest.
+
+Capture scope appears once in a JSON page bundle and once in the JSONL page
+record. It never repeats on a session, hit, or entry record.
 
 `segments.total` and `segmentText.originalUtf8Bytes` cover all canonical
 segments/text in the selected entry window before global segment/text limits.
@@ -502,6 +575,24 @@ An empty list JSON result is still a page:
   "type": "page",
   "disposition": "untrusted-history",
   "nextCursor": null,
+  "captureScope": {
+    "status": "uninitialized",
+    "trackedSessions": 0,
+    "retainedSessions": { "current": 0, "stale": 0 },
+    "unindexedSessions": 0,
+    "sourceState": { "present": 0, "missing": 0, "unknown": 0 },
+    "sourceCoverage": { "complete": 0, "unknown": 0 },
+    "latestFailures": {
+      "unavailable": 0,
+      "unreadable": 0,
+      "malformed": 0,
+      "sourceChanged": 0,
+      "unsupportedFormat": 0,
+      "repositoryWrite": 0
+    },
+    "appliedFilters": [],
+    "unassessedFilters": []
+  },
   "sessions": []
 }
 ```
@@ -509,13 +600,13 @@ An empty list JSON result is still a page:
 The equivalent JSONL result is one independently parseable line:
 
 ```text
-{"schemaVersion":1,"command":"list","type":"page","disposition":"untrusted-history","sessionCount":0,"nextCursor":null}
+{"schemaVersion":1,"command":"list","type":"page","disposition":"untrusted-history","sessionCount":0,"nextCursor":null,"captureScope":{"status":"uninitialized","trackedSessions":0,"retainedSessions":{"current":0,"stale":0},"unindexedSessions":0,"sourceState":{"present":0,"missing":0,"unknown":0},"sourceCoverage":{"complete":0,"unknown":0},"latestFailures":{"unavailable":0,"unreadable":0,"malformed":0,"sourceChanged":0,"unsupportedFormat":0,"repositoryWrite":0},"appliedFilters":[],"unassessedFilters":[]}}
 ```
 
 An empty entries JSONL result is also one page:
 
 ```text
-{"schemaVersion":1,"command":"entries","type":"page","disposition":"untrusted-history","entryCount":0,"nextCursor":null}
+{"schemaVersion":1,"command":"entries","type":"page","disposition":"untrusted-history","entryCount":0,"nextCursor":null,"captureScope":{"status":"uninitialized","trackedSessions":0,"retainedSessions":{"current":0,"stale":0},"unindexedSessions":0,"sourceState":{"present":0,"missing":0,"unknown":0},"sourceCoverage":{"complete":0,"unknown":0},"latestFailures":{"unavailable":0,"unreadable":0,"malformed":0,"sourceChanged":0,"unsupportedFormat":0,"repositoryWrite":0},"appliedFilters":[],"unassessedFilters":[]}}
 ```
 
 Every show/export JSONL sequence begins with the session envelope. A

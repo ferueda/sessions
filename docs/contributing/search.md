@@ -17,21 +17,28 @@ The public behavior is defined by the [CLI contract](../reference/cli-contract.m
 5. After selecting the page, SQLite loads full text, its digest, and the FTS
    snippet only for selected content IDs. `any` mode probes each selected entry
    for its exact matched terms; `all` reuses the unique query terms.
-6. One query-scoped resolver supplies support counts and each hit's known root or
+6. The same immutable snapshot supplies one page-level capture scope from
+   registered sources and tracking state. Source/tracking filters can narrow that
+   aggregate; canonical metadata, entry, and search-text filters are named as
+   unassessed for unindexed sessions.
+7. One query-scoped resolver supplies support counts and each hit's known root or
    `unknown`.
-7. Search verifies each selected content hash, bounds snippets and context to 512
+8. Search verifies each selected content hash, bounds snippets and context to 512
    UTF-8 bytes, and adds requested neighboring entries plus direct tool-call and
    tool-result links.
-8. Support is calculated over the complete filtered result, before page slicing:
+9. Support is calculated over the complete filtered retained result, before page slicing:
    matching occurrences, distinct content, known roots, and sessions with unknown
    lineage.
-9. A next cursor binds the full query, library identity, writer generation, and
-   offset. It is a continuation token, not a durable bookmark.
+10. A next cursor binds the full query, library identity, writer generation, and
+    offset. It is a continuation token, not a durable bookmark.
 
 ## Guarantees and failures
 
 - Ranking, filters, grouping, support, roots, matched terms, snippets, context,
   and cursors are exact and deterministic for one retained snapshot.
+- Capture scope is evidence-availability context, not search support. Search text
+  is always unassessed for tracking-only sessions, so a no-hit page never claims
+  that every provider session was searchable or did not match.
 - Repeated copies of one segment do not improve BM25 rank. They still count as
   occurrences, while distinct content and lineage use their own support units.
 - Context does not inherit the primary hit's filters. Linked expansion is direct,

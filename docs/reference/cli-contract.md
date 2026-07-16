@@ -1,7 +1,7 @@
 # CLI contract
 
 - Status: current behavior plus accepted later-V1 semantics
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
@@ -83,17 +83,17 @@ state unknown.
 `updatedAt`, falling back to `createdAt`; missing activity sorts last, then
 activity descends, then the raw source/instance/native tuple ascends with binary
 collation. When another page exists, output ends with the copyable
-`Next cursor: <token>` line. A fresh library renders exactly
-`No sessions found.` plus a newline, exits `0`, and does not create state or
-resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
+`Next cursor: <token>` line. A fresh library renders `No sessions found.`, then
+the uninitialized-capture warning described below, exits `0`, and does not create
+state or resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
 Every non-empty result includes one query-derived known retained root or
 `unknown`.
 
 `search` requires non-blank text, defaults to `--match all` and 20 primary hits,
 and accepts 1 through 200. `--context` defaults to 0 and accepts 0 through 10
-adjacent entries on each side. A no-match result renders exactly
-`No matches found.` plus a
-newline and exits `0`. Search, list, entries, and show read one immutable retained-library
+adjacent entries on each side. A no-match result renders `No matches found.`,
+then a capture warning when the page scope is not complete, and exits `0`.
+Search, list, entries, and show read one immutable retained-library
 snapshot per operation and never resolve or reopen Codex. JSON emits an empty
 page bundle; JSONL emits one page record.
 
@@ -102,9 +102,9 @@ and accepts 1 through 200. `all` returns every qualifying entry. `first` and
 `last` return the minimum or maximum canonical entry ordinal per session after
 all filters are applied. Every mode orders by binary source kind, source
 instance, native ID, then entry ordinal ascending; timestamps never reorder
-evidence. A fresh library renders exactly `No entries found.` plus a newline,
-exits `0`, and creates no state or provider object. JSON emits an empty page;
-JSONL emits one page record.
+evidence. A fresh library renders `No entries found.`, then the
+uninitialized-capture warning, exits `0`, and creates no state or provider
+object. JSON emits an empty page; JSONL emits one page record.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
@@ -172,7 +172,8 @@ For `ready`, the library check uses an immutable snapshot and adds
 `canonicalIntegrity`, `foreignKeys`, `contentReachability`,
 `orphanContentRows`, `orphanContentBytes`, `ftsStructure`, `ftsContent`,
 `ftsSecureDelete`, `ftsRemediation`, `pageReclamation`, `runRecords`,
-`writerLease`, `activeRuns`, and `interruptedRuns` to `details`. Checks are
+`writerLease`, `activeRuns`, `interruptedRuns`, and the capture details described
+below to `details`. Checks are
 `ok | failed`; content reachability is `ok | orphaned | inspection-failed`;
 orphan counts are exact non-negative decimal strings, or `unknown` when
 inspection fails. Page reclamation is `incremental | invalid`; FTS secure delete
@@ -183,6 +184,22 @@ remaining counts are non-negative decimal strings. Canonical, foreign-key,
 content-reachability, or run corruption fails. FTS-only damage reports
 rebuild-required without describing canonical loss. An active run is healthy
 only with an index-live lease. Doctor never opens a writer or applies migrations.
+
+The ready-library capture details are exactly `captureStatus`,
+`trackedSessions`, `retainedCurrentSessions`, `retainedStaleSessions`,
+`unindexedSessions`, `sourceStatePresentSessions`,
+`sourceStateMissingSessions`, `sourceStateUnknownSessions`,
+`sourceCoverageComplete`, `sourceCoverageUnknown`,
+`latestFailureUnavailable`, `latestFailureUnreadable`,
+`latestFailureMalformed`, `latestFailureSourceChanged`,
+`latestFailureUnsupportedFormat`, and `latestFailureRepositoryWrite`.
+`captureStatus` is `complete | incomplete | inspection-failed`; every other
+capture detail is a non-negative decimal string, or `unknown` when capture
+inspection fails. An incomplete scope keeps the library check healthy and uses
+the summary `Index schema N is ready; evidence may be incomplete`. A capture
+inspection failure fails the check. Any failed health condition keeps the
+existing `Index schema N failed health checks` summary instead of the incomplete
+warning.
 
 All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
 
@@ -277,8 +294,10 @@ and reports observed main-database file lengths rather than guaranteed savings.
 
 On a fresh uninitialized library, `sessions list`, cursor-free `sessions search`,
 and cursor-free `sessions entries` exit `0`, write their format-specific empty result to stdout,
-and leave stderr empty. Human uses the exact messages above; JSON uses an empty
-page bundle; JSONL uses one page record. They do not create storage, run
+and leave stderr empty. Human writes the normal empty-result line, a blank line,
+and exactly `Warning: retained evidence may be incomplete (capture scope is uninitialized).`;
+JSON uses an empty page bundle with `captureScope`; JSONL uses one page record
+with `captureScope`. They do not create storage, run
 migrations, open a reader, or resolve/probe an adapter. Initialized-but-empty
 uses the same output through a normal read snapshot. A supplied cursor against
 absent/recreated state is stale. Other initialized non-ready states remain
@@ -498,15 +517,24 @@ details are exactly `state`, `initialized`, `schemaVersion`,
 `supportedSchemaVersion`, `canonicalIntegrity`, `foreignKeys`,
 `contentReachability`, `orphanContentRows`, `orphanContentBytes`, `ftsStructure`,
 `ftsContent`, `ftsSecureDelete`, `ftsRemediation`, `pageReclamation`, `runRecords`,
-`writerLease`, `activeRuns`, and `interruptedRuns`; non-ready states retain the
-first four and add only applicable `reason`/`target`. `canonicalIntegrity`,
+`writerLease`, `activeRuns`, `interruptedRuns`, `captureStatus`,
+`trackedSessions`, `retainedCurrentSessions`, `retainedStaleSessions`,
+`unindexedSessions`, `sourceStatePresentSessions`,
+`sourceStateMissingSessions`, `sourceStateUnknownSessions`,
+`sourceCoverageComplete`, `sourceCoverageUnknown`,
+`latestFailureUnavailable`, `latestFailureUnreadable`,
+`latestFailureMalformed`, `latestFailureSourceChanged`,
+`latestFailureUnsupportedFormat`, and `latestFailureRepositoryWrite`; non-ready
+states retain the first four and add only applicable `reason`/`target`.
+`canonicalIntegrity`,
 foreign-key, FTS structure/content, and run-record values are `ok | failed`;
 content reachability is `ok | orphaned | inspection-failed`; orphan rows and
 logical UTF-8 bytes are exact decimal strings, or `unknown` after an inspection
 failure. FTS secure-delete is `enabled | missing | unsupported`; FTS remediation
 is `not-needed | rebuild-required`; writer-lease values are `free`, `index-live`,
 `forget-live`, `repair-live`, `compact-live`, `clear-live`, `expired`, or
-`invalid`.
+`invalid`. Ready-library capture values follow the health and warning semantics
+defined in Doctor JSON above.
 
 An admitted `source-codex` check has only `probeStatus` with value
 `ready | unavailable | unreadable`. Ready passes; unavailable/unreadable fails. A
@@ -565,6 +593,51 @@ state. Effective source-observation time follows the same evidence boundary: use
 the source coverage observation while coverage is unknown, otherwise use the
 session presence observation. `lastSeenAt`, capture time, and provider activity
 time are never substituted.
+
+### Page capture scope
+
+Every list, search, and entries result carries one page-level `captureScope`.
+The query rows and this aggregate are read from the same retained-library
+snapshot. It measures what Sessions has captured or failed to capture; it is not
+another result count and contains no session identities, filter values, paths,
+workspace values, transcript text, or other private fields.
+
+`status` is `uninitialized` for an absent library. In an initialized library it
+is `complete` only when at least one applicable registered source exists, all
+applicable source coverage is complete, and every assessed tracked session has
+a current canonical snapshot. Every other initialized scope is `incomplete`.
+The count partitions are exact:
+
+- `trackedSessions` equals `retainedSessions.current + retainedSessions.stale +
+unindexedSessions`;
+- `trackedSessions` also equals `sourceState.present + sourceState.missing +
+sourceState.unknown`; and
+- `retainedSessions.stale + unindexedSessions` equals the sum of the six
+  `latestFailures` counts.
+
+Source state uses the effective coverage boundary described above. A first-seen
+failure is counted as unindexed even when its retained tracking presence is
+missing. Source coverage counts registered source instances, not sessions.
+Latest failures use `unavailable`, `unreadable`, `malformed`, `sourceChanged`,
+`unsupportedFormat`, and `repositoryWrite`.
+
+Capture aggregation can apply exact source, instance, native-ID, source-state,
+and canonical-session filters to tracking evidence. Their structured names are
+`source`, `instance`, `nativeId`, `sourceState`, and `session`. Active workspace,
+activity/capture/observation time, entry time, actor, origin, entry-kind, tool,
+and search-text filters are listed in `unassessedFilters`; Sessions does not
+classify an unindexed session as matching or not matching canonical content it
+does not have. `appliedFilters` and `unassessedFilters` use one fixed canonical
+order and report names only. Search text is therefore always unassessed, even
+though it remains active for selecting search hits.
+
+Human output is silent for a complete scope. An incomplete or uninitialized
+scope appends one sanitized warning after the normal result, including empty
+results. JSON includes the aggregate once in the page bundle; JSONL includes it
+once in the page record and never repeats it on session, hit, or entry records.
+Search `support` remains query-wide evidence about matching retained text.
+`captureScope` instead describes capture availability, so zero hits never by
+itself proves that the providers contain no matching evidence.
 
 ### Entry filters
 

@@ -104,9 +104,9 @@ export function createCoordinatedSqliteSessionIndex(
   const index: SessionIndexWriter = {
     ...reader,
 
-    async listIndexedIdentities(source) {
+    async listTrackedIdentities(source) {
       assertSource(source);
-      return listIndexedIdentities(database, source);
+      return listTrackedIdentities(database, source);
     },
 
     async startRun(input) {
@@ -226,7 +226,6 @@ export function createCoordinatedSqliteSessionIndex(
           return;
         }
         const sessionId = integerAt(tracking.session_id);
-        if (!hasCanonicalDocument(database, sessionId)) return;
         database
           .prepare(
             `UPDATE sessions_session_tracking
@@ -289,7 +288,7 @@ interface RunContext {
   readonly sourceInstanceId: number;
 }
 
-function listIndexedIdentities(
+function listTrackedIdentities(
   database: DatabaseSync,
   source: SourceInstance,
 ): readonly SessionIdentity[] {
@@ -299,8 +298,6 @@ function listIndexedIdentities(
        FROM sessions_session_tracking AS tracking
        JOIN sessions_source_instances AS source
          ON source.source_instance_id = tracking.source_instance_id
-       JOIN sessions_canonical_sessions AS canonical
-         ON canonical.session_id = tracking.session_id
        WHERE source.kind = ? AND source.instance_id = ?
        ORDER BY tracking.native_id COLLATE BINARY`,
     )

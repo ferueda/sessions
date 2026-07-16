@@ -23,6 +23,7 @@ import {
   type CodexFixtureThread,
   type CodexSourceFixture,
 } from "../fixtures/codex/source.ts";
+import { uninitializedCaptureScope } from "../fixtures/session-capture-scope.ts";
 
 const TARGET_ID = "target-thread";
 const CHILD_ID = "child-thread";
@@ -281,7 +282,10 @@ describe("Codex durable vertical slice", () => {
     expect(existsSync(paths.shm)).toBe(false);
     expect(existsSync(paths.scratch)).toBe(false);
     await expect(readFile(neighbor, "utf8")).resolves.toBe("unrelated library neighbor");
-    await expect(list()).resolves.toEqual({ sessions: [] });
+    await expect(list()).resolves.toEqual({
+      sessions: [],
+      captureScope: uninitializedCaptureScope,
+    });
   });
 });
 

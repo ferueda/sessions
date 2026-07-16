@@ -18,9 +18,12 @@ The public behavior is defined by the
 5. After page selection, SQLite loads exact segment counts and at most one text
    preview per entry. An origin-filtered query previews only text with that
    origin; an omitted-only match has no preview.
-6. One query-scoped lineage resolver returns the known retained root or
+6. The same immutable snapshot supplies one page-level capture scope from
+   registered sources and tracking state. Entry and canonical metadata filters
+   are named as unassessed for tracking-only sessions.
+7. One query-scoped lineage resolver returns the known retained root or
    `unknown` for each result session.
-7. A next cursor binds the full query, library identity, writer generation, and
+8. A next cursor binds the full query, library identity, writer generation, and
    offset. It is a continuation token, not a durable bookmark.
 
 ## Order and evidence
@@ -33,6 +36,11 @@ and text not shown in the single preview.
 Root attribution is query evidence only. It does not enter canonical documents,
 document digests, exports, filters, or ordering. Missing targets, uncertain
 coverage, cycles, and conflicting roots remain `unknown`.
+
+Capture scope is separate evidence-availability context. It cannot classify an
+unindexed session against an entry, actor, origin, tool, time, workspace, or
+other canonical-only filter, and it never turns a tracking row into an entry
+match or non-match.
 
 ## Cost
 

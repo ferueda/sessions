@@ -1,6 +1,11 @@
 import { Buffer } from "node:buffer";
 
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
+import {
+  copySessionCaptureScope,
+  type CaptureScopeFilterName,
+  type SessionCaptureScope,
+} from "../domain/session-capture-scope.ts";
 import { MAX_SESSION_SEARCH_TERMS } from "../domain/session-query.ts";
 import type { SessionRootResolution } from "../domain/session-lineage.ts";
 import { formatSessionIdentity, isSessionIdentity } from "../domain/session-identity.ts";
@@ -167,6 +172,29 @@ export interface SearchSupportV1 {
   readonly unknownLineageSessions: number;
 }
 
+export interface CaptureScopeV1 {
+  readonly status: "uninitialized" | "complete" | "incomplete";
+  readonly trackedSessions: number;
+  readonly retainedSessions: { readonly current: number; readonly stale: number };
+  readonly unindexedSessions: number;
+  readonly sourceState: {
+    readonly present: number;
+    readonly missing: number;
+    readonly unknown: number;
+  };
+  readonly sourceCoverage: { readonly complete: number; readonly unknown: number };
+  readonly latestFailures: {
+    readonly unavailable: number;
+    readonly unreadable: number;
+    readonly malformed: number;
+    readonly sourceChanged: number;
+    readonly unsupportedFormat: number;
+    readonly repositoryWrite: number;
+  };
+  readonly appliedFilters: readonly CaptureScopeFilterName[];
+  readonly unassessedFilters: readonly CaptureScopeFilterName[];
+}
+
 export interface PublicEntryPreviewV1 {
   readonly segmentOrdinal: number;
   readonly origin: ContentOriginV1;
@@ -189,17 +217,20 @@ export interface PublicEntryInventoryV1 {
 
 export type ListJsonV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
   readonly sessions: readonly PublicListSessionV1[];
 };
 
 export type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
   readonly support: SearchSupportV1;
   readonly hits: readonly PublicSearchHitV1[];
 };
 
 export type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
   readonly entries: readonly PublicEntryInventoryV1[];
 };
 
@@ -209,6 +240,7 @@ export type ExportJsonV1 = SnapshotJsonV1<"export">;
 export type ListPageJsonlV1 = StructuredHeaderV1<"list", "page"> & {
   readonly sessionCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
 };
 
 export type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
@@ -218,6 +250,7 @@ export type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
 export type SearchPageJsonlV1 = StructuredHeaderV1<"search", "page"> & {
   readonly hitCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
   readonly support: SearchSupportV1;
 };
 
@@ -228,6 +261,7 @@ export type SearchHitJsonlV1 = StructuredHeaderV1<"search", "hit"> & {
 export type EntriesPageJsonlV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly entryCount: number;
   readonly nextCursor: string | null;
+  readonly captureScope: CaptureScopeV1;
 };
 
 export type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
@@ -293,6 +327,7 @@ export interface StructuredSessionSummaryInputV1 {
 
 export interface StructuredListInputV1 {
   readonly sessions: readonly StructuredListSessionInputV1[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: string;
 }
 
@@ -303,6 +338,7 @@ export interface StructuredListSessionInputV1 extends StructuredSessionSummaryIn
 export interface StructuredSearchInputV1 {
   readonly hits: readonly StructuredSearchHitInputV1[];
   readonly support: SearchSupportV1;
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: string;
 }
 
@@ -333,6 +369,7 @@ export interface StructuredSearchContextInputV1 extends PublicEntryCoordinateV1 
 
 export interface StructuredEntriesInputV1 {
   readonly entries: readonly StructuredEntryInventoryInputV1[];
+  readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: string;
 }
 
@@ -401,17 +438,20 @@ export function buildListJsonV1(input: StructuredListInputV1): ListJsonV1 {
   return finalizeStructuredOutput({
     ...header("list", "page"),
     nextCursor: copyCursor(input.nextCursor),
+    captureScope: copyCaptureScope(input.captureScope),
     sessions: input.sessions.map(copyListSession),
   });
 }
 
 export function buildListJsonlV1(input: StructuredListInputV1): StructuredJsonlV1 {
   const summaries = input.sessions.map(copyListSession);
+  const captureScope = copyCaptureScope(input.captureScope);
   return finalizeStructuredOutput([
     {
       ...header("list", "page"),
       sessionCount: summaries.length,
       nextCursor: copyCursor(input.nextCursor),
+      captureScope,
     },
     ...summaries.map((summary) => ({ ...header("list", "session"), summary })),
   ]);
@@ -421,6 +461,7 @@ export function buildSearchJsonV1(input: StructuredSearchInputV1): SearchJsonV1 
   return finalizeStructuredOutput({
     ...header("search", "page"),
     nextCursor: copyCursor(input.nextCursor),
+    captureScope: copyCaptureScope(input.captureScope),
     support: copySupport(input.support),
     hits: input.hits.map(copySearchHit),
   });
@@ -428,12 +469,14 @@ export function buildSearchJsonV1(input: StructuredSearchInputV1): SearchJsonV1 
 
 export function buildSearchJsonlV1(input: StructuredSearchInputV1): StructuredJsonlV1 {
   const support = copySupport(input.support);
+  const captureScope = copyCaptureScope(input.captureScope);
   const hits = input.hits.map(copySearchHit);
   return finalizeStructuredOutput([
     {
       ...header("search", "page"),
       hitCount: hits.length,
       nextCursor: copyCursor(input.nextCursor),
+      captureScope,
       support,
     },
     ...hits.map((hit) => ({ ...header("search", "hit"), hit })),
@@ -444,17 +487,20 @@ export function buildEntriesJsonV1(input: StructuredEntriesInputV1): EntriesJson
   return finalizeStructuredOutput({
     ...header("entries", "page"),
     nextCursor: copyCursor(input.nextCursor),
+    captureScope: copyCaptureScope(input.captureScope),
     entries: input.entries.map(copyEntryInventory),
   });
 }
 
 export function buildEntriesJsonlV1(input: StructuredEntriesInputV1): StructuredJsonlV1 {
   const entries = input.entries.map(copyEntryInventory);
+  const captureScope = copyCaptureScope(input.captureScope);
   return finalizeStructuredOutput([
     {
       ...header("entries", "page"),
       entryCount: entries.length,
       nextCursor: copyCursor(input.nextCursor),
+      captureScope,
     },
     ...entries.map((entry) => ({ ...header("entries", "entry"), entry })),
   ]);
@@ -734,6 +780,22 @@ function copySupport(value: SearchSupportV1): SearchSupportV1 {
     uniqueContent: nonNegativeInteger(value.uniqueContent),
     uniqueKnownRoots: nonNegativeInteger(value.uniqueKnownRoots),
     unknownLineageSessions: nonNegativeInteger(value.unknownLineageSessions),
+  };
+}
+
+function copyCaptureScope(value: SessionCaptureScope): CaptureScopeV1 {
+  const copied = copySessionCaptureScope(value);
+
+  return {
+    status: copied.status,
+    trackedSessions: copied.trackedSessions,
+    retainedSessions: { ...copied.retainedSessions },
+    unindexedSessions: copied.unindexedSessions,
+    sourceState: { ...copied.sourceState },
+    sourceCoverage: { ...copied.sourceCoverage },
+    latestFailures: { ...copied.latestFailures },
+    appliedFilters: [...copied.appliedFilters],
+    unassessedFilters: [...copied.unassessedFilters],
   };
 }
 

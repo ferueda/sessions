@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 const temporaryDirectories: string[] = [];
+const uninitializedWarning =
+  "Warning: retained evidence may be incomplete (capture scope is uninitialized).\n";
 
 afterEach(async () => {
   await Promise.all(
@@ -21,17 +23,17 @@ const absentQueryCases = [
   {
     command: "list",
     argv: ["list"],
-    expected: { status: 0, stdout: "No sessions found.\n", stderr: "" },
+    expected: { status: 0, stdout: `No sessions found.\n\n${uninitializedWarning}`, stderr: "" },
   },
   {
     command: "search",
     argv: ["search", "needle"],
-    expected: { status: 0, stdout: "No matches found.\n", stderr: "" },
+    expected: { status: 0, stdout: `No matches found.\n\n${uninitializedWarning}`, stderr: "" },
   },
   {
     command: "entries",
     argv: ["entries"],
-    expected: { status: 0, stdout: "No entries found.\n", stderr: "" },
+    expected: { status: 0, stdout: `No entries found.\n\n${uninitializedWarning}`, stderr: "" },
   },
   {
     command: "show",

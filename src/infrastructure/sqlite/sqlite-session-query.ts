@@ -21,6 +21,7 @@ import type { SessionRootResolver } from "../../domain/session-lineage.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import { splitUnicodeWhitespaceTerms } from "../../domain/unicode-whitespace.ts";
+import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 import { literalFtsQuery } from "./literal-fts-query.ts";
 import {
   decodeQueryCursor,
@@ -71,6 +72,7 @@ export function createSqliteSessionQuery(database: DatabaseSync): SessionQueryRe
 
 function listSessions(database: DatabaseSync, query: SessionListQuery): SessionListPage {
   const cursor = prepareCursor(database, "list", query);
+  const captureScope = readSqliteCaptureScope(database, query.filter);
   const where = sessionWhere(query.filter);
   const rows = database
     .prepare(
@@ -107,14 +109,19 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
       : undefined;
   return Object.freeze({
     sessions: Object.freeze(sessions),
+    captureScope,
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }
 
 function searchSessions(database: DatabaseSync, query: SessionSearchQuery): SessionSearchPage {
   const cursor = prepareCursor(database, "search", query);
+  const captureScope = readSqliteCaptureScope(database, {
+    ...query.filter,
+    searchText: query.text,
+  });
   const ftsQuery = literalFtsQuery(query.text, query.termMode);
-  if (ftsQuery === undefined) return emptySearchPage();
+  if (ftsQuery === undefined) return emptySearchPage(captureScope);
   const where = searchWhere(query.filter);
   const supportResolution = readSupport(database, ftsQuery, where);
   const searchRows = readSearchRows(database, query, ftsQuery, where, cursor.offset);
@@ -138,6 +145,7 @@ function searchSessions(database: DatabaseSync, query: SessionSearchQuery): Sess
   return Object.freeze({
     hits: Object.freeze(hits),
     support: Object.freeze(supportResolution.support),
+    captureScope,
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }
@@ -591,7 +599,7 @@ function identityAt(row: IdentityRow): SessionIdentity {
   return identity;
 }
 
-function emptySearchPage(): SessionSearchPage {
+function emptySearchPage(captureScope: SessionSearchPage["captureScope"]): SessionSearchPage {
   return Object.freeze({
     hits: Object.freeze([]),
     support: Object.freeze({
@@ -600,6 +608,7 @@ function emptySearchPage(): SessionSearchPage {
       uniqueKnownRoots: 0,
       unknownLineageSessions: 0,
     }),
+    captureScope,
   });
 }
 

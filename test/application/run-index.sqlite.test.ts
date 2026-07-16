@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -104,7 +106,7 @@ describe("runIndex with SQLite", () => {
     await currentReader.close();
   });
 
-  test("recovers a failed-first candidate through a later successful read", async () => {
+  test("reconciles a failed-first candidate as missing before a later successful read", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
     const source = createFakeIndexingSource();
@@ -121,7 +123,56 @@ describe("runIndex with SQLite", () => {
     await expect(failedReader.sessions.getDocument(identity)).resolves.toBeUndefined();
     await failedReader.close();
 
+    const failedTracking = readTrackingState(paths, identity);
+    expect(failedTracking).toMatchObject({
+      latest_adapter_version: "synthetic-v1",
+      latest_outcome: "failed",
+      latest_failure_code: "malformed",
+      presence_status: "present",
+      captured_at: null,
+      has_document: 0,
+    });
+
+    source.setDiscovery([]);
+    source.failDiscovery(new Error("private discovery failure"));
+    const incomplete = await index(lifecycle, paths, source.selected);
+    expect(incomplete.sources[0]).toMatchObject({
+      status: "incomplete",
+      failure: "discovery-failed",
+      counts: { missing: 0 },
+    });
+    expect(readTrackingState(paths, identity)).toEqual(failedTracking);
+
+    source.setDiscovery([]);
+    const missing = await index(lifecycle, paths, source.selected);
+    expect(missing.sources[0]).toMatchObject({
+      status: "completed",
+      counts: { discovered: 0, missing: 1 },
+      items: [{ identity, outcome: "missing" }],
+      omittedItemCount: 0,
+    });
+    const missingTracking = readTrackingState(paths, identity);
+    expect(missingTracking).toMatchObject({
+      latest_fingerprint_scheme: failedTracking.latest_fingerprint_scheme,
+      latest_fingerprint_digest: failedTracking.latest_fingerprint_digest,
+      latest_adapter_version: failedTracking.latest_adapter_version,
+      latest_outcome: failedTracking.latest_outcome,
+      latest_failure_code: failedTracking.latest_failure_code,
+      presence_status: "missing",
+      captured_at: null,
+      has_document: 0,
+    });
+    const missingReader = await lifecycle.openReader(paths);
+    await expect(missingReader.sessions.getFreshness(identity)).resolves.toMatchObject({
+      status: "unindexed",
+      latest: { failure: "malformed" },
+    });
+    await expect(missingReader.sessions.getDocument(identity)).resolves.toBeUndefined();
+    await expect(missingReader.sessions.getSummary(identity)).resolves.toBeUndefined();
+    await missingReader.close();
+
     source.clearReadFailure("session");
+    source.setDiscovery([candidate]);
     const recovered = await index(lifecycle, paths, source.selected);
 
     expect(failed.counts).toMatchObject({ discovered: 1, failed: 1, stale: 0 });
@@ -133,6 +184,13 @@ describe("runIndex with SQLite", () => {
     });
     await expect(currentReader.sessions.getDocument(identity)).resolves.toBeDefined();
     await currentReader.close();
+    expect(readTrackingState(paths, identity)).toMatchObject({
+      latest_outcome: "indexed",
+      latest_failure_code: null,
+      presence_status: "present",
+      captured_at: expect.any(String),
+      has_document: 1,
+    });
   });
 
   test("retains and restores an unchanged revision after provider disappearance", async () => {
@@ -315,4 +373,42 @@ function sessionIdentity(
 
 function document(identity: SessionIdentity, title: string): SessionDocument {
   return { identity, title, lineageCoverage: "unknown", relations: [], entries: [] };
+}
+
+function readTrackingState(paths: IndexPaths, identity: SessionIdentity): Record<string, unknown> {
+  const url = pathToFileURL(paths.database);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  const database = new DatabaseSync(url.href, { readOnly: true });
+  try {
+    const row = database
+      .prepare(
+        `SELECT tracking.latest_fingerprint_scheme,
+                tracking.latest_fingerprint_digest,
+                tracking.latest_adapter_version,
+                tracking.latest_outcome,
+                tracking.latest_failure_code,
+                tracking.presence_status,
+                tracking.presence_observed_at,
+                tracking.captured_at,
+                EXISTS (
+                  SELECT 1
+                  FROM sessions_canonical_sessions AS canonical
+                  WHERE canonical.session_id = tracking.session_id
+                ) AS has_document
+         FROM sessions_session_tracking AS tracking
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id
+         WHERE source.kind = ?
+           AND source.instance_id = ?
+           AND tracking.native_id = ?`,
+      )
+      .get(identity.source.kind, identity.source.instanceId, identity.nativeId) as
+      | Record<string, unknown>
+      | undefined;
+    if (row === undefined) throw new Error("Expected tracked session state");
+    return row;
+  } finally {
+    database.close();
+  }
 }

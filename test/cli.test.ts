@@ -21,6 +21,10 @@ import {
 import type { ProgramOptions } from "../src/cli/program.ts";
 import { runCli } from "../src/cli/run.ts";
 import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
+import {
+  completeCaptureScope,
+  uninitializedCaptureScope,
+} from "./fixtures/session-capture-scope.ts";
 
 describe("sessions CLI", () => {
   test.each([
@@ -145,19 +149,34 @@ describe("sessions CLI", () => {
   test("renders the exact empty-list result", async () => {
     const invocation = await invoke(["list"]);
 
-    expect(invocation).toEqual({ exitCode: 0, stdout: "No sessions found.\n", stderr: "" });
+    expect(invocation).toEqual({
+      exitCode: 0,
+      stdout:
+        "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n",
+      stderr: "",
+    });
   });
 
   test("renders the exact empty-search result", async () => {
     const invocation = await invoke(["search", "missing"]);
 
-    expect(invocation).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
+    expect(invocation).toEqual({
+      exitCode: 0,
+      stdout:
+        "No matches found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n",
+      stderr: "",
+    });
   });
 
   test("renders the exact empty-entries result", async () => {
     const invocation = await invoke(["entries"]);
 
-    expect(invocation).toEqual({ exitCode: 0, stdout: "No entries found.\n", stderr: "" });
+    expect(invocation).toEqual({
+      exitCode: 0,
+      stdout:
+        "No entries found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n",
+      stderr: "",
+    });
   });
 
   test("renders explicit empty JSON and JSONL query pages", async () => {
@@ -174,6 +193,7 @@ describe("sessions CLI", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: null,
+      captureScope: uninitializedCaptureScope,
       sessions: [],
     });
     expect(
@@ -189,6 +209,7 @@ describe("sessions CLI", () => {
         disposition: "untrusted-history",
         sessionCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
       },
     ]);
     expect(JSON.parse(searchJson.stdout)).toMatchObject({
@@ -197,6 +218,7 @@ describe("sessions CLI", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: null,
+      captureScope: uninitializedCaptureScope,
       hits: [],
     });
     expect(
@@ -212,6 +234,7 @@ describe("sessions CLI", () => {
         disposition: "untrusted-history",
         hitCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
         support: emptySearch().support,
       },
     ]);
@@ -221,6 +244,7 @@ describe("sessions CLI", () => {
       type: "page",
       disposition: "untrusted-history",
       nextCursor: null,
+      captureScope: uninitializedCaptureScope,
       entries: [],
     });
     expect(
@@ -236,6 +260,7 @@ describe("sessions CLI", () => {
         disposition: "untrusted-history",
         entryCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
       },
     ]);
     expect(
@@ -376,7 +401,10 @@ describe("sessions CLI", () => {
   });
 
   test("keeps query cursors reusable across human, JSON, and JSONL", async () => {
-    const list = vi.fn<ProgramOptions["list"]>(async () => ({ sessions: [] }));
+    const list = vi.fn<ProgramOptions["list"]>(async () => ({
+      sessions: [],
+      captureScope: completeCaptureScope,
+    }));
 
     for (const format of ["human", "json", "jsonl"] as const) {
       const invocation = await invoke(["list", "--cursor", "opaque", "--format", format], {
@@ -421,7 +449,12 @@ describe("sessions CLI", () => {
 
     const delimited = await invoke(["search", "--", "---"], { search });
 
-    expect(delimited).toEqual({ exitCode: 0, stdout: "No matches found.\n", stderr: "" });
+    expect(delimited).toEqual({
+      exitCode: 0,
+      stdout:
+        "No matches found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n",
+      stderr: "",
+    });
     expect(search).toHaveBeenCalledExactlyOnceWith({ text: "---", termMode: "all" });
 
     search.mockClear();
@@ -525,7 +558,10 @@ describe("sessions CLI", () => {
   });
 
   test("maps shared and entry filters with selection into provider-neutral input", async () => {
-    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({ entries: [] }));
+    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({
+      entries: [],
+      captureScope: completeCaptureScope,
+    }));
 
     const invocation = await invoke(
       [
@@ -611,7 +647,10 @@ describe("sessions CLI", () => {
   });
 
   test("uses the default all entry selection and rejects invalid entry inventory options", async () => {
-    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({ entries: [] }));
+    const entries = vi.fn<ProgramOptions["entries"]>(async () => ({
+      entries: [],
+      captureScope: completeCaptureScope,
+    }));
 
     const success = await invoke(["entries"], { entries });
     const invalidSelection = await invoke(["entries", "--select", "middle"], { entries });
@@ -635,7 +674,10 @@ describe("sessions CLI", () => {
   });
 
   test("forwards shared activity bounds to list", async () => {
-    const list = vi.fn<ProgramOptions["list"]>(async () => ({ sessions: [] }));
+    const list = vi.fn<ProgramOptions["list"]>(async () => ({
+      sessions: [],
+      captureScope: completeCaptureScope,
+    }));
 
     const invocation = await invoke(
       [
@@ -671,7 +713,13 @@ describe("sessions CLI", () => {
 
     expect([json.exitCode, jsonl.exitCode]).toEqual([0, 0]);
     expect(records.map(({ type }) => type)).toEqual(["page", "entry"]);
-    expect(records[0]).toMatchObject({ entryCount: 1, nextCursor: "next-entry-page" });
+    expect(records[0]).toMatchObject({
+      entryCount: 1,
+      nextCursor: "next-entry-page",
+      captureScope: completeCaptureScope,
+    });
+    expect(page.captureScope).toEqual(completeCaptureScope);
+    expect(records[1]).not.toHaveProperty("captureScope");
     expect(records[1].entry).toEqual(page.entries[0]);
   });
 
@@ -707,12 +755,18 @@ describe("sessions CLI", () => {
     expect([listJson, listJsonl, searchJson, searchJsonl].map(({ exitCode }) => exitCode)).toEqual([
       0, 0, 0, 0,
     ]);
+    expect(listPage.captureScope).toEqual(completeCaptureScope);
+    expect(listRecords[0].captureScope).toEqual(completeCaptureScope);
+    expect(listRecords[1]).not.toHaveProperty("captureScope");
     expect(listPage.sessions[0].root).toEqual({ kind: "unknown" });
     expect(listRecords[1].summary).toEqual(listPage.sessions[0]);
     expect(searchPage.hits[0]).toMatchObject({
       root: { kind: "unknown" },
       match: { matchedTerms: ["first", "second"] },
     });
+    expect(searchPage.captureScope).toEqual(completeCaptureScope);
+    expect(searchRecords[0].captureScope).toEqual(completeCaptureScope);
+    expect(searchRecords[1]).not.toHaveProperty("captureScope");
     expect(searchRecords[1].hit).toEqual(searchPage.hits[0]);
     expect(search).toHaveBeenCalledTimes(2);
     expect(search.mock.calls.every(([input]) => input.termMode === "any")).toBe(true);
@@ -1073,8 +1127,8 @@ async function invoke(
     paths: async () => pathsReport(),
     indexSources: ["codex"],
     index: async () => indexReport(false),
-    list: async () => ({ sessions: [] }),
-    entries: async () => ({ entries: [] }),
+    list: async () => ({ sessions: [], captureScope: uninitializedCaptureScope }),
+    entries: async () => ({ entries: [], captureScope: uninitializedCaptureScope }),
     search: async () => emptySearch(),
     show: async () => {
       throw new Error("show fixture was not configured");
@@ -1112,6 +1166,7 @@ async function invoke(
 
 function entryInventoryResult(): ListSessionEntriesResult {
   return {
+    captureScope: completeCaptureScope,
     entries: [
       {
         session: selectedSnapshot().snapshot,
@@ -1157,6 +1212,7 @@ function attributedListResult(): ListSessionsResult {
     throw new TypeError("Attributed list fixture requires title and activity timestamps");
   }
   return {
+    captureScope: completeCaptureScope,
     sessions: [
       {
         identity: snapshot.identity,
@@ -1178,6 +1234,7 @@ function attributedListResult(): ListSessionsResult {
 function attributedSearchResult(): SearchSessionsResult {
   const listed = attributedListResult().sessions[0]!;
   return {
+    captureScope: completeCaptureScope,
     hits: [
       {
         session: listed,
@@ -1208,6 +1265,7 @@ function attributedSearchResult(): SearchSessionsResult {
 
 function emptySearch() {
   return {
+    captureScope: uninitializedCaptureScope,
     hits: [],
     support: {
       occurrences: 0,
