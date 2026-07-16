@@ -5,6 +5,7 @@ import type {
   SessionDocument,
   SessionEntry,
   SessionIdentity,
+  SessionRelation,
   SourceInstance,
 } from "../../src/domain/session.ts";
 
@@ -25,7 +26,20 @@ export interface SessionQueryContractCorpus {
   readonly missing: SessionDocument;
   readonly unknown: SessionDocument;
   readonly pageable: readonly SessionDocument[];
+  readonly inventory: SessionEntryInventoryCorpus;
   readonly ranking: SessionQueryRankingCorpus;
+  readonly documents: readonly SessionDocument[];
+}
+
+export interface SessionEntryInventoryCorpus {
+  readonly root: SessionDocument;
+  readonly child: SessionDocument;
+  readonly continuation: SessionDocument;
+  readonly independent: SessionDocument;
+  readonly missingAncestor: SessionDocument;
+  readonly unknownCoverage: SessionDocument;
+  readonly cycleLeft: SessionDocument;
+  readonly cycleRight: SessionDocument;
   readonly documents: readonly SessionDocument[];
 }
 
@@ -187,15 +201,163 @@ export function sessionQueryContractCorpus(): SessionQueryContractCorpus {
       entries: [entry(0, `pageable corpus evidence ${padded}`)],
     });
   });
+  const inventory = sessionEntryInventoryCorpus();
   const ranking = sessionQueryRankingCorpus();
   return {
     present,
     missing,
     unknown,
     pageable,
+    inventory,
     ranking,
-    documents: [present, missing, unknown, ...pageable, ...ranking.documents],
+    documents: [
+      present,
+      missing,
+      unknown,
+      ...pageable,
+      ...inventory.documents,
+      ...ranking.documents,
+    ],
   };
+}
+
+function sessionEntryInventoryCorpus(): SessionEntryInventoryCorpus {
+  const source = { kind: "synthetic-entry", instanceId: "inventory" } as const;
+  const rootIdentity = identity(source, "a-root");
+  const childIdentity = identity(source, "b-child");
+  const continuationIdentity = identity(source, "c-continuation");
+  const independentIdentity = identity(source, "d-independent");
+  const missingAncestorIdentity = identity(source, "e-missing-ancestor");
+  const unknownCoverageIdentity = identity(source, "f-unknown-coverage");
+  const cycleLeftIdentity = identity(source, "g-cycle-left");
+  const cycleRightIdentity = identity(source, "h-cycle-right");
+  const longModelText = `${"é".repeat(300)} model preview tail`;
+
+  const root = document(rootIdentity, {
+    lineageCoverage: "complete",
+    title: "Entry inventory root",
+    workspace: "/private/inventory-root",
+    entries: [
+      entry(0, "retained injected setup", {
+        actor: "system",
+        kind: "instruction",
+        origin: "injected",
+        timestamp: "2026-07-14T08:00:00.000Z",
+      }),
+      entry(1, "initial direct request", {
+        timestamp: "2026-07-14T08:10:00.000Z",
+      }),
+      {
+        ...entry(2, "unused", { timestamp: "2026-07-14T08:20:00.000Z" }),
+        content: [
+          textSegment(0, "copied setup context", "injected"),
+          omittedSegment(1, "injected"),
+          textSegment(2, "direct correction one", "human"),
+        ],
+      },
+      entry(3, "observed namespaced tool invocation", {
+        actor: "model",
+        kind: "tool-call",
+        origin: "model",
+        timestamp: "2026-07-14T08:30:00.000Z",
+        relatedEntryOrdinal: 4,
+        toolCallId: "entry-call-1",
+        toolName: "exec_command",
+        toolNamespace: "functions",
+      }),
+      entry(4, "observed tool result", {
+        actor: "tool",
+        kind: "tool-result",
+        origin: "tool",
+        timestamp: "2026-07-14T08:40:00.000Z",
+        relatedEntryOrdinal: 3,
+        toolCallId: "entry-call-1",
+      }),
+      entry(5, "exec_command appears only in ordinary user text", {
+        timestamp: "2026-07-14T08:50:00.000Z",
+      }),
+      {
+        ...entry(6, "unused", {
+          actor: "system",
+          kind: "omission",
+          timestamp: "2026-07-14T09:00:00.000Z",
+        }),
+        content: [omittedSegment(0, "injected")],
+      },
+      {
+        ...entry(7, "unused", {
+          actor: "unknown",
+          kind: "empty",
+          timestamp: "2026-07-14T09:10:00.000Z",
+        }),
+        content: [],
+      },
+      entry(8, longModelText, {
+        actor: "model",
+        kind: "analysis-note",
+        origin: "model",
+        timestamp: "2026-07-14T09:20:00.000Z",
+      }),
+      entry(9, "final direct correction", {
+        // Canonical selection is by ordinal, not activity time.
+        timestamp: "2026-07-14T07:30:00.000Z",
+      }),
+    ],
+  });
+  const child = inventoryLineageDocument(childIdentity, "parent", rootIdentity);
+  const continuation = inventoryLineageDocument(
+    continuationIdentity,
+    "continuation",
+    childIdentity,
+  );
+  const independent = inventoryLineageDocument(independentIdentity);
+  const missingAncestor = inventoryLineageDocument(
+    missingAncestorIdentity,
+    "parent",
+    identity(source, "not-retained"),
+  );
+  const unknownCoverage = document(unknownCoverageIdentity, {
+    lineageCoverage: "unknown",
+    entries: [entry(0, "unknown lineage inventory evidence")],
+  });
+  const cycleLeft = inventoryLineageDocument(cycleLeftIdentity, "parent", cycleRightIdentity);
+  const cycleRight = inventoryLineageDocument(cycleRightIdentity, "parent", cycleLeftIdentity);
+  const documents = [
+    root,
+    child,
+    continuation,
+    independent,
+    missingAncestor,
+    unknownCoverage,
+    cycleLeft,
+    cycleRight,
+  ];
+  return {
+    root,
+    child,
+    continuation,
+    independent,
+    missingAncestor,
+    unknownCoverage,
+    cycleLeft,
+    cycleRight,
+    documents,
+  };
+}
+
+function inventoryLineageDocument(
+  sessionIdentity: SessionIdentity,
+  relationKind?: SessionRelation["kind"],
+  target?: SessionIdentity,
+): SessionDocument {
+  return document(sessionIdentity, {
+    lineageCoverage: "complete",
+    relations:
+      relationKind === undefined || target === undefined
+        ? []
+        : [{ kind: relationKind, target, confidence: "high" }],
+    entries: [entry(0, `inventory lineage ${sessionIdentity.nativeId}`)],
+  });
 }
 
 function sessionQueryRankingCorpus(): SessionQueryRankingCorpus {
@@ -287,7 +449,9 @@ function rankingTieDocument(
 ): SessionDocument {
   return document(identity(source, nativeId), {
     lineageCoverage: "complete",
-    entries: Array.from({ length: entryCount }, (_, ordinal) => entry(ordinal, "binaryrank")),
+    entries: Array.from({ length: entryCount }, (_, ordinal) =>
+      entry(ordinal, "binaryrank", { kind: "entry-order" }),
+    ),
   });
 }
 
@@ -304,6 +468,7 @@ function document(
     readonly createdAt?: string;
     readonly updatedAt?: string;
     readonly entries: readonly SessionEntry[];
+    readonly relations?: readonly SessionRelation[];
   },
 ): SessionDocument {
   return {
@@ -313,7 +478,7 @@ function document(
     ...(options.createdAt === undefined ? {} : { createdAt: options.createdAt }),
     ...(options.updatedAt === undefined ? {} : { updatedAt: options.updatedAt }),
     lineageCoverage: options.lineageCoverage,
-    relations: [],
+    relations: options.relations ?? [],
     entries: options.entries,
   };
 }
@@ -358,5 +523,17 @@ function textSegment(ordinal: number, text: string, origin: ContentOrigin = "hum
     origin,
     originConfidence: "high" as const,
     sourceMetadata: {},
+  };
+}
+
+function omittedSegment(ordinal: number, origin: ContentOrigin) {
+  return {
+    kind: "omitted" as const,
+    ordinal,
+    contentClass: "structured" as const,
+    sourceType: "synthetic-omission",
+    origin,
+    originConfidence: "high" as const,
+    sourceMetadata: { privateFixtureMarker: "must-not-leak" },
   };
 }

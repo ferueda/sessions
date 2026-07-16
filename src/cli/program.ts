@@ -8,6 +8,10 @@ import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
+import {
+  MAX_ENTRY_LIST_LIMIT,
+  type ListSessionEntriesResult,
+} from "../application/list-session-entries.ts";
 import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
 import { MAX_SESSION_ENTRY_RANGE_COUNT } from "../application/session-entry-range.ts";
@@ -19,6 +23,8 @@ import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
 import { parseSessionIdentity } from "../domain/session-identity.ts";
 import type {
   SessionFilterInput,
+  SessionEntryFilterInput,
+  SessionEntrySelection,
   SessionSearchFilterInput,
   SessionSourceState,
 } from "../domain/session-query.ts";
@@ -29,6 +35,8 @@ import { encodeStructuredJsonl } from "./encode-jsonl-output.ts";
 import {
   buildListJsonV1,
   buildListJsonlV1,
+  buildEntriesJsonV1,
+  buildEntriesJsonlV1,
   buildSearchJsonV1,
   buildSearchJsonlV1,
   buildSnapshotJsonV1,
@@ -42,6 +50,7 @@ import {
   renderForget,
   renderIndex,
   renderList,
+  renderEntries,
   renderPaths,
   renderSearch,
   renderShow,
@@ -68,6 +77,12 @@ export interface ProgramOptions {
     readonly limit?: number;
     readonly cursor?: string;
   }) => Promise<ListSessionsResult>;
+  readonly entries: (input: {
+    readonly filter?: SessionEntryFilterInput;
+    readonly selection?: SessionEntrySelection;
+    readonly limit?: number;
+    readonly cursor?: string;
+  }) => Promise<ListSessionEntriesResult>;
   readonly search: (input: {
     readonly text: string;
     readonly filter?: SessionSearchFilterInput;
@@ -191,15 +206,7 @@ export function createProgram(options: ProgramOptions): Command {
     });
 
   const search = program.command("search <text>").description("Search retained session evidence");
-  addSessionFilterOptions(search)
-    .addOption(retainedQueryFormatOption())
-    .option("--entry-after <timestamp>", "exclude entries at or before this time", parseTimestamp)
-    .option("--entry-before <timestamp>", "exclude entries at or after this time", parseTimestamp)
-    .addOption(new Option("--actor <actor>", "exact entry actor").choices(ACTORS))
-    .addOption(new Option("--origin <origin>", "exact content origin").choices(ORIGINS))
-    .option("--kind <kind>", "exact entry kind")
-    .option("--tool-name <name>", "exact observed tool name")
-    .option("--tool-namespace <namespace>", "exact observed tool namespace")
+  addEntryFilterOptions(addSessionFilterOptions(search).addOption(retainedQueryFormatOption()))
     .addOption(
       new Option("--limit <number>", "maximum search hits").argParser((value) =>
         parseInteger(value, { minimum: 1, maximum: MAX_SEARCH_LIMIT }),
@@ -224,6 +231,32 @@ export function createProgram(options: ProgramOptions): Command {
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
       options.output.writeOut(renderSearchOutput(result, values.format));
+    });
+
+  const entries = program
+    .command("entries")
+    .description("List retained session entries without transcript search");
+  addEntryFilterOptions(addSessionFilterOptions(entries).addOption(retainedQueryFormatOption()))
+    .addOption(
+      new Option("--select <selection>", "entries selected per session")
+        .choices(["all", "first", "last"])
+        .default("all"),
+    )
+    .addOption(
+      new Option("--limit <number>", "maximum entries").argParser((value) =>
+        parseInteger(value, { minimum: 1, maximum: MAX_ENTRY_LIST_LIMIT }),
+      ),
+    )
+    .option("--cursor <cursor>", "continue a previous entries query")
+    .action(async (values: EntriesOptionValues) => {
+      const filter = entryFilter(values);
+      const result = await options.entries({
+        ...(filter === undefined ? {} : { filter }),
+        selection: values.select,
+        ...(values.limit === undefined ? {} : { limit: values.limit }),
+        ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+      });
+      options.output.writeOut(renderEntriesOutput(result, values.format));
     });
 
   const show = program
@@ -372,6 +405,20 @@ interface SearchOptionValues extends SessionOptionValues {
   readonly cursor?: string;
 }
 
+interface EntriesOptionValues extends SessionOptionValues {
+  readonly format: RetainedQueryOutputFormat;
+  readonly entryAfter?: string;
+  readonly entryBefore?: string;
+  readonly actor?: Actor;
+  readonly origin?: ContentOrigin;
+  readonly kind?: string;
+  readonly toolName?: string;
+  readonly toolNamespace?: string;
+  readonly select: SessionEntrySelection;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
 interface ShowOptionValues {
   readonly format: RetainedQueryOutputFormat;
   readonly entry?: number;
@@ -414,6 +461,20 @@ function renderSearchOutput(
       return encodeStructuredJson(buildSearchJsonV1(result));
     case "jsonl":
       return encodeStructuredJsonl(buildSearchJsonlV1(result));
+  }
+}
+
+function renderEntriesOutput(
+  result: ListSessionEntriesResult,
+  format: RetainedQueryOutputFormat,
+): string {
+  switch (format) {
+    case "human":
+      return renderEntries(result);
+    case "json":
+      return encodeStructuredJson(buildEntriesJsonV1(result));
+    case "jsonl":
+      return encodeStructuredJsonl(buildEntriesJsonlV1(result));
   }
 }
 
@@ -477,6 +538,17 @@ function addSessionFilterOptions(command: Command): Command {
     .option("--session <canonical-id>", "exact canonical session", parseIdentity);
 }
 
+function addEntryFilterOptions(command: Command): Command {
+  return command
+    .option("--entry-after <timestamp>", "exclude entries at or before this time", parseTimestamp)
+    .option("--entry-before <timestamp>", "exclude entries at or after this time", parseTimestamp)
+    .addOption(new Option("--actor <actor>", "exact entry actor").choices(ACTORS))
+    .addOption(new Option("--origin <origin>", "exact content origin").choices(ORIGINS))
+    .option("--kind <kind>", "exact entry kind")
+    .option("--tool-name <name>", "exact observed tool name")
+    .option("--tool-namespace <namespace>", "exact observed tool namespace");
+}
+
 function addEntryRangeOptions(command: Command): Command {
   return command
     .addOption(
@@ -529,9 +601,15 @@ function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefi
 }
 
 function searchFilter(values: SearchOptionValues): SessionSearchFilterInput | undefined {
+  return entryFilter(values);
+}
+
+function entryFilter(
+  values: SearchOptionValues | EntriesOptionValues,
+): SessionEntryFilterInput | undefined {
   validateBounds(values.entryAfter, values.entryBefore, "entry");
   const common = sessionFilter(values);
-  const filter: SessionSearchFilterInput = {
+  const filter: SessionEntryFilterInput = {
     ...common,
     ...(values.entryAfter === undefined ? {} : { entryAfter: values.entryAfter }),
     ...(values.entryBefore === undefined ? {} : { entryBefore: values.entryBefore }),

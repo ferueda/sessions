@@ -14,7 +14,7 @@ export class StructuredOutputTooLargeError extends Error {
   readonly code = STRUCTURED_OUTPUT_TOO_LARGE;
 
   constructor() {
-    super("structured-output-too-large: narrow list/search or use export --full");
+    super("structured-output-too-large: narrow list/search/entries or use export --full");
     this.name = "StructuredOutputTooLargeError";
   }
 }

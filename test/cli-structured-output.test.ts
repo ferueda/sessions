@@ -12,12 +12,15 @@ import {
 import {
   buildListJsonV1,
   buildListJsonlV1,
+  buildEntriesJsonV1,
+  buildEntriesJsonlV1,
   buildSearchJsonV1,
   buildSearchJsonlV1,
   buildSnapshotJsonV1,
   buildSnapshotJsonlV1,
   type SelectedTextV1,
   type StructuredListInputV1,
+  type StructuredEntriesInputV1,
   type StructuredSearchInputV1,
   type StructuredSessionSummaryInputV1,
   type StructuredSnapshotInputV1,
@@ -177,6 +180,90 @@ describe("schema-1 structured output", () => {
     ]);
   });
 
+  it("maps entry inventory into exact attributable JSON and JSONL records", () => {
+    const input = entriesInput();
+    const json = buildEntriesJsonV1(input);
+    const jsonl = buildEntriesJsonlV1(input);
+
+    expect(json).toEqual({
+      schemaVersion: 1,
+      command: "entries",
+      type: "page",
+      disposition: "untrusted-history",
+      nextCursor: "next-entry-page",
+      entries: [
+        {
+          session: publicSummary(),
+          root: {
+            kind: "known",
+            session: {
+              canonicalId: "synthetic@root:root-session",
+              source: { kind: "synthetic", instanceId: "root" },
+              nativeId: "root-session",
+            },
+          },
+          coordinate: {
+            ordinal: 4,
+            kind: "tool-call",
+            actor: "tool",
+            toolCallId: "call-1",
+            toolName: "exec",
+            toolNamespace: "shell",
+            relatedEntryOrdinal: 5,
+          },
+          content: {
+            textSegmentCount: 2,
+            omittedSegmentCount: 1,
+            unpreviewedTextSegmentCount: 1,
+            preview: {
+              segmentOrdinal: 0,
+              origin: "tool",
+              originConfidence: "high",
+              excerpt: { text: "preview", truncated: false },
+              contentHash,
+            },
+          },
+        },
+      ],
+    });
+    expect(jsonl).toEqual([
+      {
+        schemaVersion: 1,
+        command: "entries",
+        type: "page",
+        disposition: "untrusted-history",
+        entryCount: 1,
+        nextCursor: "next-entry-page",
+      },
+      {
+        schemaVersion: 1,
+        command: "entries",
+        type: "entry",
+        disposition: "untrusted-history",
+        entry: json.entries[0],
+      },
+    ]);
+    expectRecursivelyFrozen(json);
+    expectRecursivelyFrozen(jsonl);
+  });
+
+  it("emits one entries page for an empty result", () => {
+    expect(buildEntriesJsonV1({ entries: [] })).toMatchObject({
+      entries: [],
+      nextCursor: null,
+    });
+    expect(buildEntriesJsonlV1({ entries: [] })).toEqual([
+      {
+        schemaVersion: 1,
+        command: "entries",
+        type: "page",
+        disposition: "untrusted-history",
+        entryCount: 0,
+        nextCursor: null,
+      },
+    ]);
+  });
+
   it.each(["show", "export"] as const)(
     "keeps %s JSON and JSONL transcript evidence equivalent",
     (command) => {
@@ -283,6 +370,43 @@ describe("schema-1 structured output", () => {
     expect(encoded).not.toContain("sourceMetadata");
     expect(encoded).not.toContain("sourceLocator");
     expect(encoded).not.toContain("privateAttachment");
+  });
+
+  it("allowlists entry inventory fields and rejects inconsistent counts", () => {
+    const marker = "entry-inventory-private-marker";
+    const base = entriesInput();
+    const encoded = encodeStructuredJson(
+      buildEntriesJsonV1({
+        ...base,
+        entries: base.entries.map((entry) => ({
+          ...entry,
+          workspace: marker,
+          sourceLocator: marker,
+          session: { ...entry.session, workspace: marker, sourceMetadata: marker },
+          entry: { ...entry.entry, sourceLocator: marker },
+          content: {
+            ...entry.content,
+            hidden: marker,
+            preview: { ...entry.content.preview!, sourceMetadata: marker },
+          },
+        })),
+      }),
+    );
+
+    expect(encoded).not.toContain(marker);
+    expect(encoded).not.toContain("workspace");
+    expect(encoded).not.toContain("sourceLocator");
+    expect(() =>
+      buildEntriesJsonV1({
+        ...base,
+        entries: [
+          {
+            ...base.entries[0]!,
+            content: { ...base.entries[0]!.content, unpreviewedTextSegmentCount: 2 },
+          },
+        ],
+      }),
+    ).toThrow("counts are inconsistent");
   });
 
   it("omits optional members instead of serializing null", () => {
@@ -514,6 +638,46 @@ function searchInput(): StructuredSearchInputV1 {
       uniqueKnownRoots: 1,
       unknownLineageSessions: 0,
     },
+  };
+}
+
+function entriesInput(): StructuredEntriesInputV1 {
+  return {
+    entries: [
+      {
+        session: summary(),
+        root: {
+          kind: "known",
+          root: {
+            source: { kind: "synthetic", instanceId: "root" },
+            nativeId: "root-session",
+          },
+        },
+        entry: {
+          ordinal: 4,
+          kind: "tool-call",
+          actor: "tool",
+          relatedEntryOrdinal: 5,
+          toolCallId: "call-1",
+          toolName: "exec",
+          toolNamespace: "shell",
+        },
+        content: {
+          textSegmentCount: 2,
+          omittedSegmentCount: 1,
+          unpreviewedTextSegmentCount: 1,
+          preview: {
+            segmentOrdinal: 0,
+            origin: "tool",
+            originConfidence: "high",
+            text: "preview",
+            truncated: false,
+            contentHash,
+          },
+        },
+      },
+    ],
+    nextCursor: "next-entry-page",
   };
 }
 

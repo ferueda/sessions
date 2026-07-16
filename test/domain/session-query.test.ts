@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  createSessionEntryQuery,
   createSessionFilter,
   createSessionListQuery,
   createSessionQueryCursor,
@@ -143,4 +144,86 @@ describe("session query values", () => {
       expect(() => createSessionQueryCursor(value)).toThrow("Session query cursor is invalid");
     },
   );
+
+  test("creates immutable entry queries with shared filters and all as the default selection", () => {
+    const query = createSessionEntryQuery({
+      filter: {
+        source: "synthetic",
+        instance: "Profile-A",
+        entryAfter: "2026-07-14T10:00:00.000Z",
+        entryBefore: "2026-07-14T11:00:00.000Z",
+        actor: "model",
+        origin: "injected",
+        entryKind: "tool-call",
+        toolName: "read_file",
+        toolNamespace: "filesystem",
+      },
+      limit: 50,
+    });
+
+    expect(query).toEqual({
+      filter: {
+        source: "synthetic",
+        instance: "Profile-A",
+        entryAfter: "2026-07-14T10:00:00.000Z",
+        entryBefore: "2026-07-14T11:00:00.000Z",
+        actor: "model",
+        origin: "injected",
+        entryKind: "tool-call",
+        toolName: "read_file",
+        toolNamespace: "filesystem",
+      },
+      selection: "all",
+      limit: 50,
+    });
+    expect(Object.isFrozen(query)).toBe(true);
+    expect(Object.isFrozen(query.filter)).toBe(true);
+  });
+
+  test.each([
+    { selection: "middle", limit: 50 },
+    { selection: "all", limit: 0 },
+    { selection: "first", limit: 201 },
+    { selection: "last", limit: 1.5 },
+  ])("rejects invalid entry query bounds $selection/$limit", ({ selection, limit }) => {
+    expect(() =>
+      createSessionEntryQuery({
+        selection: selection as "all",
+        limit,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  test("binds entry cursors to selection, limit, and every entry filter", () => {
+    const first = createSessionEntryQuery({
+      filter: { source: "synthetic", origin: "human", toolName: "read_file" },
+      selection: "first",
+      limit: 25,
+      cursor: "page-one",
+    });
+    const continued = createSessionEntryQuery({
+      filter: { source: "synthetic", origin: "human", toolName: "read_file" },
+      selection: "first",
+      limit: 25,
+      cursor: "page-two",
+    });
+    const changedSelection = createSessionEntryQuery({
+      filter: { source: "synthetic", origin: "human", toolName: "read_file" },
+      selection: "last",
+      limit: 25,
+    });
+    const changedFilter = createSessionEntryQuery({
+      filter: { source: "synthetic", origin: "model", toolName: "read_file" },
+      selection: "first",
+      limit: 25,
+    });
+
+    expect(sessionQueryFingerprintMaterial(first)).toBe(sessionQueryFingerprintMaterial(continued));
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(
+      sessionQueryFingerprintMaterial(changedSelection),
+    );
+    expect(sessionQueryFingerprintMaterial(first)).not.toBe(
+      sessionQueryFingerprintMaterial(changedFilter),
+    );
+  });
 });

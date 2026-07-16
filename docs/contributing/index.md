@@ -12,6 +12,7 @@ Core areas:
 
 - [Indexing](indexing.md) — discovery, incremental capture, and last-good behavior.
 - [Search](search.md) — matching, ranking, context, support, and pagination.
+- [Entry inventory](entries.md) — textless selection, previews, roots, and pagination.
 - [Storage](storage.md) — canonical records, content reuse, digests, and FTS.
 - [Lineage](lineage.md) — root resolution and known/unknown evidence.
 - [Maintenance](maintenance.md) — writer leases, deletion, repair, compaction, and clear.

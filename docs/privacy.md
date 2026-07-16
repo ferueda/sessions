@@ -18,7 +18,7 @@ not a best-effort feature.
 - A complete later scan can mark a retained session `missing`; unavailable,
   unreadable, malformed, changing, or incomplete discovery proves no absence.
   Neither case automatically deletes retained content.
-- List, search, show, and export use only the Sessions library after indexing.
+- List, search, entries, show, and export use only the Sessions library after indexing.
   They never reopen a provider transcript.
 - No TTL or automatic pruning exists. Only explicit `sessions forget`,
   `sessions data repair-orphans`, or `sessions data clear --yes` removes
@@ -28,8 +28,8 @@ not a best-effort feature.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
 
-Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/show are
-current. Cursor, library import/restore, and automatic analysis are not current
+Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show are
+current. Cursor adapter support, library import/restore, and automatic analysis are not current
 commands; Markdown presentation is deferred beyond V1.
 
 ## Owned local state
@@ -138,7 +138,7 @@ the stored digest. Show reads attribution and the document under one immutable
 library snapshot and verifies the digest before returning canonical content.
 List/search read the stored digest directly and do not reopen providers.
 
-Human and structured list/search/show output omits source locators, source
+Human and structured list/search/entries/show output omits source locators, source
 metadata, provider roots, attachment paths, and local workspace values. Export
 uses the same field-by-field public projection and never recursively opens a
 related session. Search snippets and context are bounded to 512 UTF-8 bytes per
@@ -150,14 +150,20 @@ it elsewhere.
 
 Every transcript-bearing JSON/JSONL record is labeled
 `disposition: "untrusted-history"`. This label and JSON escaping do not make
-prompt-like instructions or tool output safe to execute. List, search, show, and
+prompt-like instructions or tool output safe to execute. List, search, entries, show, and
 default export apply bounded raw-text selection and an exact 16 MiB encoded-output
 cap before stdout. Over-cap output fails without a partial stream. Explicit
 `export --full` removes only those presentation limits for export-eligible fields
 in one retained snapshot. It does not expose raw provider payloads, media bytes or
 references, hidden reasoning, or evidence the adapter did not observe.
 
-Opaque list/search cursors contain query-binding, library-instance, generation,
+Entry inventory exposes one bounded representative text preview only after page
+selection. An origin-filtered query never previews text from another origin, and
+an omitted-only match exposes no payload or placeholder. Its known root value is
+one retained session reference; unknown lineage remains explicit. Root evidence
+does not enter document digests or other query records.
+
+Opaque list/search/entries cursors contain query-binding, library-instance, generation,
 and offset data rather than transcript text. They are continuation tokens, not
 secrets or durable capabilities, and become stale after a later admitted writer
 or library recreation.

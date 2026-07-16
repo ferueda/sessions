@@ -34,6 +34,7 @@ import { countRootSupport } from "./sqlite-query-lineage.ts";
 import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { readSessionSummary } from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+import { listSqliteSessionEntries } from "./sqlite-session-entry-query.ts";
 
 const ORIGINS = new Set<ContentOrigin>([
   "human",
@@ -49,6 +50,9 @@ const CONFIDENCES = new Set<OriginConfidence>(["high", "medium", "low", "unknown
 
 export function createSqliteSessionQuery(database: DatabaseSync): SessionQueryRepository {
   return {
+    async entries(query) {
+      return listSqliteSessionEntries(database, query);
+    },
     async list(query) {
       return listSessions(database, query);
     },

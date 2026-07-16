@@ -29,6 +29,11 @@ const absentQueryCases = [
     expected: { status: 0, stdout: "No matches found.\n", stderr: "" },
   },
   {
+    command: "entries",
+    argv: ["entries"],
+    expected: { status: 0, stdout: "No entries found.\n", stderr: "" },
+  },
+  {
     command: "show",
     argv: ["show", "codex@default:missing"],
     expected: { status: 1, stdout: "", stderr: "sessions: Session was not found\n" },

@@ -4,7 +4,7 @@
 - Last updated: 2026-07-15
 
 This reference owns the machine-readable output of `sessions list`,
-`sessions search`, `sessions show`, and `sessions export`. JSON is one bundle.
+`sessions search`, `sessions entries`, `sessions show`, and `sessions export`. JSON is one bundle.
 JSONL is one compact JSON object per physical line, with one trailing newline per
 record. Embedded newlines are JSON escapes, so they never split a JSONL record.
 For a command result, JSON and JSONL encode the same eligible evidence, selection,
@@ -21,13 +21,15 @@ sessions list [filters] [--limit N] [--cursor TOKEN]
               [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
+sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
+                           [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
                                [--full | --from-entry N --to-entry N]
 ```
 
-List, search, and show default to `human`. Export requires `--format json` or
+List, search, entries, and show default to `human`. Export requires `--format json` or
 `--format jsonl`; omitting it is invalid usage. `md`, YAML, unsupported formats,
 unknown flags, and invalid option combinations exit `2`.
 
@@ -63,12 +65,12 @@ JSONL is independently parseable, but schema 1 does not promise low-memory
 streaming. Canonical show/export reads already materialize one retained document,
 and Sessions validates and encodes the complete result before stdout.
 
-Every JSON/JSONL list, search, show, and default export result has an exact
+Every JSON/JSONL list, search, entries, show, and default export result has an exact
 16 MiB (`16 * 1024 * 1024` UTF-8 bytes) encoded-output limit. Measurement covers
 the complete serialized JSON or joined JSONL records, including escaping,
 formatting, record newlines, and truncation metadata. A result at the limit
 succeeds. One byte over fails with `structured-output-too-large`, exits `1`,
-writes no stdout, and advises narrowing list/search or using `export --full`.
+writes no stdout, and advises narrowing list/search/entries or using `export --full`.
 Structural strings are never shortened to fit the limit.
 
 `export --full` is the only structured route exempt from this presentation cap.
@@ -77,8 +79,8 @@ provider data. It cannot recover hidden reasoning, omitted media or references,
 related-session bodies, earlier provider revisions, or evidence the adapter did
 not retain.
 
-Format does not enter list/search query fingerprints. The same opaque cursor can
-continue the same query in human, JSON, or JSONL format. An empty list or search
+Format does not enter list/search/entries query fingerprints. The same opaque cursor can
+continue the same query in human, JSON, or JSONL format. An empty list, search, or entries result
 still emits a page record and exits `0`. An absent show or export exits `1`.
 
 ## Selection and bounds
@@ -137,13 +139,19 @@ support rules. Context records are explicitly `entry-excerpt` values; they are
 not complete canonical entries or segments. Each primary hit includes the full
 canonical content hash of its matched segment.
 
+Entries keeps binary source kind, source instance, native ID, and canonical
+entry-ordinal order. It emits one optional 512-byte UTF-8 preview only after the
+page is selected. An origin filter also constrains the preview; omitted-only
+matches have no preview. Root attribution is query-derived and does not alter the
+complete document projection or digest.
+
 ## Exact schema 1
 
 The following closed types are authoritative. A field marked `?` is omitted when
 absent. No other field may be omitted or serialized as `null`.
 
 ```ts
-type StructuredCommandV1 = "list" | "search" | "show" | "export";
+type StructuredCommandV1 = "list" | "search" | "entries" | "show" | "export";
 
 interface StructuredHeaderV1<Command extends StructuredCommandV1, Type extends string> {
   readonly schemaVersion: 1;
@@ -322,6 +330,36 @@ interface SearchSupportV1 {
   readonly uniqueKnownRoots: number;
   readonly unknownLineageSessions: number;
 }
+
+interface PublicEntryInventoryV1 {
+  readonly session: PublicSessionSummaryV1;
+  readonly root:
+    { readonly kind: "known"; readonly session: SessionRefV1 } | { readonly kind: "unknown" };
+  readonly coordinate: PublicEntryCoordinateV1;
+  readonly content: {
+    readonly textSegmentCount: number;
+    readonly omittedSegmentCount: number;
+    readonly unpreviewedTextSegmentCount: number;
+    readonly preview?: {
+      readonly segmentOrdinal: number;
+      readonly origin:
+        | "human"
+        | "injected"
+        | "delegated"
+        | "replayed-copied"
+        | "model"
+        | "tool"
+        | "system"
+        | "unknown";
+      readonly originConfidence: "high" | "medium" | "low" | "unknown";
+      readonly excerpt: SearchExcerptV1;
+      readonly contentHash: {
+        readonly scheme: "sha256-utf8-v1";
+        readonly digest: string;
+      };
+    };
+  };
+}
 ```
 
 ### JSON bundles
@@ -336,6 +374,11 @@ type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
   readonly nextCursor: string | null;
   readonly support: SearchSupportV1;
   readonly hits: readonly PublicSearchHitV1[];
+};
+
+type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
+  readonly nextCursor: string | null;
+  readonly entries: readonly PublicEntryInventoryV1[];
 };
 
 type ShowJsonV1 = StructuredHeaderV1<"show", "snapshot"> & {
@@ -371,6 +414,14 @@ type SearchHitJsonlV1 = StructuredHeaderV1<"search", "hit"> & {
   readonly hit: PublicSearchHitV1;
 };
 
+type EntriesPageJsonlV1 = StructuredHeaderV1<"entries", "page"> & {
+  readonly entryCount: number;
+  readonly nextCursor: string | null;
+};
+type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
+  readonly entry: PublicEntryInventoryV1;
+};
+
 type SnapshotSessionJsonlV1<Command extends "show" | "export"> = StructuredHeaderV1<
   Command,
   "session"
@@ -398,7 +449,7 @@ type SnapshotEntryJsonlV1<Command extends "show" | "export"> = StructuredHeaderV
 ## Nulls, omissions, counts, and order
 
 `nextCursor`, `firstOrdinal`, and `lastOrdinal` are the only nullable members and
-are always present. Optional title/provider timestamp/tool fields are omitted
+are always present. Optional title/provider timestamp/tool/preview fields are omitted
 when absent. All other members are required. Counts and byte totals are
 non-negative safe integers.
 
@@ -406,10 +457,11 @@ JSONL order is exactly:
 
 - list: one `page`, then ordered `session` records;
 - search: one `page`, then ordered `hit` records;
+- entries: one `page`, then ordered `entry` records;
 - show/export: one `session` envelope, then ordered `relation` records, then
   ordered `entry` records.
 
-Empty arrays remain present in JSON. Empty list/search emits one JSONL page. An
+Empty arrays remain present in JSON. Empty list/search/entries emits one JSONL page. An
 empty show/export snapshot emits one JSONL session envelope. Each JSONL
 relation/entry repeats the session reference and document digest, so it remains
 attributable without prior lines. Nested JSON relations/entries inherit the one
@@ -444,6 +496,12 @@ The equivalent JSONL result is one independently parseable line:
 {"schemaVersion":1,"command":"list","type":"page","disposition":"untrusted-history","sessionCount":0,"nextCursor":null}
 ```
 
+An empty entries JSONL result is also one page:
+
+```text
+{"schemaVersion":1,"command":"entries","type":"page","disposition":"untrusted-history","entryCount":0,"nextCursor":null}
+```
+
 Every show/export JSONL sequence begins with the session envelope. A
 relation or entry line then repeats `session` and `documentDigest`; consumers do
 not need to retain a preceding line to attribute it.
@@ -451,10 +509,14 @@ not need to retain a preceding line to attribute it.
 ## Excluded fields and later work
 
 DTOs are built field by field. They never spread raw canonical, query, adapter,
-or SQLite values. Root workspace, diagnostic/source/input locators, provider
+or SQLite values. Workspace, diagnostic/source/input locators, provider
 roots, source metadata, attachment paths, private media references, capture
 internals, and raw omitted payloads are excluded as metadata. Omitted non-text
 content exposes only its admitted class and source-type token.
+
+Entry inventory includes only its query-derived known root session reference or
+an explicit unknown value. It does not expose root workspace or provider paths
+and does not add root identity to list, search, show, export, or document digests.
 
 Markdown is not a current format and `--format md` is invalid usage. Any post-V1
 presentation layer must use the same selected projection and may not change

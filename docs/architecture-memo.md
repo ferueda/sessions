@@ -9,7 +9,7 @@
 
 Build Sessions as a new local-first product, using the Harness implementation as evidence and reusable parser material rather than as a codebase to clean up in place.
 
-The core owns a provider-neutral session model, durable capture lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; after explicit indexing, the durable canonical library is the only source for list, search, show, analysis, and export.
+The core owns a provider-neutral session model, durable capture lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; after explicit indexing, the durable canonical library is the only source for list, search, entries, show, analysis, and export.
 
 The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
 
@@ -75,11 +75,12 @@ Arrows represent dependencies on contracts, not runtime call direction. Domain c
 
 ### Current module map and dependency enforcement
 
-M6 extends the first Codex vertical slice with provider-neutral filtered list,
-lexical search, pagination, bounded context, lineage resolution, support counts,
+The current implementation extends the first Codex vertical slice with
+provider-neutral filtered list, lexical search, textless entry inventory,
+pagination, bounded context, lineage resolution, support counts,
 and canonical-only FTS projection repair. The baseline also includes durable
 canonical evidence, non-destructive source-presence reconciliation,
-index/list/search/show, scoped forget, all-data clear, source-aware diagnostics,
+index/list/search/entries/show, scoped forget, all-data clear, source-aware diagnostics,
 explicit orphan observability/deletion, and bounded physical page reclamation. The
 maintained file-by-file map is the
 [current architecture guide](contributing/architecture.md); this memo remains the
@@ -189,7 +190,7 @@ successful capture time, effective source-observation time, last-good adapter
 version, source state/freshness, and the stored digest. Show reads summary and
 document under one immutable SQLite snapshot and requires their stored digests to
 agree. Full document reads and semantic health reconstruct the projection and
-verify the digest; list/search read it directly without reconstructing every
+verify the digest; list/search/entries read it directly without reconstructing every
 document.
 
 ### Entry
@@ -370,15 +371,15 @@ and logical UTF-8 bytes. Failure emits no success report; completed batches
 remain durable and a fresh invocation safely restarts. No limit, cursor, partial
 result, or automatic repair policy is public.
 
-The application exposes immutable provider-neutral list/search query values and
+The application exposes immutable provider-neutral list/search/entries query values and
 one query repository beside canonical reconstruction on each read snapshot.
 Shared filters cover exact source/instance, exact opaque provider-native ID,
 effective source state, workspace, exclusive capture/source-observation bounds,
 and canonical identity. Native-ID lookup returns zero or more canonical summaries
 and never replaces the complete three-part identity required by singular or
-destructive operations. Search adds exclusive entry-time bounds, actor, content
-origin, exact entry kind, exact source-observed tool name/namespace, bounded
-context, and literal text. The
+destructive operations. Search and entries add exclusive entry-time bounds,
+actor, content origin, exact entry kind, and exact source-observed tool
+name/namespace. Search alone adds bounded context and literal text. The
 effective observation time is the source coverage observation while coverage is
 unknown and the session presence observation otherwise; it never falls back to
 last-seen or provider activity time.
@@ -398,7 +399,16 @@ onto results. Query-wide support counts matching segments, distinct exact
 canonical content, distinct resolved roots, and distinct matching sessions with
 unknown lineage before page slicing.
 
-List and search continuation cursors bind the complete query/order contract,
+Entry inventory applies the same exact filters without a text predicate or FTS.
+It returns all qualifying entries or the lowest/highest qualifying canonical
+ordinal per session. Every mode orders by binary source identity and entry
+ordinal. Content hydration happens only for the selected page and includes exact
+text/omission counts plus at most one origin-aware 512-byte preview. One
+query-scoped lineage resolver attributes each result to a known retained root or
+`unknown`; this derived result does not change documents, digests, exports,
+filters, or ordering.
+
+List, search, and entries continuation cursors bind the complete query/order contract,
 command, random library instance ID, current writer generation, and next offset.
 Malformed/query-mismatched cursors are usage failures; recreated-library or
 later-generation cursors are stale operational failures. Every admitted writer
@@ -496,6 +506,8 @@ sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
+sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
+                           [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
@@ -506,15 +518,8 @@ sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-Next planned query surface:
-
-```text
-sessions entries [filters] [--limit N] [--cursor TOKEN]
-                 [--format human|json|jsonl]
-```
-
-The same milestone adds literal-any search, per-result root attribution, and
-activity bounds. Bounded show/export ranges are current. The next planned adapter
+The same milestone adds literal-any search, list/search root attribution, and
+activity bounds. Textless entry inventory and bounded show/export ranges are current. The next planned adapter
 surface then adds:
 
 ```text
@@ -526,20 +531,21 @@ same eligible evidence and digest semantics.
 
 Behavioral rules:
 
-- Human-readable output is the list/search/show default; export requires JSON or
+- Human-readable output is the list/search/entries/show default; export requires JSON or
   JSONL explicitly.
 - JSON/JSONL are explicit and schema-versioned.
 - Stdout carries requested results; stderr carries warnings, progress, and errors.
 - Exit `0` means successful execution, including no matches; `1` means operational failure; `2` means invalid usage.
 - A fresh uninitialized library lists as a successful empty result without
-  creating storage or probing a provider. Cursor-free search behaves the same;
-  show/export of an absent identity remains an operational not-found result.
+  creating storage or probing a provider. Cursor-free search and entries behave
+  the same; show/export of an absent identity remains an operational not-found
+  result.
 - Unknown flags and invalid values fail; they are not ignored.
 - Potentially large output is bounded by default. Only export accepts explicit
   `--full`.
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
-- List/search/show use one shared selection for human, JSON, and JSONL. Export
+- List/search/entries/show use one shared selection for human, JSON, and JSONL. Export
   uses the same snapshot selection and emits JSON or JSONL.
 - `index` durably retains the latest successful normalized snapshot. A complete
   later scan can change its source state to missing but cannot delete it.
@@ -828,7 +834,7 @@ Do not transplant:
 ## Roadmap
 
 The phase scopes below remain accepted. Phases 0 through 3 are implemented;
-M8 agent analysis retrieval is next. Codex is the first vertical slice because
+M8 agent analysis retrieval is in progress. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex before Cursor becomes the second-adapter proof. The
@@ -864,9 +870,9 @@ is deferred beyond V1.
 
 ### Phase 4 — Agent analysis retrieval
 
-Query-scoped lineage resolution, rank-first search hydration, and bounded
-show/export ranges are complete. Add textless entry inventory, literal-any
-search, per-result root attribution, and activity bounds without changing
+Query-scoped lineage resolution, rank-first search hydration, bounded
+show/export ranges, and textless entry inventory are complete. Add literal-any
+search, list/search root attribution, and activity bounds without changing
 adapters or canonical storage.
 
 ### Phase 5 — Agent Skill
