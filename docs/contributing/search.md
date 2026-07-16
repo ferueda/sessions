@@ -4,31 +4,34 @@ The public behavior is defined by the [CLI contract](../reference/cli-contract.m
 
 ## Search flow
 
-1. The domain layer validates and freezes the text, exact filters, exclusive time
-   bounds, page limit, context limit, and optional cursor. Blank or malformed
-   values fail before SQLite runs.
-2. SQLite splits the text on Unicode whitespace, quotes each term as literal FTS5
-   data, and joins the terms with `AND`. User text is never treated as FTS syntax.
+1. The domain layer canonicalizes Unicode whitespace and validates the text,
+   `all|any` mode, exact filters, exclusive bounds, limits, and cursor. Queries
+   admit at most 32 terms and 4 KiB of canonical UTF-8 text.
+2. SQLite quotes each term as literal FTS5 data and joins terms with `AND` for
+   `all` or `OR` for `any`. User text is never treated as FTS syntax.
 3. Exact filters restrict matching occurrences and entries. Matching segments
    group by session and entry, so one entry produces one primary hit.
 4. SQLite ranks each entry by its best FTS5 BM25 score. Ties use session activity,
    source identity, and entry ordinal in a fixed order. The query keeps one extra
    rank row only to decide whether a next page exists.
 5. After selecting the page, SQLite loads full text, its digest, and the FTS
-   snippet only for the selected content IDs.
-6. Search verifies each selected content hash, bounds snippets and context to 512
+   snippet only for selected content IDs. `any` mode probes each selected entry
+   for its exact matched terms; `all` reuses the unique query terms.
+6. One query-scoped resolver supplies support counts and each hit's known root or
+   `unknown`.
+7. Search verifies each selected content hash, bounds snippets and context to 512
    UTF-8 bytes, and adds requested neighboring entries plus direct tool-call and
    tool-result links.
-7. Support is calculated over the complete filtered result, before page slicing:
+8. Support is calculated over the complete filtered result, before page slicing:
    matching occurrences, distinct content, known roots, and sessions with unknown
    lineage.
-8. A next cursor binds the full query, library identity, writer generation, and
+9. A next cursor binds the full query, library identity, writer generation, and
    offset. It is a continuation token, not a durable bookmark.
 
 ## Guarantees and failures
 
-- Ranking, filters, grouping, support, snippets, context, and cursors are exact and
-  deterministic for one retained snapshot.
+- Ranking, filters, grouping, support, roots, matched terms, snippets, context,
+  and cursors are exact and deterministic for one retained snapshot.
 - Repeated copies of one segment do not improve BM25 rank. They still count as
   occurrences, while distinct content and lineage use their own support units.
 - Context does not inherit the primary hit's filters. Linked expansion is direct,
@@ -47,6 +50,11 @@ and lineage counts still inspect the full qualifying result, so broad searches c
 still take longer on large libraries. The design favors exact evidence over
 approximate counts or ranking.
 
+`any` mode adds at most one candidate-local FTS probe per unique term for the
+selected page. Activity bounds reuse canonical timestamps and add no storage
+index. The repeatable measurement covers both term modes; elapsed time remains
+report-only.
+
 ## Retrieve an exact span
 
 After search identifies useful entry ordinals, `show` or `export` can retrieve
@@ -62,7 +70,7 @@ still reconstructs and verifies the complete document first.
   `src/application/search-sessions.ts`
 - Matching and filters: `src/infrastructure/sqlite/literal-fts-query.ts` and
   `src/infrastructure/sqlite/sqlite-query-filters.ts`
-- Ranking, hydration, support, and cursor use:
+- Ranking, hydration, matched terms, roots, support, and cursor use:
   `src/infrastructure/sqlite/sqlite-session-query.ts`
 - Context and cursor encoding: `src/infrastructure/sqlite/sqlite-query-context.ts`
   and `src/infrastructure/sqlite/query-cursor.ts`

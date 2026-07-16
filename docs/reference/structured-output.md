@@ -19,8 +19,8 @@ changing the record inventory requires a later schema version.
 ```text
 sessions list [filters] [--limit N] [--cursor TOKEN]
               [--format human|json|jsonl]
-sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
-                       [--format human|json|jsonl]
+sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
+                       [--cursor TOKEN] [--format human|json|jsonl]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
                            [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
@@ -134,16 +134,20 @@ safety layer after escaping: at most 8 KiB per rendered scalar/heading and
 can display less text than JSON/JSONL when escaping expands. Structured metadata
 describes only the shared raw selection.
 
-Search keeps its existing ranking, limit, cursor, 512-byte excerpt, context, and
-support rules. Context records are explicitly `entry-excerpt` values; they are
-not complete canonical entries or segments. Each primary hit includes the full
-canonical content hash of its matched segment.
+Search keeps its ranking, limit, cursor, 512-byte excerpt, context, and support
+rules. Context records are explicitly `entry-excerpt` values; they are not
+complete canonical entries or segments. Each primary hit includes the full
+canonical content hash of its matched segment, the exact terms that matched that
+entry, and a query-derived root.
+
+List, search, and entries include a query-derived known retained root or
+`unknown`. Show and export do not. Root attribution does not alter the complete
+document projection or digest.
 
 Entries keeps binary source kind, source instance, native ID, and canonical
 entry-ordinal order. It emits one optional 512-byte UTF-8 preview only after the
 page is selected. An origin filter also constrains the preview; omitted-only
-matches have no preview. Root attribution is query-derived and does not alter the
-complete document projection or digest.
+matches have no preview.
 
 ## Exact schema 1
 
@@ -189,6 +193,13 @@ interface PublicSessionSummaryV1 {
   readonly sourceObservedAt: string;
   readonly adapterVersion: string;
   readonly freshness: "current" | "stale";
+}
+
+type PublicSessionRootV1 =
+  { readonly kind: "known"; readonly session: SessionRefV1 } | { readonly kind: "unknown" };
+
+interface PublicListSessionV1 extends PublicSessionSummaryV1 {
+  readonly root: PublicSessionRootV1;
 }
 
 interface CountSelectionV1 {
@@ -300,6 +311,7 @@ interface SearchContextExcerptV1 {
 
 interface PublicSearchHitV1 {
   readonly session: PublicSessionSummaryV1;
+  readonly root: PublicSessionRootV1;
   readonly entry: PublicEntryCoordinateV1;
   readonly match: {
     readonly segmentOrdinal: number;
@@ -319,6 +331,7 @@ interface PublicSearchHitV1 {
       readonly digest: string;
     };
     readonly additionalMatchingSegments: number;
+    readonly matchedTerms: readonly string[];
   };
   readonly context: readonly SearchContextExcerptV1[];
   readonly linkedContextTruncated: boolean;
@@ -333,8 +346,7 @@ interface SearchSupportV1 {
 
 interface PublicEntryInventoryV1 {
   readonly session: PublicSessionSummaryV1;
-  readonly root:
-    { readonly kind: "known"; readonly session: SessionRefV1 } | { readonly kind: "unknown" };
+  readonly root: PublicSessionRootV1;
   readonly coordinate: PublicEntryCoordinateV1;
   readonly content: {
     readonly textSegmentCount: number;
@@ -367,7 +379,7 @@ interface PublicEntryInventoryV1 {
 ```ts
 type ListJsonV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
-  readonly sessions: readonly PublicSessionSummaryV1[];
+  readonly sessions: readonly PublicListSessionV1[];
 };
 
 type SearchJsonV1 = StructuredHeaderV1<"search", "page"> & {
@@ -402,7 +414,7 @@ type ListPageJsonlV1 = StructuredHeaderV1<"list", "page"> & {
   readonly nextCursor: string | null;
 };
 type ListSessionJsonlV1 = StructuredHeaderV1<"list", "session"> & {
-  readonly summary: PublicSessionSummaryV1;
+  readonly summary: PublicListSessionV1;
 };
 
 type SearchPageJsonlV1 = StructuredHeaderV1<"search", "page"> & {
@@ -452,6 +464,10 @@ type SnapshotEntryJsonlV1<Command extends "show" | "export"> = StructuredHeaderV
 are always present. Optional title/provider timestamp/tool/preview fields are omitted
 when absent. All other members are required. Counts and byte totals are
 non-negative safe integers.
+
+Roots are required on list sessions, search hits, and entry records. Search
+`matchedTerms` is required, non-empty, unique, in first-query order, and contains
+at most 32 exact query terms.
 
 JSONL order is exactly:
 
@@ -514,9 +530,9 @@ roots, source metadata, attachment paths, private media references, capture
 internals, and raw omitted payloads are excluded as metadata. Omitted non-text
 content exposes only its admitted class and source-type token.
 
-Entry inventory includes only its query-derived known root session reference or
-an explicit unknown value. It does not expose root workspace or provider paths
-and does not add root identity to list, search, show, export, or document digests.
+List, search, and entry inventory include only a query-derived known root session
+reference or an explicit unknown value. They do not expose root workspace or
+provider paths. Show, export, and document digests do not include root identity.
 
 Markdown is not a current format and `--format md` is invalid usage. Any post-V1
 presentation layer must use the same selected projection and may not change

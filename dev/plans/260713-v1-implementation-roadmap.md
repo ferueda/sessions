@@ -24,11 +24,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 7 are complete. M8 agent analysis retrieval is in progress:
-query-scoped lineage resolution and rank-first bounded search hydration are
-complete, bounded show/export ranges are complete, and the textless entry
-inventory is complete. Literal-any search, list/search root attribution, and
-activity bounds are next.
+Milestones 0 through 8 are complete. M9 packaged Agent Skill work is next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -55,11 +51,12 @@ The repository now includes:
   digest, atomic digest/body persistence, canonical verification, and required
   same-snapshot retained attribution;
 - one shared bounded/full public transcript selection plus closed schema-1 JSON
-  and independently attributable JSONL for list, search, show, and export;
+  and independently attributable JSONL for list, search, entries, show, and
+  export;
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- public `index`, `list`, `search`, `show`, `export`, `forget`,
+- public `index`, `list`, `search`, `entries`, `show`, `export`, `forget`,
   `data repair-orphans`, `data compact`, and `data clear` workflows
   backed only by the provider-neutral application and storage layers;
 - filtered/cursored retained-session list plus literal lexical search over one
@@ -68,6 +65,9 @@ The repository now includes:
 - deterministic entry-level ranking, bounded adjacent/direct tool context,
   query-wide occurrence/content/root/unknown-lineage support, and opaque cursors
   bound to query, library identity, and writer generation;
+- literal all/any search with bounded admission and per-hit matched terms,
+  shared exclusive activity bounds, and query-derived roots on list, search, and
+  entries;
 - explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and a
   query-scoped iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
@@ -78,12 +78,11 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the agent-efficient corpus-selection queries, packaged
-Agent Skill, Cursor adapter, release automation, or pinned Harness integration.
-M8 strengthens the provider-neutral query engine over Codex, M9 packages the
-evidence playbooks, and M10 then proves the same complete surface through a
-second passive adapter. Markdown presentation is deferred beyond V1; JSON and
-JSONL are the portable machine formats for V1.
+It does not yet have the packaged Agent Skill, Cursor adapter, release
+automation, or pinned Harness integration. M9 packages the evidence playbooks,
+and M10 then proves the same complete surface through a second passive adapter.
+Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
+machine formats for V1.
 
 ## Execution rules
 
@@ -118,7 +117,7 @@ flowchart TD
   M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine — complete"]
   M6 --> M7["M7 Export and CLI schemas — complete"]
-  M7 --> M8["M8 Agent analysis retrieval — in progress"]
+  M7 --> M8["M8 Agent analysis retrieval — complete"]
   M8 --> M9["M9 Packaged Agent Skill"]
   M9 --> M10["M10 Cursor parity"]
   M10 --> M11["M11 Release qualification"]
@@ -797,7 +796,7 @@ Exit gate:
 - Generated help and all current/planned labels match implemented behavior.
 - `pnpm check` passes on all CI operating systems.
 
-### M8 — Improve agent-led corpus analysis (in progress)
+### M8 — Improve agent-led corpus analysis (complete)
 
 Outcome: agents can efficiently discover, group, and extract bounded evidence
 across retained sessions without provider-specific analysis logic or full-library
@@ -810,7 +809,7 @@ Execution sequence:
    and snippet hydration, with exact output and measured broad-search proof;
 3. **Complete:** expose bounded show/export ranges through the existing selector;
 4. **Complete:** add the textless entry inventory and its structured contract;
-5. **Next:** add literal-any search, list/search root attribution, and activity
+5. **Complete:** add literal-any search, list/search root attribution, and activity
    bounds.
 
 Each item may use its own executor plan and pull request. Later items rebase on

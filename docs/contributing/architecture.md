@@ -1,8 +1,7 @@
 # Current architecture
 
-Status: M8 agent analysis retrieval is in progress; query-scoped lineage
-resolution, rank-first search hydration, bounded show/export ranges, and
-textless entry inventory are complete.
+Status: M8 agent analysis retrieval is complete. M9 packaged Agent Skill work is
+next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -61,6 +60,7 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `src/application/{list-sessions,search-sessions,list-session-entries,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                      |
 | `src/application/export-session.ts`                                                    | Provider-free one-snapshot export and bounded/full selection                           |
 | `src/application/session-presentation.ts`                                              | Shared title, relation, entry, segment, and UTF-8 text selection                       |
+| `src/application/session-root-presentation.ts`                                         | Query-derived known/unknown root copying                                               |
 | `src/application/*report.ts`                                                           | Versioned provider-neutral operational reports                                         |
 | `src/adapters/codex/`                                                                  | Codex path/state/rollout discovery and canonical normalization                         |
 | `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral discovery workspace     |
@@ -73,10 +73,10 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `test/`                                                                                | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show
-exist. Agent-efficient corpus selection, Cursor, packaged Agent Skills, and a
-public adapter ABI do not exist yet. M7 owns one closed public document projection, its
-deterministic digest, retained attribution, shared bounded selection, and the
-exact schema-1 machine records documented in
+exist. Agent-efficient corpus selection exists over the retained Codex library;
+Cursor, the packaged Agent Skill, and a public adapter ABI do not exist yet. M7
+owns one closed public document projection, its deterministic digest, retained
+attribution, shared bounded selection, and the exact schema-1 machine records documented in
 [structured output](../reference/structured-output.md).
 
 The current runtime dependencies remain `commander` and `smol-toml`. Provider and
@@ -219,23 +219,31 @@ authenticity result, or a safety signal.
 
 ## Query boundary
 
-`src/domain/session-query.ts` owns validated immutable filters, limits, context,
-cursors, pages, hits, and support values. `src/domain/session-lineage.ts` owns the
+`src/domain/session-query.ts` owns validated immutable filters, term mode,
+activity bounds, limits, context, cursors, pages, hits, matched terms, roots, and
+support values. `src/domain/session-lineage.ts` owns the
 iterative provider-neutral root policy. `src/application/ports/session-query.ts`
 defines the minimal list/search/entries repository; services own defaults and
 fresh-library behavior.
 
-SQLite owns literal FTS translation, parameterized filter SQL, deterministic
-rank/order, bounded context assembly, query-wide counts, and cursor encoding.
+SQLite owns literal all/any FTS translation, parameterized filter SQL,
+deterministic rank/order, activity filtering over `updatedAt` with `createdAt`
+fallback, bounded context assembly, query-wide counts, and cursor encoding.
 Search ranks compact coordinates first, keeps the extra rank-only row used for
 pagination, and hydrates text, digest, and snippets only for the selected page.
 Snippet markers are checked against those selected canonical texts and retried
 on collision, so search does not scan or hydrate the rest of the library.
-Support remains exact and query-wide rather than being inferred from the page.
+`any` mode derives exact per-hit terms with candidate-local probes after page
+selection. One query-scoped root resolver serves support plus list/search/entries
+attribution. Support remains exact and query-wide rather than being inferred from the page.
 `fts-projection.ts` is the shared bootstrap/repair definition. These modules do
 not import adapters. Codex supplies canonical lineage coverage/relations and
 observed tool evidence only; it cannot decide roots, counts, filters, ranking, or
 presentation.
+
+Root attribution is query output only. It may point outside current filters and
+does not enter canonical documents, digests, show, or export. M8 changes no
+provider adapter, canonical schema, or storage index.
 
 The application layer performs title/transcript selection once, before choosing
 a human or machine renderer. Show keeps its existing focus/default behavior, and
