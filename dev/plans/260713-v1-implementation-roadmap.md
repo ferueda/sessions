@@ -24,10 +24,10 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 9 are complete. M10 core evidence hardening is underway:
-capture truth, all-tracked reconciliation, and bounded source-change retry are
-implemented. Routine indexing instrumentation and its correctness baseline are
-implemented; the measured writer-open optimization follows.
+Milestones 0 through 10 are complete. M10 added honest capture scope,
+all-tracked reconciliation, bounded source-change retry, opt-in indexing
+timings, and a recovery-safe proportional writer-open path. M11 Cursor parity is
+next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -45,7 +45,8 @@ The repository now includes:
   reconciliation, bounded source-change recovery, and repository-authoritative
   reports;
 - renewable writer leases, transactional mutation fencing, abandoned-run
-  interruption, and valid WAL recovery;
+  interruption, valid WAL recovery, exact-generation clean sealing, and a
+  private stat-bound post-close proof;
 - internal only-owned-file clear/repair/compact maintenance and immutable
   ready-index health inspection used by doctor;
 - one current storage baseline with durable canonical evidence, exact text,
@@ -77,17 +78,17 @@ The repository now includes:
   verification audits, handoffs, and capability discovery;
 - explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and a
   query-scoped iterative provider-neutral root resolver;
-- canonical-only FTS projection repair during explicit leased indexing while
-  doctor remains read-only;
+- proportional changed-document/FTS proof on clean index generations,
+  canonical-only FTS projection repair after uncertain opens, and immutable
+  semantic FTS verification in doctor;
 - aggregate orphan-content reachability in doctor plus explicit provider-free,
   fixed-batch canonical orphan deletion under dedicated repair ownership;
 - platform application-data storage, non-destructive missing/unknown source
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the measured unchanged-run optimization, the Cursor adapter,
-release automation, or pinned Harness integration. The writer-open optimization
-completes M10 before M11 proves the same provider-neutral surface through a
+It does not yet have the Cursor adapter, release automation, or pinned Harness
+integration. M11 now proves the complete provider-neutral surface through a
 second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
@@ -178,8 +179,11 @@ fully unchanged 3,553.177 ms run: writer open 3,177.450 ms, discovery 354.958 ms
 freshness reads 3.072 ms, unchanged writes 11.863 ms, and close 3.542 ms. Exact
 control/timed semantics, selected observations and rollout bytes, library health,
 and zero changed reads all passed. These machine-local values are design
-evidence, not public guarantees. Writer-open validation is the next target;
-per-candidate batching is not justified by this real baseline.
+evidence, not public guarantees. The completed clean-generation path reduced the
+same fixed synthetic proof to 2.525 ms writer open / 261.254 ms total. An
+authorized read-only real Codex 120-session exact-cohort proof used 14.008 ms /
+381.767 ms with zero changed reads. Both budgets and exact semantic comparisons
+passed. Per-candidate batching remains unjustified by this evidence.
 
 Near-term candidates remain evidence-gated rather than M10 commitments:
 
@@ -213,7 +217,7 @@ flowchart TD
   M6 --> M7["M7 Export and CLI schemas — complete"]
   M7 --> M8["M8 Agent analysis retrieval — complete"]
   M8 --> M9["M9 Packaged Agent Skill — complete"]
-  M9 --> M10["M10 Capture truth and routine-index hardening — underway"]
+  M9 --> M10["M10 Capture truth and routine-index hardening — complete"]
   M10 --> M11["M11 Cursor parity"]
   M11 --> M12["M12 Release qualification"]
   M12 --> M13["M13 Parity, Harness cutover, V1"]
@@ -1110,7 +1114,7 @@ Exit gate:
   -> entries/search/show/export -> optional forget or explicit data clear.
 - `pnpm check` passes.
 
-### M10 — Make capture scope honest and harden routine indexing
+### M10 — Make capture scope honest and harden routine indexing (complete)
 
 Outcome: agents can distinguish retained search results from missing capture
 evidence, a source that changes during its first read receives one safe recovery
@@ -1122,8 +1126,8 @@ recovery, and measured performance work would be safer to review independently.
 All parts remain provider-neutral and land before Cursor adapter work.
 
 Capture-scope reporting, all-tracked complete-scan reconciliation, bounded
-source-change retry, and indexing instrumentation are implemented. The measured
-writer-open optimization is the remaining M10 work.
+source-change retry, indexing instrumentation, and the measured writer-open
+optimization are implemented.
 
 Primary change areas:
 
@@ -1225,6 +1229,12 @@ Exit gate:
   or row-ID damage, targeted replacement/FTS rollback, conservative maintenance,
   and exact control/optimized semantic equality.
 - `pnpm check` passes.
+
+Completion evidence: the fixed synthetic 2,000-session exact-equality proof
+measured 2.525 ms writer open and 261.254 ms total. The authorized read-only real
+Codex 120-session exact-cohort proof measured 14.008 ms writer open and 381.767
+ms total, performed zero changed reads, and passed the 800 ms / 1.25 second local
+budgets without changing canonical, query, failure, lease, or provider evidence.
 
 ### M11 — Add Cursor and prove adapter equivalence
 

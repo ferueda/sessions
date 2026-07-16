@@ -183,7 +183,10 @@ forget-live | repair-live | compact-live | clear-live | expired | invalid`;
 remaining counts are non-negative decimal strings. Canonical, foreign-key,
 content-reachability, or run corruption fails. FTS-only damage reports
 rebuild-required without describing canonical loss. An active run is healthy
-only with an index-live lease. Doctor never opens a writer or applies migrations.
+only with an index-live lease. `ftsContent` compares exact retained terms,
+positions, and docsize with a contentless TEMP FTS index built from canonical
+rows in bounded batches. The temporary index is memory-only. Doctor never opens
+a writer or applies migrations.
 
 The ready-library capture details are exactly `captureStatus`,
 `trackedSessions`, `retainedCurrentSessions`, `retainedStaleSessions`,
@@ -283,6 +286,16 @@ content. Doctor remains read-only and reports `rebuild-required`; canonical
 corruption fails closed instead of invoking projection repair. Orphan repair
 never rebuilds FTS and fails closed when a candidate lacks its expected derived
 FTS row.
+
+Index lease acquisition marks its generation dirty. A normal index close may
+seal and release only that exact generation, then publishes a private
+database-stat-bound post-close proof after database cleanup succeeds. A matching
+clean seal and proof allow the next ready, sidecar-free, current-schema writer to
+use constant-size schema/FTS structure checks plus proportional changed-document
+verification. Recovery, migration, maintenance, failed cleanup, or rejected
+proof uses full canonical, foreign-key, and FTS validation/repair. This is an
+internal performance path: it adds no CLI flag, output field, or exit code.
+Direct SQLite edits outside Sessions are unsupported.
 
 Forget is logical deletion: freed whole pages become reusable, but the command
 does not promise that the main database file shrinks. `sessions data compact`
@@ -543,6 +556,11 @@ malformed or thrown probe fails with exactly
 Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
+
+Pre-alpha schema 1 has one current checksum that includes the writer clean-seal
+state. There is no compatibility migration from earlier development checksums;
+they fail closed and require the documented fresh data-directory or exact
+Sessions-owned-directory reset and reindex.
 
 ## Current query contract
 

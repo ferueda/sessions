@@ -1,6 +1,7 @@
 # Current architecture
 
-Status: M10 core evidence hardening is in progress. Cursor parity is M11.
+Status: M10 core evidence and routine-index hardening are complete. Cursor parity
+is M11.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -141,7 +142,8 @@ document after change or parse failure.
 
 The owned directory is platform application data, or the exact absolute
 `SESSIONS_DATA_DIR` override. It contains `sessions.sqlite3`, known WAL/SHM
-sidecars, and the exact ephemeral `.scratch` child. The pre-public cache path and
+sidecars, one private bounded writer-clean proof with recognized temporary
+residue, and the exact ephemeral `.scratch` child. The pre-public cache path and
 legacy Harness JSONL cache are never reused, migrated, or deleted.
 
 The current baseline creates canonical text/omitted segments, exact tool identity
@@ -164,8 +166,8 @@ legitimate producer of unrelated orphans would require explicit writer
 maintenance outside the per-session hot path.
 
 One renewable generation lease serializes `index`, `forget`, `repair`, `compact`,
-and `clear`. Every mutation asserts ownership inside its transaction. Expired
-takeover fences stale
+and `clear`. Acquisition makes the new generation dirty. Every mutation asserts
+ownership inside its transaction. Expired takeover fences stale
 writers between transactions and interrupts abandoned active index runs. An
 immediate transaction that has already serialized the writer may renew its
 unchanged exact generation, purpose, and token at entry and exit even if wall
@@ -173,7 +175,18 @@ time crosses expiry, because SQLite prevents a competing takeover while that
 transaction is held. Rollback or process failure discards both the transactional
 renewal and partial work. Unsupported development databases fail closed; no
 pre-release schema cutover or lease carry-forward exists.
-The persisted document digest changed the single schema-1 baseline checksum.
+
+Only a normal index close may atomically seal and release its exact generation
+after proportional document/affected-FTS proof. It then closes and hardens the
+database and publishes a private post-close proof bound to the library,
+generation, schema, and final database stat. A ready, no-sidecar, current-schema
+open with both matching records uses constant-size schema and FTS structure
+checks. Dirty, recovery, migration, maintenance, or failed-cleanup state uses the
+full canonical, foreign-key, and FTS validation/repair path. Missing or rejected
+proof only disables the optimization. Its bounded metadata contains no
+transcript, provider identity, local path, content hash, or lease token.
+
+The clean-writer baseline changed the single schema-1 checksum.
 Earlier development libraries are not migrated or cleared automatically; use a
 fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
 directory, then index again.
@@ -227,10 +240,15 @@ digest; a mismatch is canonical corruption, not FTS damage. List/search read the
 stored digest directly and do not reconstruct every document. None resolve or
 reopen Codex, so retained content remains usable after provider disappearance.
 Query cursors bind the query plus library identity/writer generation. An explicit
-leased index writer can rebuild FTS-only damage from canonical content; doctor
+leased index writer can rebuild FTS-only damage from canonical content. Doctor
 stays read-only and reports canonical integrity, content reachability,
-projection health, and the global capture aggregate separately. Incomplete
-capture evidence produces an `ok: true` warning; failed health remains a failure.
+projection health, and the global capture aggregate separately. Its semantic FTS
+check builds one contentless, memory-only TEMP expected index from canonical
+rows in bounded keyset batches, then compares exact terms, positions, and
+docsize. Incomplete capture evidence produces an `ok: true` warning; failed
+health remains a failure. Direct out-of-band SQLite edits are unsupported; the
+clean fast open does not replace doctor as the explicit immutable full-library
+check.
 
 The public document projection is a field-by-field allowlist. It includes title,
 provider timestamps, lineage coverage and ordered relations, ordered entries,

@@ -190,6 +190,15 @@ earlier development builds are not upgraded or deleted automatically; use a fres
 again. Data-preserving forward migrations become a compatibility promise with the
 first published release.
 
+An index writer marks its lease generation dirty when acquired. A normal close
+can seal only that exact generation and publish a private, bounded post-close
+proof tied to the final database file state. The next clean open uses current
+schema and FTS-structure checks plus proportional verification of changed
+content. Recovery, migration, maintenance, failed cleanup, or missing proof uses
+the full canonical, foreign-key, and FTS validation/repair path. Direct SQLite
+edits outside Sessions are unsupported. `doctor` remains an immutable semantic
+check of canonical and FTS terms and positions.
+
 Codex defaults to `~/.codex`. `CODEX_HOME` selects another Codex home. The state
 database location follows Codex's `sqlite_home` configuration, then
 `CODEX_SQLITE_HOME`, then the Codex home. See the
@@ -202,11 +211,12 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M9 packaged Agent Skill work is complete. M10 capture truth, all-tracked
-reconciliation, and bounded source-change recovery are complete. M10 now moves
-to indexing instrumentation and measured routine-index optimization before M11
-proves Cursor parity. Markdown remains deferred beyond V1; `--format md` is not
-accepted today.
+M9 packaged Agent Skill work and M10 capture/routine-index hardening are
+complete. The clean-open proof reduced a fixed synthetic 2,000-session run to
+2.525 ms writer open / 261.254 ms total, and an authorized read-only real Codex
+120-session run to 14.008 ms / 381.767 ms with zero changed reads and exact
+cohort equality. M11 Cursor parity is next. Markdown remains deferred beyond V1;
+`--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

@@ -362,6 +362,22 @@ Properties:
 - **Single writer:** a renewable generation lease admits one high-level writer. Expiry fences work between transactions; an immediate transaction may renew the unchanged exact generation, purpose, and token at entry and exit because its SQLite write lock prevents takeover. Rollback or process failure discards that renewal and partial work.
 - **Recoverable:** a later writer can recover valid WAL state, interrupt abandoned runs after lease expiry, and reindex idempotently.
 
+Lease acquisition marks the new writer generation dirty. Only a normal index
+close that still owns the exact generation may seal it clean after changed
+documents pass canonical digest and affected-FTS parity checks. Database close
+and file hardening then finish before a private post-close proof is published as
+the final fallible step. The bounded proof binds library, generation, schema,
+and final database stat and contains no transcript, provider identity, path,
+content hash, or lease token.
+
+A ready, no-sidecar, current-schema open with both the clean seal and matching
+proof uses constant-size schema and FTS structure checks. Dirty, recovery,
+migration, maintenance, or failed-cleanup state uses the existing full
+canonical, foreign-key, and FTS validation/repair path. Missing or rejected proof
+only disables the optimization. Direct SQLite edits are unsupported; automatic
+detection of arbitrary same-schema out-of-band changes on every clean open is
+not a contract.
+
 Probe/discovery/read failures are sanitized per-source outcomes and do not
 prevent later selected sources from running. A failed or incomplete source scan
 leaves current source coverage unknown and retained snapshots untouched.
@@ -409,6 +425,11 @@ rows, checkpoints between committed batches, and reports aggregate deleted rows
 and logical UTF-8 bytes. Failure emits no success report; completed batches
 remain durable and a fresh invocation safely restarts. No limit, cursor, partial
 result, or automatic repair policy is public.
+
+Doctor also keeps semantic FTS validation immutable. It loads canonical rows in
+bounded keyset batches into one contentless, memory-only TEMP expected FTS index,
+then compares exact terms, positions, and docsize in both directions. The clean
+writer fast path does not weaken this explicit full-library check.
 
 The application exposes immutable provider-neutral list/search/entries query values and
 one query repository beside canonical reconstruction on each read snapshot.
@@ -471,13 +492,15 @@ Malformed/query-mismatched cursors are usage failures; recreated-library or
 later-generation cursors are stale operational failures. Every admitted writer
 may conservatively stale cursors.
 
-FTS structure and rebuild logic are shared by bootstrap and projection repair. An explicit
-leased index-writer open first distinguishes canonical corruption from FTS-only
-damage, then rebuilds only the projection from canonical content values. Doctor
-remains immutable and reports `rebuild-required`; `data repair-orphans` never
-rebuilds FTS and refuses candidates whose derived row is missing. Show and export
-reconstruct canonical sessions directly rather than routing through search,
-including retained sessions whose latest source state is missing or unknown.
+FTS structure and rebuild logic are shared by bootstrap and projection repair. A
+dirty or recovery-required leased index-writer open first distinguishes canonical
+corruption from FTS-only damage, then rebuilds only the projection from canonical
+content values. A clean proven open performs constant-size structure checks.
+Doctor remains immutable, verifies exact semantic terms/positions, and reports
+`rebuild-required`; `data repair-orphans` never rebuilds FTS and refuses
+candidates whose derived row is missing. Show and export reconstruct canonical
+sessions directly rather than routing through search, including retained
+sessions whose latest source state is missing or unknown.
 
 A missing, malformed, unknown-scheme, or mismatching public-document digest is
 canonical corruption. It fails full document reads and the semantic health walk;
@@ -488,7 +511,8 @@ write failure rolls both back to the last-good pair.
 Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
 earlier development builds are unsupported and fail closed without migration or
 deletion; users can select a fresh Sessions data directory and index again.
-The persisted document digest changes that schema-1 baseline checksum. Current
+The clean-writer state and persisted document digest define that schema-1
+baseline checksum. Current
 `data clear` does not claim an incompatible earlier database; the pre-launch
 reset is a fresh `SESSIONS_DATA_DIR` or manual removal of only the exact obsolete
 Sessions-owned directory followed by reindexing.
@@ -929,9 +953,8 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 5 are implemented; M10
-core evidence hardening is in progress, with capture truth complete and bounded
-recovery plus measured indexing work remaining. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 6 are implemented; M11
+Cursor parity is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex; M10 settles capture truth, bounded recovery, and
@@ -979,7 +1002,7 @@ The packaged skill scaffold, seven evidence-first references, deterministic
 metadata/layout contracts, representative forward-evaluation cases, and package
 smoke ownership are complete.
 
-### Phase 6 — Core evidence hardening
+### Phase 6 — Core evidence hardening (complete)
 
 All-tracked complete-scan reconciliation, honest aggregate capture scope, and
 bounded fresh-candidate recovery after `source-changed` are implemented.
@@ -988,21 +1011,22 @@ fixed synthetic stable run attributed 282.069 of 532.902 ms to writer open; the
 authorized real Codex 120-session stable run attributed 3,177.450 of 3,553.177
 ms to writer open, with discovery at 354.958 ms and all freshness plus unchanged
 writes at 14.935 ms. Exact selected observations/rollout bytes, complete reports,
-zero changed reads, and library health passed. These local values select
-writer-open validation as the next optimization owner; they are not public
+zero changed reads, and library health passed. These local values selected
+writer-open validation as the optimization owner; they are not public
 performance guarantees.
 Preserve exact canonical/query behavior and keep interpretation in the Agent Skill.
 
-#### Planned writer-open fast path
+#### Current writer-open fast path
 
-M10 will bind a durable clean/dirty integrity state to the existing writer-lease
+M10 binds a durable clean/dirty integrity state to the existing writer-lease
 generation. A normally closed library has no owner and records its current
 generation plus SQLite schema cookie as clean. Lease acquisition increments the
 generation in the same immediate transaction but leaves the clean generation
 behind, making the new owner durably dirty before it can mutate state. Normal
 close atomically interrupts any active run, records the owned generation and
-current schema cookie as clean, and releases the exact lease. A stale owner can
-never clean a newer generation.
+current schema cookie as clean, and releases the exact lease. It then closes and
+hardens the database and publishes a private, stat-bound post-close proof last.
+A stale owner can never clean a newer generation.
 
 A clean fast open is allowed only when the prior generation was cleanly released,
 the schema cookie and current baseline agree, no migration ran or is pending, no
@@ -1018,7 +1042,8 @@ session and verify affected FTS rows inside its transaction. Tracking and run
 writes retain exact affected-row assertions. Forget, orphan repair, and
 compaction may conservatively leave the library dirty until they prove equivalent
 local postconditions. `doctor` remains the explicit read-only full-library
-integrity check.
+integrity check and compares canonical-derived exact terms, positions, and
+docsize through a memory-only TEMP expected FTS index.
 
 This accepts one tradeoff: direct modification of the permission-hardened
 Sessions SQLite database is unsupported. A clean marker cannot detect every
@@ -1032,9 +1057,11 @@ CLI, application, adapter, query, JSON/JSONL, or provider behavior. Because the
 project is pre-launch, it replaces the single current baseline and checksum with
 no compatibility migration; older development libraries fail closed and require
 a fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
-reindexing. On the same fixed real 120-session cohort, clean writer open must be
-at most 800 ms and stable total time at most 1.25 seconds. Dirty/recovery opens
-have no speed budget; correctness remains their only gate.
+reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.525
+ms writer open / 261.254 ms total. The authorized read-only real Codex
+120-session exact-cohort proof measured 14.008 ms / 381.767 ms with zero changed
+reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
+correctness remains their only gate.
 
 ### Phase 7 — Equivalent second adapter
 
