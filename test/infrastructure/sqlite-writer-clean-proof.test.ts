@@ -16,6 +16,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import {
   clearWriterCleanProofFiles,
+  consumeWriterCleanProof,
   publishWriterCleanProof,
   readWriterCleanProof,
   removeWriterCleanProofTemporaryFiles,
@@ -42,6 +43,27 @@ afterEach(async () => {
 });
 
 describe("SQLite writer clean proof", () => {
+  test("consumes a selected proof before returning its retained claim", async () => {
+    const database = await fixtureDatabase();
+    await publishWriterCleanProof(database, firstClaim);
+
+    await expect(consumeWriterCleanProof(database)).resolves.toMatchObject(firstClaim);
+    await expect(readWriterCleanProof(database)).resolves.toBeUndefined();
+  });
+
+  test("does not move an invalid proof into recognized temporary residue", async () => {
+    const database = await fixtureDatabase();
+    const paths = writerCleanProofPaths(database);
+    await writeFile(paths.proof, "not a valid proof", { mode: 0o600 });
+
+    await expect(consumeWriterCleanProof(database)).resolves.toBeUndefined();
+    await expect(readFile(paths.proof, "utf8")).resolves.toBe("not a valid proof");
+    expect(await readdir(path.dirname(database))).toEqual([
+      path.basename(database),
+      path.basename(paths.proof),
+    ]);
+  });
+
   test("publishes a bounded private proof and replaces it atomically", async () => {
     const database = await fixtureDatabase();
     const paths = writerCleanProofPaths(database);

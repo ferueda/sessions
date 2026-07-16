@@ -68,8 +68,8 @@ import {
   type WriterLeaseScheduler,
 } from "./writer-lease.ts";
 import {
+  consumeWriterCleanProof,
   publishWriterCleanProof,
-  readWriterCleanProof,
   removeWriterCleanProofTemporaryFiles,
 } from "./writer-clean-proof.ts";
 import {
@@ -167,8 +167,8 @@ export function createSqliteIndexLifecycle(
     },
 
     async openWriter(paths) {
-      const fts5Security = fts5Probe();
       await refuseSidecarOnlyWriterState(paths, platform, supportedSchemaVersion);
+      const preCreateFts5Security = (await fileIsAbsent(paths.database)) ? fts5Probe() : undefined;
       let databaseCreated = false;
       try {
         databaseCreated = (await prepareIndexPathsForWriter(paths, { platform })).databaseCreated;
@@ -186,6 +186,9 @@ export function createSqliteIndexLifecycle(
         throw error;
       }
 
+      const selectedCleanProof = databaseCreated
+        ? undefined
+        : await consumeWriterCleanProof(paths.database, { platform });
       await removeWriterCleanProofTemporaryFiles(paths.database, { platform });
 
       const state = await inspectSqliteIndex(paths, {
@@ -200,10 +203,8 @@ export function createSqliteIndexLifecycle(
       ) {
         throw new SqliteIndexLifecycleError(state);
       }
-      const cleanProof =
-        state.status === "ready" && !databaseCreated
-          ? await readWriterCleanProof(paths.database, { platform })
-          : undefined;
+      const cleanProof = state.status === "ready" ? selectedCleanProof : undefined;
+      const fts5Security = preCreateFts5Security ?? fts5Probe();
 
       const database = await openWriterWithFailureCleanup(paths, busyTimeoutMs, platform);
       let heartbeat: WriterLeaseHeartbeat | undefined;
@@ -458,6 +459,15 @@ async function inspectSqliteIndex(
   }
 
   return inspectedState;
+}
+
+async function fileIsAbsent(file: string): Promise<boolean> {
+  try {
+    await lstat(file);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
 }
 
 function openImmutableDatabase(file: string): DatabaseSync {

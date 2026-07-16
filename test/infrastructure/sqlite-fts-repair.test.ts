@@ -1,14 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
 import {
@@ -127,11 +128,136 @@ describe("SQLite FTS projection repair", () => {
       ).toEqual({ count: 1 });
     });
     const canonicalBefore = readCanonicalRows(paths.database);
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
 
     const writer = await createSqliteIndexLifecycle().openWriter(paths);
     await writer.close();
 
     expect(readCanonicalRows(paths.database)).toEqual(canonicalBefore);
+    const database = openImmutable(paths.database);
+    try {
+      expect(ftsMatchCount(database, "alpha")).toBe(1);
+      expect(ftsMatchCount(database, "beta")).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("uses the full repair path after conservative maintenance", async () => {
+    const paths = await initializedPaths();
+    const priorProof = await readWriterCleanProof(paths.database);
+    expect(priorProof).toBeDefined();
+    if (priorProof === undefined) throw new Error("Expected the initial clean proof");
+
+    await expect(createSqliteIndexMaintenance().compact(paths)).resolves.toMatchObject({
+      outcome: "unchanged",
+    });
+    const afterMaintenance = openImmutable(paths.database);
+    try {
+      expect(afterMaintenance.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: priorProof.writerGeneration + 1,
+        clean_generation: priorProof.writerGeneration,
+        purpose: null,
+      });
+    } finally {
+      afterMaintenance.close();
+    }
+
+    const text = "canonical maintenance alpha";
+    const contentHash = hashContent(text);
+    mutateDatabase(paths.database, (database) => {
+      const contentId = insertContent(database, contentHash.digest, text);
+      poisonFtsTerms(database, contentId, text, "poison maintenance beta");
+    });
+    await publishWriterCleanProof(paths.database, {
+      libraryInstanceId: priorProof.libraryInstanceId,
+      writerGeneration: priorProof.writerGeneration,
+      schemaVersion: priorProof.schemaVersion,
+      schemaCookie: priorProof.schemaCookie,
+    });
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: priorProof.writerGeneration,
+    });
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths);
+    await writer.close();
+
+    expect(readFtsMatchCount(paths.database, "alpha")).toBe(1);
+    expect(readFtsMatchCount(paths.database, "beta")).toBe(0);
+  });
+
+  test("uses the full repair path when WAL recovery state accompanies a clean proof", async () => {
+    const paths = await initializedPaths();
+    const external = new DatabaseSync(paths.database);
+    try {
+      external.exec("PRAGMA wal_autocheckpoint = 0");
+      const text = "canonical recovery alpha";
+      const contentHash = hashContent(text);
+      const contentId = insertContent(external, contentHash.digest, text);
+      poisonFtsTerms(external, contentId, text, "poison recovery beta");
+
+      await expect(lstat(paths.wal)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(lstat(paths.shm)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(readWriterCleanProof(paths.database)).resolves.toBeDefined();
+
+      const writer = await createSqliteIndexLifecycle().openWriter(paths);
+      expect(ftsMatchCount(writer.database, "alpha")).toBe(1);
+      expect(ftsMatchCount(writer.database, "beta")).toBe(0);
+      external.close();
+      await writer.close();
+    } finally {
+      if (external.isOpen) external.close();
+    }
+  });
+
+  test("falls back to same-open repair when the fast structure probe throws", async () => {
+    const paths = await initializedPaths();
+    const cleanProof = await readWriterCleanProof(paths.database);
+    expect(cleanProof).toBeDefined();
+    if (cleanProof === undefined) throw new Error("Expected the initial clean proof");
+
+    const text = "canonical alpha";
+    const contentHash = hashContent(text);
+    mutateDatabase(paths.database, (database) => {
+      const contentId = insertContent(database, contentHash.digest, text);
+      database
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(contentId, text);
+      database
+        .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+        .run(contentId, "poison beta");
+    });
+    await publishWriterCleanProof(paths.database, {
+      libraryInstanceId: cleanProof.libraryInstanceId,
+      writerGeneration: cleanProof.writerGeneration,
+      schemaVersion: cleanProof.schemaVersion,
+      schemaCookie: cleanProof.schemaCookie,
+    });
+
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    let probeFailed = false;
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ) {
+      if (!probeFailed && sql === "SELECT 1 FROM sessions_content_fts_data LIMIT 1") {
+        probeFailed = true;
+        throw new Error("synthetic FTS shadow inspection failure");
+      }
+      return originalPrepare.call(this, sql);
+    });
+
+    try {
+      const writer = await createSqliteIndexLifecycle().openWriter(paths);
+      await writer.close();
+    } finally {
+      prepareSpy.mockRestore();
+    }
+    expect(probeFailed).toBe(true);
+
     const database = openImmutable(paths.database);
     try {
       expect(ftsMatchCount(database, "alpha")).toBe(1);
@@ -355,6 +481,23 @@ function expectCanonicalDuplicateGuard(file: string, digest: string, text: strin
   } finally {
     database.close();
   }
+}
+
+function poisonFtsTerms(
+  database: DatabaseSync,
+  contentId: number | bigint,
+  canonicalText: string,
+  poisonText: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+       VALUES ('delete', ?, ?)`,
+    )
+    .run(contentId, canonicalText);
+  database
+    .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+    .run(contentId, poisonText);
 }
 
 function openImmutable(file: string): DatabaseSync {

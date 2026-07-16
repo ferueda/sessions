@@ -131,6 +131,14 @@ export function repairFtsProjection(
 }
 
 export function ftsProjectionStructureIsValid(database: DatabaseSync): boolean {
+  try {
+    return inspectFtsProjectionStructure(database);
+  } catch {
+    return false;
+  }
+}
+
+function inspectFtsProjectionStructure(database: DatabaseSync): boolean {
   const rows = database
     .prepare(
       `SELECT name, type, sql

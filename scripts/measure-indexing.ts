@@ -105,15 +105,21 @@ async function main(): Promise<void> {
     const timedPaths = pathsAt(path.join(temporaryRoot, "timed"));
     const seedLifecycle = lifecycleAt(SEED_AT);
     const seedSource = createMeasurementSource(corpus, true);
+    const seedCollector = createIndexTimingCollector();
 
-    const seedReport = await runIndex({
-      paths: seedPaths,
-      sources: [seedSource.selected],
-      lifecycle: seedLifecycle,
-      clock: fixedClock(SEED_AT),
-    });
+    const seedReport = await timeIndexOperation(seedCollector.recorder, "total", () =>
+      runIndex({
+        paths: seedPaths,
+        sources: [seedSource.selected],
+        lifecycle: seedLifecycle,
+        clock: fixedClock(SEED_AT),
+        timing: seedCollector.recorder,
+      }),
+    );
+    const seedTiming = seedCollector.snapshot();
     assertStableCounts(seedReport, 0, CORPUS_SESSIONS);
     assert.equal(seedSource.readCount(), CORPUS_SESSIONS, "seed run did not read each session");
+    assertSeedTimingOwnership(seedTiming);
     await assertCleanDatabase(seedPaths);
 
     await cloneDatabase(seedPaths, controlPaths);
@@ -147,7 +153,7 @@ async function main(): Promise<void> {
     assertRepresentativeQueries(control.queries);
     assertTimingOwnership(timing);
 
-    report = createOutput(timing);
+    report = createOutput(seedTiming, timing);
   } catch (error) {
     failure = error;
   } finally {
@@ -519,6 +525,27 @@ function assertTimingOwnership(snapshot: IndexTimingSnapshot): void {
   assert(snapshot.phases.total.elapsedMs > 0, "total timing did not advance");
 }
 
+function assertSeedTimingOwnership(snapshot: IndexTimingSnapshot): void {
+  const calls = Object.fromEntries(
+    Object.entries(snapshot.phases).map(([phase, aggregate]) => [phase, aggregate.calls]),
+  );
+  assert.deepStrictEqual(calls, {
+    sourceResolution: 0,
+    writerOpen: 1,
+    sourceProbe: 1,
+    sourceDiscovery: 1,
+    freshnessRead: CORPUS_SESSIONS,
+    unchangedWrite: 0,
+    changedReadAndNormalize: CORPUS_SESSIONS,
+    replacement: CORPUS_SESSIONS,
+    reconciliation: 1,
+    runBookkeeping: 2,
+    writerClose: 1,
+    total: 1,
+  });
+  assert(snapshot.phases.total.elapsedMs > 0, "seed total timing did not advance");
+}
+
 function readSemanticState(paths: IndexPaths): SemanticState {
   const database = openImmutableDatabase(paths.database);
   try {
@@ -650,7 +677,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function createOutput(timing: IndexTimingSnapshot) {
+function createOutput(seedTiming: IndexTimingSnapshot, timing: IndexTimingSnapshot) {
   return {
     corpus: {
       sessions: CORPUS_SESSIONS,
@@ -669,6 +696,7 @@ function createOutput(timing: IndexTimingSnapshot) {
       stableTransition: true,
       zeroStableSourceReads: true,
     },
+    seedTimings: seedTiming.phases,
     timings: timing.phases,
   };
 }

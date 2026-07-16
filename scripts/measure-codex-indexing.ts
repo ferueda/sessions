@@ -151,16 +151,24 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
   const lifecycle = createSqliteIndexLifecycle({ platform });
   const clock = Object.freeze({ now: () => new Date() });
 
+  const seedTimings = createIndexTimingCollector();
   let seedCohort: SelectedCohort | undefined;
-  const seedSource = limitDiscovery(await createCodexSource(environment), codexPaths, (cohort) => {
-    seedCohort = cohort;
-  });
   const seed = await runStage("seed-index", () =>
-    runIndex({
-      paths: indexPaths,
-      sources: [seedSource],
-      lifecycle,
-      clock,
+    timeIndexOperation(seedTimings.recorder, "total", async () => {
+      const selected = await timeIndexOperation(seedTimings.recorder, "sourceResolution", () =>
+        createCodexSource(environment),
+      );
+      return runIndex({
+        paths: indexPaths,
+        sources: [
+          limitDiscovery(selected, codexPaths, (cohort) => {
+            seedCohort = cohort;
+          }),
+        ],
+        lifecycle,
+        clock,
+        timing: seedTimings.recorder,
+      });
     }),
   );
   const seedClean = await writerCleanStateIsValid(indexPaths.database, platform);
@@ -227,6 +235,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     requireCondition(health.ok && health.writerLease === "free");
   });
 
+  const seedTimingSnapshot = seedTimings.snapshot();
   const timingSnapshot = timings.snapshot();
   await runStage("timing-admission", async () =>
     requireCondition(
@@ -253,6 +262,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     stableCounts: stable.counts,
     libraryHealthy: true,
     writerIntegrityState: true,
+    seedTimings: seedTimingSnapshot.phases,
     timings: timingSnapshot.phases,
   });
 }

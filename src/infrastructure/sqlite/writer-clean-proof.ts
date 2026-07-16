@@ -92,21 +92,37 @@ export async function readWriterCleanProof(
 ): Promise<WriterCleanProof | undefined> {
   const platform = options.platform ?? process.platform;
   const paths = writerCleanProofPaths(databasePath);
+  return readProofBoundToDatabase(databasePath, paths.proof, platform);
+}
+
+/**
+ * Atomically removes the current proof from its eligible path before returning
+ * its claim. A later setup failure therefore cannot reuse the selected proof.
+ */
+export async function consumeWriterCleanProof(
+  databasePath: string,
+  options: Pick<WriterCleanProofOptions, "platform"> = {},
+): Promise<WriterCleanProof | undefined> {
+  const platform = options.platform ?? process.platform;
+  const paths = writerCleanProofPaths(databasePath);
+  const selected = await readProofBoundToDatabase(databasePath, paths.proof, platform);
+  if (selected === undefined) return undefined;
+  const consumed = `${paths.temporaryPrefix}${randomBytes(16).toString("hex")}`;
+
   try {
-    const databaseBefore = await snapshotPrivateDatabase(databasePath, platform);
-    const proof = await readPrivateProof(paths.proof, platform);
-    if (proof === undefined) return undefined;
-    const databaseAfter = await snapshotPrivateDatabase(databasePath, platform);
-    if (
-      !sameFileSnapshot(databaseBefore, databaseAfter) ||
-      !samePublicDatabaseStat(proof.databaseStat, databaseAfter.publicStat)
-    ) {
-      return undefined;
-    }
-    return proof;
-  } catch {
-    return undefined;
+    await rename(paths.proof, consumed);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return undefined;
+    throw new WriterCleanProofError("cleanup-failed", { cause: error });
   }
+
+  const proof = await readProofBoundToDatabase(databasePath, consumed, platform);
+  try {
+    await removePrivateFile(consumed, platform, unlink);
+  } catch (error) {
+    throw new WriterCleanProofError("cleanup-failed", { cause: error });
+  }
+  return proof !== undefined && sameWriterCleanProof(selected, proof) ? proof : undefined;
 }
 
 /**
@@ -242,6 +258,36 @@ interface PrivateFileSnapshot {
 
 interface PrivateDatabaseSnapshot extends PrivateFileSnapshot {
   readonly publicStat: WriterCleanProofDatabaseStat;
+}
+
+async function readProofBoundToDatabase(
+  databasePath: string,
+  proofPath: string,
+  platform: NodeJS.Platform,
+): Promise<WriterCleanProof | undefined> {
+  try {
+    const databaseBefore = await snapshotPrivateDatabase(databasePath, platform);
+    const proof = await readPrivateProof(proofPath, platform);
+    if (proof === undefined) return undefined;
+    const databaseAfter = await snapshotPrivateDatabase(databasePath, platform);
+    if (
+      !sameFileSnapshot(databaseBefore, databaseAfter) ||
+      !samePublicDatabaseStat(proof.databaseStat, databaseAfter.publicStat)
+    ) {
+      return undefined;
+    }
+    return proof;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameWriterCleanProof(left: WriterCleanProof, right: WriterCleanProof): boolean {
+  return (
+    left.version === right.version &&
+    writerCleanProofMatchesClaim(left, right) &&
+    samePublicDatabaseStat(left.databaseStat, right.databaseStat)
+  );
 }
 
 async function snapshotPrivateDatabase(
