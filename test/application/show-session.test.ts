@@ -61,6 +61,54 @@ describe("showSession", () => {
     });
   });
 
+  test("selects both inclusive range endpoints from the complete retained document", async () => {
+    const indexed = sessionWithEntries(8);
+    const lifecycle = lifecycleWith(indexed);
+
+    const result = await showSession({
+      paths,
+      lifecycle,
+      identity,
+      fromEntry: 2,
+      toEntry: 5,
+    });
+
+    expect(result.entries.map(({ ordinal }) => ordinal)).toEqual([2, 3, 4, 5]);
+    expect(result.snapshot.selection).toMatchObject({
+      mode: "bounded",
+      entries: {
+        selected: 4,
+        total: 8,
+        truncated: true,
+        firstOrdinal: 2,
+        lastOrdinal: 5,
+      },
+    });
+    expect(result.snapshot.documentDigest).toEqual(indexed.summary.documentDigest);
+    const reader = await lifecycle.openReader.mock.results[0]!.value;
+    expect(reader.sessions.getSession).toHaveBeenCalledOnce();
+    expect(reader.close).toHaveBeenCalledOnce();
+  });
+
+  test("supports the 200-entry range boundary", async () => {
+    const lifecycle = lifecycleWith(sessionWithEntries(201));
+
+    const result = await showSession({
+      paths,
+      lifecycle,
+      identity,
+      fromEntry: 1,
+      toEntry: 200,
+    });
+
+    expect(result.entries).toHaveLength(200);
+    expect(result.snapshot.selection.entries).toMatchObject({
+      selected: 200,
+      firstOrdinal: 1,
+      lastOrdinal: 200,
+    });
+  });
+
   test("treats uninitialized and absent sessions as the same not-found failure", async () => {
     const uninitialized = lifecycleWith(undefined, "uninitialized");
     const absent = lifecycleWith(undefined);
@@ -80,6 +128,47 @@ describe("showSession", () => {
       TypeError,
     );
     expect(lifecycle.inspect).not.toHaveBeenCalled();
+  });
+
+  test.each([{ entry: 1 }, { context: 1 }, { entry: 1, context: 1 }])(
+    "rejects a focused selection plus a range before inspection: %j",
+    async (focus) => {
+      const lifecycle = lifecycleWith(sessionWithEntries(3));
+
+      await expect(
+        showSession({ paths, lifecycle, identity, fromEntry: 0, toEntry: 1, ...focus }),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(lifecycle.inspect).not.toHaveBeenCalled();
+    },
+  );
+
+  test("rejects an incomplete range before inspection", async () => {
+    const lifecycle = lifecycleWith(sessionWithEntries(3));
+
+    await expect(showSession({ paths, lifecycle, identity, fromEntry: 0 })).rejects.toBeInstanceOf(
+      TypeError,
+    );
+    expect(lifecycle.inspect).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { count: 0, fromEntry: 0, toEntry: 0 },
+    { count: 3, fromEntry: 1, toEntry: 3 },
+  ])("fails an out-of-document range after one immutable read: %j", async (input) => {
+    const lifecycle = lifecycleWith(sessionWithEntries(input.count));
+
+    await expect(
+      showSession({
+        paths,
+        lifecycle,
+        identity,
+        fromEntry: input.fromEntry,
+        toEntry: input.toEntry,
+      }),
+    ).rejects.toMatchObject({ code: "entry-not-found" });
+    const reader = await lifecycle.openReader.mock.results[0]!.value;
+    expect(reader.sessions.getSession).toHaveBeenCalledOnce();
+    expect(reader.close).toHaveBeenCalledOnce();
   });
 });
 
