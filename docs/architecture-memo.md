@@ -328,6 +328,14 @@ sequence:
 9. Only after a complete scan for that exact source instance, mark previously captured but unseen sessions missing while retaining their canonical snapshots.
 10. Finalize provider-neutral counts and bounded ordered diagnostics from durable repository state.
 
+M10 extends that implemented sequence without moving policy into adapters. A
+first-attempt `source-changed` outcome is held until at most one fresh complete
+rediscovery retries only the affected original identities. The primary discovery
+remains the sole coverage and missing-reconciliation snapshot. Complete
+reconciliation expands from canonical identities to every tracked identity, so a
+failed first capture may honestly become `unindexed + missing` without losing its
+failure evidence or manufacturing a document.
+
 Properties:
 
 - **Incremental:** unchanged complete inputs are skipped.
@@ -336,11 +344,30 @@ Properties:
 - **Durable latest snapshot:** the latest successful normalized document remains available until explicit Sessions deletion.
 - **Last-good preservation:** failed reads leave the prior canonical snapshot available and report staleness.
 - **Adapter-version aware:** parser corrections trigger controlled re-normalization.
-- **Non-destructive reconciliation:** a complete scan can mark a retained session missing but never delete it; malformed, conflicting, wrong-source, unavailable, unreadable, or incomplete discovery proves no absence.
+- **Non-destructive reconciliation:** a complete scan can mark any tracked
+  identity missing but never deletes its canonical snapshot or unindexed failure
+  evidence; malformed, conflicting, wrong-source, unavailable, unreadable, or
+  incomplete discovery proves no absence.
 - **Single writer:** a renewable generation lease admits one high-level writer. Expiry fences work between transactions; an immediate transaction may renew the unchanged exact generation, purpose, and token at entry and exit because its SQLite write lock prevents takeover. Rollback or process failure discards that renewal and partial work.
 - **Recoverable:** a later writer can recover valid WAL state, interrupt abandoned runs after lease expiry, and reindex idempotently.
 
-Probe/discovery/read failures are sanitized per-source outcomes and do not prevent later selected sources from running. A failed or incomplete source scan leaves current source coverage unknown and retained snapshots untouched. Repository, lease, or finalization failures abort the invocation because persistence trust is lost. Sources run sequentially; V1 adds no daemon, parallel indexing, or retries. Indexing and the two potentially long data-maintenance commands write only an interactive startup notice that they may take a couple of minutes; they expose no semantic work-count or continuation-progress contract.
+Probe/discovery/read failures are sanitized per-source outcomes and do not
+prevent later selected sources from running. A failed or incomplete source scan
+leaves current source coverage unknown and retained snapshots untouched.
+Repository, lease, or finalization failures abort the invocation because
+persistence trust is lost. Sources run sequentially; V1 adds no daemon or
+parallel indexing. M10 adds only the bounded fresh-candidate retry above, with no
+sleep/backoff loop. Indexing and the two potentially long data-maintenance
+commands write only an interactive startup notice that they may take a couple of
+minutes; they expose no semantic work-count or continuation-progress contract.
+
+M10 also makes list, search, and entries self-describing about capture scope. One
+page-level aggregate reports tracked, retained-current, retained-stale,
+unindexed, source-state, coverage, and latest-read-failure counts. It identifies
+which source/tracking filters it can evaluate and never treats missing canonical
+metadata or text as a match or non-match. Doctor exposes the same global facts as
+an evidence warning; unindexed or unknown coverage is not by itself canonical
+corruption.
 
 ## Storage and search
 
@@ -872,10 +899,11 @@ Do not transplant:
 ## Roadmap
 
 The phase scopes below remain accepted. Phases 0 through 5 are implemented; M10
-Cursor parity is next. Codex is the first vertical slice because
+core evidence hardening is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
-workflow complete over Codex before Cursor becomes the second-adapter proof. The
+workflow complete over Codex; M10 settles capture truth, bounded recovery, and
+routine indexing cost before Cursor becomes the second-adapter proof. The
 [V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
 supersedes the earlier phase ordering and refines it into dependency-ordered,
 independently reviewable milestones with explicit exit gates.
@@ -919,13 +947,21 @@ The packaged skill scaffold, seven evidence-first references, deterministic
 metadata/layout contracts, representative forward-evaluation cases, and package
 smoke ownership are complete.
 
-### Phase 6 — Equivalent second adapter
+### Phase 6 — Core evidence hardening
+
+Reconcile every tracked identity after complete discovery, expose honest
+aggregate capture scope, retry `source-changed` once from a fresh candidate, and
+instrument routine indexing before optimizing its measured dominant phase.
+Preserve exact canonical/query behavior and keep interpretation in the Agent
+Skill.
+
+### Phase 7 — Equivalent second adapter
 
 Port Cursor discovery and transcript normalization through the same port. Prove
 no changes are required in domain, storage, indexing, query, export, or CLI
 behavior.
 
-### Phase 7 — Public release and parity
+### Phase 8 — Public release and parity
 
 Confirm npm scope ownership, configure trusted publisher/environment, add release-please/publish automation, run multi-OS install tests, document migration, establish parity, and switch Harness to a pinned one-way integration.
 
@@ -934,10 +970,15 @@ Confirm npm scope ownership, configure trusted publisher/environment, add releas
 - Cursor and Codex provide equivalent index/list/search/show/export semantics.
 - Adding a third source adapter requires no domain, storage, indexing, or query edits.
 - Indexing is incremental, idempotent, transactional, and preserves last-good documents on failure.
+- Complete discovery reconciles retained and unindexed tracking state; one
+  bounded fresh-candidate retry can recover `source-changed` without changing
+  the primary coverage snapshot or double-counting a session.
 - Explicit indexing durably retains the latest successful normalized snapshot;
   complete-scan absence changes source state without deleting it.
 - Search/show/export operate only on canonical library data, including retained
   sessions whose provider source is missing or currently unknown.
+- List/search/entries disclose aggregate capture scope and cannot present an
+  unindexed session as a canonical metadata or transcript match/non-match.
 - Rebuilding derived search state preserves canonical data; only explicit
   forget, orphan repair, or data-clear behavior deletes it.
 - Provenance and deduplication prevent copied/injected/delegated content from being reported as independent repeated user intent.
@@ -946,6 +987,9 @@ Confirm npm scope ownership, configure trusted publisher/environment, add releas
   missing events.
 - Provider histories are never mutated, and ordinary operation performs no network access or telemetry.
 - JSON/JSONL schemas are versioned and contract-tested.
+- Routine indexing has privacy-safe phase evidence and a measured stable-run
+  budget; performance changes preserve canonical digests, exact query output,
+  counts, lineage, cursors, failures, and provider-read-only behavior.
 - Portable exports preserve ordered canonical evidence and omissions, exclude
   private diagnostic metadata, frame historical content as untrusted, and never
   deliver it to a destination provider.
@@ -956,6 +1000,20 @@ Confirm npm scope ownership, configure trusted publisher/environment, add releas
   auto-mutation claims.
 
 ## Deferred directions
+
+The preferred evidence-first core direction after V1 is provider-neutral
+related-session traversal, literal metadata discovery, explicit multi-session
+JSON/JSONL bundles with reproducibility manifests, exact named-unit facets,
+deterministic comparison/timelines, machine-readable capabilities, and a
+canonical archive whose import/restore contract is designed separately. These
+features retrieve, group, count, and package facts; the Agent Skill still owns
+relevance, causality, success/failure, drift, and recommendations.
+
+Tokenizer phrase search, smaller search/entries title bounds, and exact locator
+string interning are nearer candidates but remain evidence-gated. Phrase means
+adjacent tokenizer terms rather than byte-exact containment; title changes must
+show representative encoded-output savings; locator interning must show material
+size reduction without provider assumptions or orphaned private metadata.
 
 After V1 evidence: semantic search, an external plugin ABI, cloud/team indexes,
 native binaries, Homebrew, TUI/watch mode, orchestration integrations, opt-in

@@ -9,5 +9,6 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. M9 is complete; M10 proves Cursor
-equivalence next. Markdown presentation remains deferred beyond V1.
+There are no active executor plans. M9 is complete; M10 hardens capture scope,
+source-change recovery, and routine indexing before M11 proves Cursor
+equivalence. Markdown presentation remains deferred beyond V1.
