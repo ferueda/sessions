@@ -158,7 +158,7 @@ async function relativeFiles(directory: string): Promise<string[]> {
     entries.map(async (entry): Promise<string[]> => {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        return (await relativeFiles(entryPath)).map((file) => path.join(entry.name, file));
+        return (await relativeFiles(entryPath)).map((file) => path.posix.join(entry.name, file));
       }
       return entry.isFile() ? [entry.name] : [];
     }),
