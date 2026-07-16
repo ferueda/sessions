@@ -87,6 +87,13 @@ paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
 clock, collection, and stderr failures are best-effort and cannot replace the
 underlying command result.
 
+The accepted baseline selected writer open as the next owner. A fixed synthetic
+2,000-session stable run spent 282.069 of 532.902 ms there. An authorized real
+Codex 120-session stable run spent 3,177.450 of 3,553.177 ms there, while all
+freshness reads and unchanged writes used 14.935 ms. Exact semantic and selected
+provider-evidence checks passed. These local measurements guide architecture;
+they are not release budgets or public guarantees.
+
 ## Code and proofs
 
 - Flow: `src/application/run-index.ts`,

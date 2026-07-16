@@ -169,11 +169,14 @@ resolution elsewhere. It uses the production Codex adapter, exhausts its full
 discovery generation, indexes only a fixed 120-candidate cohort into a mode-0700
 temporary Sessions library, and uses no credentials. The result is discarded
 unless the second run is fully unchanged with complete coverage, zero reads or
-other outcomes, and byte-identical provider state/rollout trees. Output is
-aggregate-only. The exact temporary root is removed in `finally` and INT/TERM
-cleanup; an uncatchable process or machine failure can leave sensitive temporary
-Sessions data. Run it only with explicit live-data authority and outside routine
-gates.
+other outcomes, the complete selected observations agree, and every selected
+rollout is byte-identical at seed discovery, stable discovery, and final
+verification. State database/WAL safety comes from the production adapter's
+no-follow hash-copy-verify snapshot; unrelated Codex activity is allowed between
+runs. Output is aggregate-only. The exact temporary root is removed in `finally`
+and INT/TERM cleanup; an uncatchable process or machine failure can leave
+sensitive temporary Sessions data. Run it only with explicit live-data authority
+and outside routine gates.
 
 ## Verification
 

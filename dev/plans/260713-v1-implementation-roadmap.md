@@ -26,7 +26,8 @@ plan and independently reviewable pull request before work starts. The accepted
 
 Milestones 0 through 9 are complete. M10 core evidence hardening is underway:
 capture truth, all-tracked reconciliation, and bounded source-change retry are
-implemented. Instrumentation and measured optimization follow.
+implemented. Routine indexing instrumentation and its correctness baseline are
+implemented; the measured writer-open optimization follows.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -84,10 +85,10 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have indexing instrumentation or measured unchanged-run
-optimization, the Cursor adapter, release automation, or pinned Harness
-integration. Instrumentation and measured optimization complete M10 before M11
-proves the same provider-neutral surface through a second passive adapter.
+It does not yet have the measured unchanged-run optimization, the Cursor adapter,
+release automation, or pinned Harness integration. The writer-open optimization
+completes M10 before M11 proves the same provider-neutral surface through a
+second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -136,9 +137,9 @@ The same comparison measured an almost entirely unchanged real library taking
 nearly two minutes to index. The code avoids transcript reads for unchanged
 candidates, but still performs discovery, per-candidate freshness reads and
 immediate tracking transactions, writer-open validation/FTS inspection, and
-final reconciliation. The dominant phase is not yet known, so M10 instruments
-the complete path before selecting an optimization. Synthetic millisecond query
-benchmarks remain algorithm checks, not proof of real-library latency.
+final reconciliation. M10 therefore instrumented the complete path before
+selecting an optimization. Synthetic millisecond query benchmarks remain
+algorithm checks, not proof of real-library latency.
 
 Other observations do not overturn the architecture:
 
@@ -168,6 +169,17 @@ Accepted M10 direction:
   primary discovery as the sole coverage and missing-reconciliation snapshot;
 - add opt-in, privacy-safe phase timings, then optimize only the measured stable
   indexing bottleneck while preserving exact results and lifecycle behavior.
+
+The implementation baseline identified that bottleneck. A deterministic
+2,000-session stable run took 532.902 ms: writer open 282.069 ms, unchanged
+writes 174.950 ms, freshness reads 40.271 ms, and close 21.884 ms. The authorized
+real Codex check indexed a fixed 120-session disposable cohort, then measured a
+fully unchanged 3,553.177 ms run: writer open 3,177.450 ms, discovery 354.958 ms,
+freshness reads 3.072 ms, unchanged writes 11.863 ms, and close 3.542 ms. Exact
+control/timed semantics, selected observations and rollout bytes, library health,
+and zero changed reads all passed. These machine-local values are design
+evidence, not public guarantees. Writer-open validation is the next target;
+per-candidate batching is not justified by this real baseline.
 
 Near-term candidates remain evidence-gated rather than M10 commitments:
 
@@ -1109,9 +1121,9 @@ This milestone may use separate scoped executor plans when capture truth, retry
 recovery, and measured performance work would be safer to review independently.
 All parts remain provider-neutral and land before Cursor adapter work.
 
-Capture-scope reporting, all-tracked complete-scan reconciliation, and bounded
-source-change retry are implemented. Instrumentation and measured stable-run
-optimization are the remaining M10 work.
+Capture-scope reporting, all-tracked complete-scan reconciliation, bounded
+source-change retry, and indexing instrumentation are implemented. The measured
+writer-open optimization is the remaining M10 work.
 
 Primary change areas:
 
@@ -1155,17 +1167,18 @@ Required behavior:
   become another coverage generation or inflate run counts. Adapters continue
   to detect mutation and provide fresh candidates; the indexing application owns
   retry policy.
-- Add opt-in aggregate timings for writer open/validation, discovery and
+- Keep opt-in aggregate timings for writer open/validation, discovery and
   fingerprinting, freshness reads, unchanged writes, changed reads,
   normalization, canonical/FTS replacement, reconciliation, and close. Timings
   remain local diagnostics outside stable query DTOs and never contain session
   identities, paths, transcript data, or telemetry.
-- Use the measurements to select the smallest stable-run optimization. Bulk
-  freshness reads and bounded unchanged/missing write batches are the first
-  hypothesis; writer-open canonical/FK/FTS validation and provider discovery are
-  competing hypotheses. Do not add a clean-generation shortcut, durable cache,
-  parallel writer, or weaker validation unless the measured dominant cost and a
-  recovery-safe design justify it.
+- Optimize the measured writer-open validation owner. The real 120-session
+  stable run attributed 3,177.450 of 3,553.177 ms to writer open, while all
+  freshness reads and unchanged writes together took 14.935 ms. Any clean-state
+  shortcut must have a recovery-safe durable invariant that every canonical or
+  projection mutation invalidates and interrupted work cannot falsely restore.
+  Do not add per-candidate batching, a parallel writer, or weaker corruption
+  detection to address a phase the baseline did not identify.
 - Keep the existing simple startup notice for potentially long indexing. M10
   adds no spinner, daemon, watcher, semantic progress percentage, or public
   continuation-progress contract.

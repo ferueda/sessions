@@ -64,10 +64,11 @@ timing values are printed.
 `pnpm measure:indexing:codex -- --allow-provider-read` is the separately
 authorized macOS/Linux live check described in the testing guide. It exhausts
 production Codex discovery, bounds the indexed cohort to 120 candidates, writes
-only a mode-0700 temporary Sessions library, verifies provider bytes, accepts
-only a fully unchanged second run, emits aggregate evidence, and removes its
-temporary root. It reads no credentials and never opens the ordinary Sessions
-library.
+only a mode-0700 temporary Sessions library, verifies exact selected observations
+and selected rollout bytes, accepts only a fully unchanged second run, emits
+aggregate evidence, and removes its temporary root. The production adapter owns
+stable state database/WAL capture; unrelated Codex activity may continue. The
+measurement reads no credentials and never opens the ordinary Sessions library.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state

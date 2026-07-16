@@ -983,8 +983,14 @@ smoke ownership are complete.
 
 All-tracked complete-scan reconciliation, honest aggregate capture scope, and
 bounded fresh-candidate recovery after `source-changed` are implemented.
-Remaining work instruments routine indexing before optimizing its measured
-dominant phase.
+Opt-in timing is implemented and preserves exact control/timed results. The
+fixed synthetic stable run attributed 282.069 of 532.902 ms to writer open; the
+authorized real Codex 120-session stable run attributed 3,177.450 of 3,553.177
+ms to writer open, with discovery at 354.958 ms and all freshness plus unchanged
+writes at 14.935 ms. Exact selected observations/rollout bytes, complete reports,
+zero changed reads, and library health passed. These local values select
+writer-open validation as the next optimization owner; they are not public
+performance guarantees.
 Preserve exact canonical/query behavior and keep interpretation in the Agent Skill.
 
 ### Phase 7 — Equivalent second adapter

@@ -9,12 +9,9 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
-
-- [Measure routine indexing before optimizing it](260716-index-timing-baseline.md)
-
 M10 capture truth, all-tracked reconciliation, and bounded source-change
-recovery are complete. This plan adds indexing instrumentation and establishes
-the correctness/timing baseline. A separately reviewed optimization follows
-only after the baseline identifies its owner. M11 then proves Cursor
-equivalence. Markdown presentation remains deferred beyond V1.
+recovery are complete. Indexing instrumentation and its synthetic/real
+correctness baseline are also complete; the baseline selected writer-open
+validation as the next owner. There is no active executor plan. A separately
+reviewed recovery-safe writer-open optimization completes M10 before M11 proves
+Cursor equivalence. Markdown presentation remains deferred beyond V1.
