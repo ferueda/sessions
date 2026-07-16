@@ -11,7 +11,9 @@ import {
   createSessionSearchQuery,
 } from "../../src/domain/session-query.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
+import type { SessionDocument } from "../../src/domain/session.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import { readQueryRevision } from "../../src/infrastructure/sqlite/query-cursor.ts";
 import {
   createCoordinatedSqliteSessionIndex,
   createSqliteSessionIndexReader,
@@ -26,6 +28,7 @@ import {
   sessionQueryCorpusDocuments,
   sessionQueryCorpusIdentity,
 } from "../fixtures/session-query-corpus.ts";
+import { createTestDocument, createTestEntry, createTestSegment } from "../fixtures/session.ts";
 
 describe("SQLite session query", () => {
   test("searches literal special text and returns match-centered bounded evidence", async () => {
@@ -125,6 +128,122 @@ describe("SQLite session query", () => {
       expect(Object.isFrozen(first)).toBe(true);
       expect(Object.isFrozen(first.hits)).toBe(true);
       expect(Object.isFrozen(first.hits[0]?.session.identity.source)).toBe(true);
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test("preserves a selected snippet containing the first deterministic marker candidate", async () => {
+    const database = migratedDatabase();
+    const marker = firstSnippetMarkerCandidate(database);
+    const selectedText = `before ${marker.start} selectedevidence ${marker.end} after`;
+    await seedQueryDocuments(database, [markerDocument("selected", selectedText)]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const result = await repository.search(
+        createSessionSearchQuery({ text: "selectedevidence", limit: 1, context: 0 }),
+      );
+
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0]?.snippet).toEqual({
+        segmentOrdinal: 0,
+        origin: "human",
+        originConfidence: "high",
+        contentHash: hashContent(selectedText),
+        text: selectedText,
+        truncated: false,
+        additionalMatchingSegments: 0,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("does not let unselected marker-like text change the selected output", async () => {
+    const withoutCollision = migratedDatabase();
+    const withCollision = migratedDatabase();
+    const selectedText = "selectedevidence remains exact";
+    const marker = firstSnippetMarkerCandidate(withCollision);
+    await seedQueryDocuments(withoutCollision, [
+      markerDocument("selected", selectedText),
+      markerDocument("unselected", "ordinary background evidence"),
+    ]);
+    await seedQueryDocuments(withCollision, [
+      markerDocument("selected", selectedText),
+      markerDocument("unselected", `background ${marker.start} marker-like ${marker.end} evidence`),
+    ]);
+    try {
+      const query = createSessionSearchQuery({ text: "selectedevidence", limit: 1, context: 0 });
+      const ordinary = await createSqliteSessionQuery(withoutCollision).search(query);
+      const collision = await createSqliteSessionQuery(withCollision).search(query);
+
+      expect(collision).toEqual(ordinary);
+      expect(collision.hits[0]?.snippet.text).toBe(selectedText);
+    } finally {
+      withoutCollision.close();
+      withCollision.close();
+    }
+  });
+
+  test("preserves complete shared-content results across bounded pages", async () => {
+    const fixture = await seededQueryFixture();
+    try {
+      const repository = createSqliteSessionQuery(fixture.database);
+      const firstQuery = createSessionSearchQuery({
+        text: "shared recurrence",
+        limit: 1,
+        context: 1,
+      });
+      const first = await repository.search(firstQuery);
+      const repeatedFirst = await repository.search(firstQuery);
+
+      // Deep equality covers summaries, entries, snippets, hashes, context, support, and cursor.
+      expect(repeatedFirst).toEqual(first);
+      expect(first.hits.map((hit) => hit.session.identity.nativeId)).toEqual(["a-session"]);
+      expect(first.hits[0]?.entry.ordinal).toBe(5);
+      expect(first.hits[0]?.snippet).toEqual({
+        segmentOrdinal: 0,
+        origin: "human",
+        originConfidence: "high",
+        contentHash: hashContent("shared recurrence evidence"),
+        text: "shared recurrence evidence",
+        truncated: false,
+        additionalMatchingSegments: 0,
+      });
+      expect(first.hits[0]?.context.map((entry) => entry.ordinal)).toEqual([4, 6]);
+      expect(first.support).toEqual({
+        occurrences: 3,
+        uniqueContent: 1,
+        uniqueKnownRoots: 1,
+        unknownLineageSessions: 1,
+      });
+      expect(first.nextCursor).toBeDefined();
+      if (first.nextCursor === undefined) throw new Error("Expected first search cursor");
+
+      const secondQuery = createSessionSearchQuery({
+        text: "shared recurrence",
+        limit: 1,
+        context: 1,
+        cursor: first.nextCursor,
+      });
+      const second = await repository.search(secondQuery);
+      const repeatedSecond = await repository.search(secondQuery);
+
+      expect(repeatedSecond).toEqual(second);
+      expect(second.hits.map((hit) => hit.session.identity.nativeId)).toEqual(["b-session"]);
+      expect(second.hits[0]?.entry.ordinal).toBe(0);
+      expect(second.hits[0]?.snippet).toEqual({
+        segmentOrdinal: 0,
+        origin: "human",
+        originConfidence: "high",
+        contentHash: hashContent("shared recurrence evidence"),
+        text: "shared recurrence evidence",
+        truncated: false,
+        additionalMatchingSegments: 1,
+      });
+      expect(second.hits[0]?.context).toEqual([]);
+      expect(second.support).toEqual(first.support);
+      expect(second.nextCursor).toBeUndefined();
     } finally {
       fixture.database.close();
     }
@@ -371,4 +490,72 @@ function migratedDatabase(): DatabaseSync {
   database.exec("PRAGMA trusted_schema = OFF");
   applyMigrations(database);
   return database;
+}
+
+const MARKER_SOURCE = Object.freeze({
+  kind: "synthetic-marker",
+  instanceId: "rank-hydration",
+});
+
+function markerDocument(nativeId: string, text: string): SessionDocument {
+  return createTestDocument({
+    identity: { source: MARKER_SOURCE, nativeId },
+    lineageCoverage: "complete",
+    entries: [
+      createTestEntry({
+        content: [
+          createTestSegment({
+            text,
+            origin: "human",
+            originConfidence: "high",
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+function firstSnippetMarkerCandidate(database: DatabaseSync): {
+  readonly start: string;
+  readonly end: string;
+} {
+  const library = readQueryRevision(database).libraryInstanceId;
+  return {
+    start: `\u0001sessions-${library}-0-match-start\u0002`,
+    end: `\u0001sessions-${library}-0-match-end\u0002`,
+  };
+}
+
+async function seedQueryDocuments(
+  database: DatabaseSync,
+  documents: readonly SessionDocument[],
+): Promise<void> {
+  const first = documents[0];
+  if (first === undefined) throw new Error("Query fixture must contain a document");
+  const now = () => new Date("2026-07-14T11:00:00.000Z");
+  const lease = acquireWriterLease(database, "index", {
+    now,
+    token: () => "seed-marker-query-writer",
+  });
+  try {
+    const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+    const run = await index.startRun({
+      source: first.identity.source,
+      startedAt: "2026-07-14T12:00:00.000Z",
+    });
+    for (const [ordinal, document] of documents.entries()) {
+      await index.replaceSession(
+        run,
+        replacement(document.identity, `marker-${String(ordinal)}`, document),
+      );
+    }
+    await index.finishRun(run, {
+      status: "completed",
+      finishedAt: "2026-07-14T12:01:00.000Z",
+    });
+  } finally {
+    interruptOwnedRunsAndReleaseWriterLease(database, lease, {
+      now: () => new Date("2026-07-14T12:02:00.000Z"),
+    });
+  }
 }
