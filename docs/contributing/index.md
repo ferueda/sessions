@@ -8,6 +8,14 @@ Start here:
 4. [Current architecture](architecture.md) — code ownership and dependency direction.
 5. [Testing](testing.md) — proof layers and definition of done.
 
+Core areas:
+
+- [Indexing](indexing.md) — discovery, incremental capture, and last-good behavior.
+- [Search](search.md) — matching, ranking, context, support, and pagination.
+- [Storage](storage.md) — canonical records, content reuse, digests, and FTS.
+- [Lineage](lineage.md) — root resolution and known/unknown evidence.
+- [Maintenance](maintenance.md) — writer leases, deletion, repair, compaction, and clear.
+
 Contracts:
 
 - [Privacy](../privacy.md)
