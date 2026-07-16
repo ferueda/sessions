@@ -9,6 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. The textless entry inventory is the next M8
-work. M9 packages the Agent Skill, M10 proves Cursor equivalence, and Markdown
-presentation remains deferred beyond V1.
+Active executor plan:
+
+- [Add a textless retained-entry inventory](260715-textless-entry-inventory.md)
+
+This is the next M8 work. Literal-any search, list/search root attribution, and
+activity bounds follow. M9 packages the Agent Skill, M10 proves Cursor
+equivalence, and Markdown presentation remains deferred beyond V1.
