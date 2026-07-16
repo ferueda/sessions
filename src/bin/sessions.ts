@@ -10,6 +10,7 @@ import { exportSession } from "../application/export-session.ts";
 import { repairOrphanedContent } from "../application/repair-orphaned-content.ts";
 import { forgetSession } from "../application/forget-session.ts";
 import { getPaths } from "../application/get-paths.ts";
+import { timeIndexOperation } from "../application/index-timing.ts";
 import { listSessions } from "../application/list-sessions.ts";
 import { listSessionEntries } from "../application/list-session-entries.ts";
 import { runDoctor } from "../application/run-doctor.ts";
@@ -24,12 +25,17 @@ import { resolveIndexPaths } from "../infrastructure/state/paths.ts";
 import { createSqliteIndexLifecycle } from "../infrastructure/sqlite/database.ts";
 import { createSqliteDiagnostic } from "../infrastructure/sqlite/sqlite-diagnostic.ts";
 import { createSqliteIndexMaintenance } from "../infrastructure/sqlite/index-maintenance.ts";
+import {
+  createIndexTimingCollector,
+  encodeIndexTimingDiagnostic,
+} from "../infrastructure/runtime/index-timings.ts";
 
 const require = createRequire(import.meta.url);
 const manifest = require("../../package.json") as { version?: unknown };
 const version = typeof manifest.version === "string" ? manifest.version : "0.0.0";
 const indexLifecycle = createSqliteIndexLifecycle();
 const maintenance = createSqliteIndexMaintenance();
+const indexTimingsEnabled = process.env.SESSIONS_INDEX_TIMINGS === "1";
 let codexSource: ReturnType<typeof createCodexSource> | undefined;
 const resolveCodexSource = () => (codexSource ??= createCodexSource());
 const registeredSources = Object.freeze([
@@ -51,6 +57,40 @@ const resolvePaths = () =>
     homeDirectory: homedir(),
   });
 
+const indexSessions = async (source: string | undefined) => {
+  if (!indexTimingsEnabled) {
+    return runIndex({
+      paths: resolvePaths(),
+      sources: await resolveIndexSources(source),
+      lifecycle: indexLifecycle,
+      clock: { now: () => new Date() },
+    });
+  }
+
+  const collector = createIndexTimingCollector();
+  try {
+    return await timeIndexOperation(collector.recorder, "total", async () => {
+      const paths = resolvePaths();
+      const sources = await timeIndexOperation(collector.recorder, "sourceResolution", () =>
+        resolveIndexSources(source),
+      );
+      return runIndex({
+        paths,
+        sources,
+        lifecycle: indexLifecycle,
+        clock: { now: () => new Date() },
+        timing: collector.recorder,
+      });
+    });
+  } finally {
+    try {
+      process.stderr.write(encodeIndexTimingDiagnostic(collector.snapshot()));
+    } catch {
+      // Opt-in timing output is best-effort and must not change indexing.
+    }
+  }
+};
+
 const exitCode = await runCli(process.argv.slice(2), {
   version,
   output: {
@@ -69,13 +109,7 @@ const exitCode = await runCli(process.argv.slice(2), {
   },
   paths: async () => getPaths(resolvePaths(), indexLifecycle, await resolveAllSources()),
   indexSources: registeredSources.map(({ kind }) => kind),
-  index: async (source) =>
-    runIndex({
-      paths: resolvePaths(),
-      sources: await resolveIndexSources(source),
-      lifecycle: indexLifecycle,
-      clock: { now: () => new Date() },
-    }),
+  index: indexSessions,
   list: ({ filter, limit, cursor }) =>
     listSessions({
       paths: resolvePaths(),

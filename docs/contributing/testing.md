@@ -159,6 +159,25 @@ stop conditions, redaction, and cleanup. Keep it outside Vitest, pre-commit,
 `pnpm check`, and routine CI. Live results are operational evidence, not
 deterministic regression coverage.
 
+`pnpm measure:indexing` is the deterministic, provider-free stable-index
+baseline. It compares control and timed runs from the same generic seeded
+library, requires exact semantic equality, and prints aggregate timings only.
+
+`pnpm measure:indexing:codex -- --allow-provider-read` is the sole current local
+provider-read measurement. It is macOS/Linux-only and fails before provider
+resolution elsewhere. It uses the production Codex adapter, exhausts its full
+discovery generation, indexes only a fixed 120-candidate cohort into a mode-0700
+temporary Sessions library, and uses no credentials. The result is discarded
+unless the second run is fully unchanged with complete coverage, zero reads or
+other outcomes, the complete selected observations agree, and every selected
+rollout is byte-identical at seed discovery, stable discovery, and final
+verification. State database/WAL safety comes from the production adapter's
+no-follow hash-copy-verify snapshot; unrelated Codex activity is allowed between
+runs. Output is aggregate-only. The exact temporary root is removed in `finally`
+and INT/TERM cleanup; an uncatchable process or machine failure can leave
+sensitive temporary Sessions data. Run it only with explicit live-data authority
+and outside routine gates.
+
 ## Verification
 
 Iterate with one focused path:

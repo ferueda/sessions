@@ -27,6 +27,10 @@ not a best-effort feature.
   database. It never removes canonical rows or reads a provider.
 - Paths and doctor inspect library/source readiness without indexing, creating
   storage, modifying storage, or reading rollout content.
+- Exact opt-in `SESSIONS_INDEX_TIMINGS=1` indexing emits one aggregate stderr
+  diagnostic with fixed phase names, call counts, and elapsed milliseconds. It
+  stores and uploads nothing and includes no identities, paths, fingerprints,
+  timestamps, errors, or transcript-derived values.
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show are
 current. Cursor adapter support, library import/restore, and automatic analysis are not current

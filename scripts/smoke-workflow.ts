@@ -29,6 +29,7 @@ const ACTIVITY_AFTER = "2025-07-14T14:19:59.999Z";
 const ACTIVITY_BEFORE = "2025-07-14T14:20:00.001Z";
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
 const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
+const INDEX_TIMING_PREFIX = "sessions:index-timings ";
 const UNINITIALIZED_LIST_OUTPUT =
   "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n";
 
@@ -43,6 +44,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     CODEX_SQLITE_HOME: "",
     SESSIONS_DATA_DIR: dataDirectory,
     SESSIONS_CACHE_DIR: oldCacheDirectory,
+    SESSIONS_INDEX_TIMINGS: "",
     HOME: fixture.environment.home,
     USERPROFILE: fixture.environment.home,
   };
@@ -159,6 +161,14 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "json",
     ]);
     assertCompleteIndex(firstIndex, { updated: 1, unchanged: 0, missing: 0 });
+
+    const timedStableIndex = await stableProviderCommand(
+      options,
+      fixture.codexHome,
+      { ...environment, SESSIONS_INDEX_TIMINGS: "1" },
+      ["index", "--source", "codex", "--format", "json"],
+    );
+    assertTimedStableIndex(timedStableIndex);
 
     const bareToolSearch = await stableProviderCommand(options, fixture.codexHome, environment, [
       "search",
@@ -730,6 +740,55 @@ function assertCompleteIndex(
   const source = readObject(readArray(report, "sources")[0]);
   assert.equal(source.status, "completed");
   assert.equal(readObject(source.coverage).status, "complete");
+}
+
+function assertTimedStableIndex(result: SmokeCommandResult): void {
+  assert.equal(result.status, 0, `timed stable index failed: ${result.stderr || result.stdout}`);
+  const report = parseJson(result.stdout);
+  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.command, "index");
+  assert.deepEqual(readObject(report.counts), {
+    discovered: 1,
+    unchanged: 1,
+    updated: 0,
+    failed: 0,
+    missing: 0,
+    stale: 0,
+  });
+  assert.equal(result.stderr.startsWith(INDEX_TIMING_PREFIX), true);
+  assert.equal(result.stderr.endsWith("\n"), true);
+  assert.equal(result.stderr.slice(0, -1).includes("\n"), false);
+  assertNoPrivateFixtureMarkers(result.stderr, "index timing diagnostic");
+
+  const diagnostic = readObject(JSON.parse(result.stderr.slice(INDEX_TIMING_PREFIX.length)));
+  assert.equal(diagnostic.diagnostic, "index-timings");
+  const phases = readObject(diagnostic.phases);
+  const expectedCalls = {
+    sourceResolution: 1,
+    writerOpen: 1,
+    sourceProbe: 1,
+    sourceDiscovery: 1,
+    freshnessRead: 1,
+    unchangedWrite: 1,
+    changedReadAndNormalize: 0,
+    replacement: 0,
+    reconciliation: 1,
+    runBookkeeping: 2,
+    writerClose: 1,
+    total: 1,
+  } as const;
+  assert.deepEqual(Object.keys(phases), Object.keys(expectedCalls));
+  for (const [phase, calls] of Object.entries(expectedCalls)) {
+    const aggregate = readObject(phases[phase]);
+    assert.equal(aggregate.calls, calls, `${phase} timing call count`);
+    assert.equal(
+      typeof aggregate.elapsedMs === "number" &&
+        Number.isFinite(aggregate.elapsedMs) &&
+        aggregate.elapsedMs >= 0,
+      true,
+      `${phase} timing elapsed milliseconds`,
+    );
+  }
 }
 
 function assertObservedToolSearch(

@@ -26,6 +26,7 @@ index
   -> src/application/run-index.ts
   -> writer-leased SourceDiscoveryWorkspace
   -> src/infrastructure/sqlite/sqlite-session-index.ts
+  -> optional aggregate timing at existing application/port boundaries
 
 list / search / entries / show / export
   -> src/application/{list-sessions,search-sessions,list-session-entries,show-session,export-session}.ts
@@ -62,6 +63,7 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `src/application/validate-session.ts`                                                  | Immutable adapter-read admission                                                                    |
 | `src/application/discover-sessions.ts`                                                 | Complete discovery admission, duplicate policy, and deterministic ordering                          |
 | `src/application/run-index.ts`                                                         | Provider-neutral incremental capture and source-presence reconciliation                             |
+| `src/application/index-timing.ts`                                                      | Optional best-effort measurement around existing indexing operations                                |
 | `src/application/{list-sessions,search-sessions,list-session-entries,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                                   |
 | `src/application/export-session.ts`                                                    | Provider-free one-snapshot export and bounded/full selection                                        |
 | `src/application/session-presentation.ts`                                              | Shared title, relation, entry, segment, and UTF-8 text selection                                    |
@@ -70,6 +72,7 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `src/adapters/codex/`                                                                  | Codex path/state/rollout discovery and canonical normalization                                      |
 | `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral discovery workspace                  |
 | `src/infrastructure/sqlite/`                                                           | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance     |
+| `src/infrastructure/runtime/index-timings.ts`                                          | In-memory allowlisted indexing timing aggregation                                                   |
 | `src/cli/structured-output.ts`                                                         | Closed schema-1 DTO construction, recursive validation, and freezing                                |
 | `src/cli/*structured*`, `encode-*-output.ts`                                           | JSON/JSONL encoding and aggregate output admission                                                  |
 | `src/cli/`                                                                             | Command grammar, terminal-safe rendering, streams, and exit behavior                                |

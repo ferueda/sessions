@@ -1,5 +1,6 @@
 import { compareBinaryStrings, discoverSessions } from "./discover-sessions.ts";
 import { admitSourceProbe } from "./admit-source-probe.ts";
+import { timeIndexOperation, type IndexTimingRecorder } from "./index-timing.ts";
 import { mapLibraryBusyError } from "./library-error.ts";
 import {
   createIndexReport,
@@ -40,6 +41,7 @@ export interface RunIndexInput {
   readonly sources: readonly SelectedSessionSource[];
   readonly lifecycle: IndexLifecycle;
   readonly clock: IndexClock;
+  readonly timing?: IndexTimingRecorder;
 }
 
 export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
@@ -52,11 +54,13 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   let operationFailed = false;
 
   try {
-    writer = await input.lifecycle.openWriter(input.paths);
+    writer = await timeIndexOperation(input.timing, "writerOpen", () =>
+      input.lifecycle.openWriter(input.paths),
+    );
     const sourceReports: IndexSourceReport[] = [];
     for (const selection of selections) {
       sourceReports.push(
-        await runSource(writer.sessions, writer.workspace, selection, input.clock),
+        await runSource(writer.sessions, writer.workspace, selection, input.clock, input.timing),
       );
     }
     report = createIndexReport(startedAt, timestamp(input.clock), sourceReports);
@@ -69,7 +73,7 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   let closeFailed = false;
   if (writer !== undefined) {
     try {
-      await writer.close();
+      await timeIndexOperation(input.timing, "writerClose", () => writer.close());
     } catch (error) {
       closeFailed = true;
       closeError = error;
@@ -94,11 +98,14 @@ async function runSource(
   workspace: SourceDiscoveryWorkspace,
   selection: SelectedSessionSource,
   clock: IndexClock,
+  timing: IndexTimingRecorder | undefined,
 ): Promise<IndexSourceReport> {
-  const run = await index.startRun({
-    source: selection.instance,
-    startedAt: timestamp(clock),
-  });
+  const run = await timeIndexOperation(timing, "runBookkeeping", () =>
+    index.startRun({
+      source: selection.instance,
+      startedAt: timestamp(clock),
+    }),
+  );
   let finishAttempted = false;
 
   const finish = async (
@@ -107,23 +114,26 @@ async function runSource(
   ): Promise<IndexSourceReport> => {
     finishAttempted = true;
     const finishedAt = timestamp(clock);
-    const result =
+    const result = await timeIndexOperation(timing, "runBookkeeping", () =>
       status === "completed"
-        ? await index.finishRun(run, { status, finishedAt })
-        : await index.finishRun(run, {
+        ? index.finishRun(run, { status, finishedAt })
+        : index.finishRun(run, {
             status,
             finishedAt,
             failure: requireFailure(failure),
-          });
+          }),
+    );
     assertRunResultSource(result.source, selection.instance);
     return createIndexSourceReport(selection.instance, result);
   };
 
   try {
-    const probeFailure = await probe(selection);
+    const probeFailure = await timeIndexOperation(timing, "sourceProbe", () => probe(selection));
     if (probeFailure !== undefined) return await finish("incomplete", probeFailure);
 
-    const discovery = await discoverSessions(selection, workspace);
+    const discovery = await timeIndexOperation(timing, "sourceDiscovery", () =>
+      discoverSessions(selection, workspace),
+    );
     if (!discovery.complete) return await finish("incomplete", "discovery-failed");
 
     const seen = new Set<string>();
@@ -131,22 +141,30 @@ async function runSource(
     for (const candidate of discovery.candidates) {
       const observation = candidate.observation;
       seen.add(observation.identity.nativeId);
-      const failure = await applyCandidate(index, run, selection, candidate);
+      const failure = await applyCandidate(index, run, selection, candidate, timing);
       if (failure === "source-changed") {
         deferred.push(candidate);
       } else if (failure !== undefined) {
-        await index.recordFailure(run, observation, failure);
+        await timeIndexOperation(timing, "runBookkeeping", () =>
+          index.recordFailure(run, observation, failure),
+        );
       }
     }
 
     if (deferred.length > 0) {
-      await retrySourceChanged(index, run, selection, workspace, deferred);
+      await retrySourceChanged(index, run, selection, workspace, deferred, timing);
     }
 
-    const tracked = await index.listTrackedIdentities(selection.instance);
+    const tracked = await timeIndexOperation(timing, "reconciliation", () =>
+      index.listTrackedIdentities(selection.instance),
+    );
     const ordered = validateTrackedIdentities(tracked, selection.instance);
     for (const identity of ordered) {
-      if (!seen.has(identity.nativeId)) await index.recordMissing(run, identity);
+      if (!seen.has(identity.nativeId)) {
+        await timeIndexOperation(timing, "reconciliation", () =>
+          index.recordMissing(run, identity),
+        );
+      }
     }
     return await finish("completed");
   } catch (operationError) {
@@ -169,23 +187,30 @@ async function applyCandidate(
   run: SessionIndexRun,
   selection: SelectedSessionSource,
   candidate: AdmittedDiscoveredSession,
+  timing: IndexTimingRecorder | undefined,
 ): Promise<RecordableSessionFailureCode | undefined> {
   const observation = candidate.observation;
-  const freshness = await index.getFreshness(observation.identity);
+  const freshness = await timeIndexOperation(timing, "freshnessRead", () =>
+    index.getFreshness(observation.identity),
+  );
   if (matchesLastGoodRevision(freshness, observation.revision)) {
-    await index.recordUnchanged(run, observation);
+    await timeIndexOperation(timing, "unchangedWrite", () =>
+      index.recordUnchanged(run, observation),
+    );
     return undefined;
   }
 
   let replacement: ValidatedSessionReplacement;
   try {
-    replacement = await readSessionReplacement(selection.adapter, candidate);
+    replacement = await timeIndexOperation(timing, "changedReadAndNormalize", () =>
+      readSessionReplacement(selection.adapter, candidate),
+    );
   } catch (error) {
     if (!isSourceFailureError(error)) throw error;
     return error.failure.kind;
   }
   // Repository replacement failures are already durably recorded once by the port.
-  await index.replaceSession(run, replacement);
+  await timeIndexOperation(timing, "replacement", () => index.replaceSession(run, replacement));
   return undefined;
 }
 
@@ -195,11 +220,16 @@ async function retrySourceChanged(
   selection: SelectedSessionSource,
   workspace: SourceDiscoveryWorkspace,
   deferred: readonly AdmittedDiscoveredSession[],
+  timing: IndexTimingRecorder | undefined,
 ): Promise<void> {
-  const discovery = await discoverSessions(selection, workspace);
+  const discovery = await timeIndexOperation(timing, "sourceDiscovery", () =>
+    discoverSessions(selection, workspace),
+  );
   if (!discovery.complete) {
     for (const candidate of deferred) {
-      await index.recordFailure(run, candidate.observation, "source-changed");
+      await timeIndexOperation(timing, "runBookkeeping", () =>
+        index.recordFailure(run, candidate.observation, "source-changed"),
+      );
     }
     return;
   }
@@ -210,13 +240,17 @@ async function retrySourceChanged(
   for (const candidate of deferred) {
     const fresh = freshByNativeId.get(candidate.observation.identity.nativeId);
     if (fresh === undefined) {
-      await index.recordFailure(run, candidate.observation, "source-changed");
+      await timeIndexOperation(timing, "runBookkeeping", () =>
+        index.recordFailure(run, candidate.observation, "source-changed"),
+      );
       continue;
     }
 
-    const failure = await applyCandidate(index, run, selection, fresh);
+    const failure = await applyCandidate(index, run, selection, fresh, timing);
     if (failure !== undefined) {
-      await index.recordFailure(run, fresh.observation, failure);
+      await timeIndexOperation(timing, "runBookkeeping", () =>
+        index.recordFailure(run, fresh.observation, failure),
+      );
     }
   }
 }
