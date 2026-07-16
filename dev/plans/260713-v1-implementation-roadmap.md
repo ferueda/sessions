@@ -1179,6 +1179,24 @@ Required behavior:
   projection mutation invalidates and interrupted work cannot falsely restore.
   Do not add per-candidate batching, a parallel writer, or weaker corruption
   detection to address a phase the baseline did not identify.
+- Bind clean/dirty integrity state to the existing writer-lease generation.
+  Acquisition makes the new generation durably dirty; only an exact-owner normal
+  close may atomically mark that generation clean and release it. Fast open
+  requires a clean prior generation, current schema cookie/baseline, no
+  migration or recovery evidence, and constant-size pragma/schema/FTS object
+  checks. Crashes, abandoned leases, migrations, setup/cleanup failures, and
+  maintenance without equivalent local proof force the existing full validation
+  path.
+- Make clean completion proportional but strict: reconstruct and digest-check
+  changed sessions, verify affected FTS rows inside their mutation transaction,
+  and keep exact tracking/run affected-row checks. Doctor remains the explicit
+  read-only full-library integrity check. Direct SQLite mutation is unsupported;
+  automatic detection of arbitrary out-of-band same-schema logical edits on
+  every clean writer open is not retained.
+- Treat this as a clean pre-launch baseline/checksum replacement with no
+  compatibility migration. Older development libraries fail closed and require
+  a fresh Sessions data directory or exact owned-directory reset and reindex.
+  No public CLI, application port, adapter, query, or JSON/JSONL contract changes.
 - Keep the existing simple startup notice for potentially long indexing. M10
   adds no spinner, daemon, watcher, semantic progress percentage, or public
   continuation-progress contract.
@@ -1197,9 +1215,15 @@ Exit gate:
 - A fixed generic unchanged corpus and a privacy-safe real-library comparison
   record phase baselines before optimization and exact after-results. Canonical
   digests, ordered query output, support, lineage, cursors, failures, timestamps,
-  provider bytes, and lease/interruption behavior are unchanged. The scoped plan
-  sets a numeric stable-run budget only after the phase baseline identifies the
-  dominant cost.
+  selected rollout bytes, provider-read-only behavior, and lease/interruption
+  behavior are unchanged. On the same fixed real 120-session cohort, clean
+  writer open is at most 800 ms and stable total time at most 1.25 seconds. Dirty
+  and recovery opens have no performance budget and retain full correctness.
+- Deterministic lifecycle proofs cover crashes before/after acquisition and
+  committed writes, transaction rollback, migration/setup failure, stale-owner
+  fencing, atomic clean-close/release, dirty canonical corruption, FTS structure
+  or row-ID damage, targeted replacement/FTS rollback, conservative maintenance,
+  and exact control/optimized semantic equality.
 - `pnpm check` passes.
 
 ### M11 — Add Cursor and prove adapter equivalence

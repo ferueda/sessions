@@ -993,6 +993,49 @@ writer-open validation as the next optimization owner; they are not public
 performance guarantees.
 Preserve exact canonical/query behavior and keep interpretation in the Agent Skill.
 
+#### Planned writer-open fast path
+
+M10 will bind a durable clean/dirty integrity state to the existing writer-lease
+generation. A normally closed library has no owner and records its current
+generation plus SQLite schema cookie as clean. Lease acquisition increments the
+generation in the same immediate transaction but leaves the clean generation
+behind, making the new owner durably dirty before it can mutate state. Normal
+close atomically interrupts any active run, records the owned generation and
+current schema cookie as clean, and releases the exact lease. A stale owner can
+never clean a newer generation.
+
+A clean fast open is allowed only when the prior generation was cleanly released,
+the schema cookie and current baseline agree, no migration ran or is pending, no
+recovery sidecars or expired owner require recovery, and constant-size pragma,
+schema, and FTS object/trigger checks pass. Any crash, abandoned owner,
+migration, setup failure, heartbeat/ownership loss, recovery evidence, or failed
+cleanup keeps the library dirty and forces the existing full canonical, foreign
+key, and FTS validation/repair path on the next writer.
+
+Clean completion requires proportional proof of the writes performed during the
+generation. Canonical replacement must reconstruct and digest-check each changed
+session and verify affected FTS rows inside its transaction. Tracking and run
+writes retain exact affected-row assertions. Forget, orphan repair, and
+compaction may conservatively leave the library dirty until they prove equivalent
+local postconditions. `doctor` remains the explicit read-only full-library
+integrity check.
+
+This accepts one tradeoff: direct modification of the permission-hardened
+Sessions SQLite database is unsupported. A clean marker cannot detect every
+out-of-band same-schema logical edit on the next fast open; `doctor` or a later
+dirty/recovery open still performs full validation. Preserving automatic
+detection of arbitrary external edits on every writer open would require keeping
+the measured full scan and its scale-dependent cost.
+
+The change is internal to SQLite schema and writer lifecycle. It adds no public
+CLI, application, adapter, query, JSON/JSONL, or provider behavior. Because the
+project is pre-launch, it replaces the single current baseline and checksum with
+no compatibility migration; older development libraries fail closed and require
+a fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
+reindexing. On the same fixed real 120-session cohort, clean writer open must be
+at most 800 ms and stable total time at most 1.25 seconds. Dirty/recovery opens
+have no speed budget; correctness remains their only gate.
+
 ### Phase 7 — Equivalent second adapter
 
 Port Cursor discovery and transcript normalization through the same port. Prove

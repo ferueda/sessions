@@ -14,4 +14,8 @@ recovery are complete. Indexing instrumentation and its synthetic/real
 correctness baseline are also complete; the baseline selected writer-open
 validation as the next owner. There is no active executor plan. A separately
 reviewed recovery-safe writer-open optimization completes M10 before M11 proves
-Cursor equivalence. Markdown presentation remains deferred beyond V1.
+Cursor equivalence. Its locked direction uses lease-generation clean/dirty state,
+full validation after recovery evidence, proportional post-write proof on clean
+generations, unsupported direct SQLite mutation, and fixed local budgets of 800
+ms writer open / 1.25 seconds total. Markdown presentation remains deferred
+beyond V1.
