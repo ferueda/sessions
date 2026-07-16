@@ -1,7 +1,6 @@
 # Current architecture
 
-Status: M8 agent analysis retrieval is complete. M9 packaged Agent Skill work is
-next.
+Status: M9 packaged Agent Skill is complete. M10 Cursor parity is next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -9,6 +8,11 @@ This map describes code that exists now. The
 ## Runtime flow
 
 ```text
+agent host
+  -> skills/sessions/SKILL.md
+  -> one routed evidence playbook
+  -> public sessions CLI
+
 src/bin/sessions.ts
   -> src/cli/{run,program,render}.ts
 
@@ -69,15 +73,24 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `src/cli/*structured*`, `encode-*-output.ts`                                           | JSON/JSONL encoding and aggregate output admission                                     |
 | `src/cli/`                                                                             | Command grammar, terminal-safe rendering, streams, and exit behavior                   |
 | `src/bin/`                                                                             | Sole concrete composition root                                                         |
+| `skills/sessions/`                                                                     | Model-invoked routing plus evidence-first analysis playbooks over the public CLI       |
 | `scripts/`                                                                             | Build and delivery smoke helpers; not published runtime                                |
 | `test/`                                                                                | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show
 exist. Agent-efficient corpus selection exists over the retained Codex library;
-Cursor, the packaged Agent Skill, and a public adapter ABI do not exist yet. M7
-owns one closed public document projection, its deterministic digest, retained
+the packaged Agent Skill routes seven analysis playbooks over that surface.
+Cursor and a public adapter ABI do not exist yet. M7 owns one closed public
+document projection, its deterministic digest, retained
 attribution, shared bounded selection, and the exact schema-1 machine records documented in
 [structured output](../reference/structured-output.md).
+
+The skill is presentation and guidance, not another runtime layer. It reads no
+provider or SQLite files, defines no hidden query, and cannot authorize indexing
+or mutation. Its binding evidence protocol requires per-check diagnostics,
+explicit indexing authority, bounded structured queries, reproducible IDs and
+ordinals, facts before interpretation, visible omissions, and no automatic
+project, skill, settings, provider, or history edits.
 
 The current runtime dependencies remain `commander` and `smol-toml`. Provider and
 canonical input use focused handwritten bounded validators; Zod is deferred until
@@ -262,4 +275,6 @@ stream. Format never enters list/search/entries query fingerprints.
 Source uses explicit `.ts` imports and erasable TypeScript. `tsconfig.build.json`
 compiles only `src/` into `dist/`, rewrites relative extensions to `.js`, and
 emits source maps. The package exposes no library API; published consumers execute
-`dist/bin/sessions.js`.
+`dist/bin/sessions.js`. The package also ships the exact ten-file
+`skills/sessions/` tree for copying into an agent host; it adds no runtime
+dependency to the CLI.

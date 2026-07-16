@@ -2,7 +2,7 @@
 
 - Status: active program roadmap
 - Date: 2026-07-13
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 - Foundation baseline: PR #1, merged as `601f924`
 
 ## Goal
@@ -24,7 +24,7 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 8 are complete. M9 packaged Agent Skill work is next.
+Milestones 0 through 9 are complete. M10 Cursor parity is next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -68,6 +68,9 @@ The repository now includes:
 - literal all/any search with bounded admission and per-hit matched terms,
   shared exclusive activity bounds, and query-derived roots on list, search, and
   entries;
+- one packaged Sessions Agent Skill with a shared evidence protocol and seven
+  routed playbooks for context, retrospectives, preferences, workflow and
+  verification audits, handoffs, and capability discovery;
 - explicit complete/unknown lineage coverage, Codex `codex-v3` evidence, and a
   query-scoped iterative provider-neutral root resolver;
 - canonical-only FTS projection repair during explicit leased indexing while
@@ -78,9 +81,9 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the packaged Agent Skill, Cursor adapter, release
-automation, or pinned Harness integration. M9 packages the evidence playbooks,
-and M10 then proves the same complete surface through a second passive adapter.
+It does not yet have the Cursor adapter, release automation, or pinned Harness
+integration. M10 next proves the same complete surface through a second passive
+adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -118,8 +121,8 @@ flowchart TD
   M5 --> M6["M6 Query and evidence engine — complete"]
   M6 --> M7["M7 Export and CLI schemas — complete"]
   M7 --> M8["M8 Agent analysis retrieval — complete"]
-  M8 --> M9["M9 Packaged Agent Skill"]
-  M9 --> M10["M10 Cursor parity"]
+  M8 --> M9["M9 Packaged Agent Skill — complete"]
+  M9 --> M10["M10 Cursor parity — next"]
   M10 --> M11["M11 Release qualification"]
   M11 --> M12["M12 Parity, Harness cutover, V1"]
 ```
@@ -880,7 +883,7 @@ Exit gate:
 - Focused broad-query benchmarks record the before/after lineage cost and guard
   against rebuilding retained lineage per hit. `pnpm check` passes.
 
-### M9 — Package the Sessions Agent Skill and user onboarding
+### M9 — Package the Sessions Agent Skill and user onboarding (complete)
 
 Outcome: users and agents can install Sessions, authorize indexing, and apply
 evidence-first playbooks immediately without knowing provider internals.

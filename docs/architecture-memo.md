@@ -2,7 +2,7 @@
 
 - Status: accepted design baseline
 - Date: 2026-07-13
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 - Scope: standalone repository through V1
 
 ## Executive summary
@@ -658,7 +658,9 @@ migrates the library, or persists data.
 
 ## Agent Skill design
 
-V1 ships one primary `sessions` Agent Skill once the underlying search/show/export commands are stable. A single entry point avoids overlapping triggers while references provide focused playbooks:
+V1 ships one primary `sessions` Agent Skill over the stable
+search/entries/show/export commands. A single entry point avoids overlapping
+triggers while references provide focused playbooks:
 
 ```text
 skills/sessions/
@@ -674,6 +676,11 @@ skills/sessions/
     handoff-continuity.md
     capability-discovery.md
 ```
+
+This layout is current and ships in the package. The
+[Agent Skill reference](reference/agent-skill.md) owns installation, routes, and
+current limits. The skill is a prompt-and-reference layer over public CLI
+contracts; it adds no hidden query, provider access, or storage behavior.
 
 Every playbook follows the shared `evidence-protocol.md` contract:
 
@@ -800,6 +807,9 @@ honest observational conclusion.
 - Users install with npm-compatible tooling or invoke through `npx`; they do not need pnpm.
 - The package allowlists compiled output, the packaged skill, README, and license.
 - A package smoke test packs, installs into an isolated project, and invokes the generated executable.
+- A local source checkout can install the skill with
+  `npx skills add . --skill sessions`; remote repository shorthand remains a
+  post-merge verification and documentation step.
 - One local `pnpm check` gate covers format, lint, dependency rules, types, tests, build, dist smoke, and package smoke. CI calls the same gate.
 - CI covers Linux, macOS, and Windows before release.
 - Release automation uses release-please and npm trusted publishing/OIDC with provenance after the package scope and GitHub environment are configured.
@@ -843,8 +853,8 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 4 are implemented; M9
-packaged Agent Skill work is next. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 5 are implemented; M10
+Cursor parity is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex before Cursor becomes the second-adapter proof. The
@@ -885,9 +895,11 @@ show/export ranges, textless entry inventory, literal all/any search, per-hit
 matched terms, list/search/entry root attribution, and activity bounds are
 complete. They required no adapter, canonical schema, or storage-index change.
 
-### Phase 5 — Agent Skill
+### Phase 5 — Agent Skill (complete)
 
-Generate the skill scaffold, write the seven evidence-first references, validate metadata/layout, forward-test representative prompts, and include it in package smoke.
+The packaged skill scaffold, seven evidence-first references, deterministic
+metadata/layout contracts, representative forward-evaluation cases, and package
+smoke ownership are complete.
 
 ### Phase 6 — Equivalent second adapter
 

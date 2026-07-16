@@ -46,12 +46,15 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, textless entries, filters, rank/ties, cursors, context, lineage, support units                    |
 | CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects                       |
 | Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                             |
+| Agent Skill contract  | `test/skill-contracts.test.ts`, evaluator-owned forward cases                   | Exact layout/metadata/routes, shared evidence rules, shipped CLI use, safety limits, and seven prompt rubrics  |
 | Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                | Compiled binary plus synthetic indexing/query/entries/show/export, orphan repair, compaction, deletion         |
-| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | The same workflow through an offline-installed tarball, plus allowlist and independence checks                 |
+| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | Offline-installed CLI journey plus the exact independent ten-file skill tree and resolvable references         |
+| Agent forward eval    | Fresh agents over an isolated generic retained corpus                           | Route choice, facts-first evidence, provenance, privacy, bounded output, honest unknowns, and no auto-mutation |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
 or authenticated live command today. JSON/JSONL delivery and export are current
-coverage; Cursor and the packaged Agent Skill remain planned.
+coverage; the packaged Agent Skill is current and Cursor indexing remains
+planned.
 
 ## Choosing proof
 
@@ -64,6 +67,7 @@ coverage; Cursor and the packaged Agent Skill remain planned.
 | Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | Focused search or entry-query application/infrastructure tests | `pnpm check`                                              |
 | Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                        | `pnpm check`                                              |
 | CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                   | `pnpm check`                                              |
+| Skill route, metadata, prompt boundary    | Skill contract plus evaluator-owned generic forward case                   | `pnpm test test/skill-contracts.test.ts`                       | `pnpm check`                                              |
 | Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                              | `pnpm check`                                              |
 | Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                              | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
 | Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package`   | `pnpm check`                                              |
@@ -89,6 +93,23 @@ fields, trust labels, format-neutral cursors, strict usage, streams/exits, and
 the injected encoded-size boundary. The one shared dist/package workflow adds
 only a representative JSON list/search/entries/show and line-by-line JSONL export
 journey; focused tests own the edge-case matrix.
+
+Agent Skill proof has three distinct owners. The deterministic contract locks
+the exact packaged layout, metadata, direct reference routing, one binding
+evidence protocol, shipped commands, and mutation/privacy limits. The package
+smoke checks the installed copy outside the checkout byte-for-byte and resolves
+every reference. Fresh-agent forward evaluation uses only generic isolated
+evidence and the user question; expected routes and grading facts remain outside
+the agent prompt. It covers all seven routes, including context transfer and the
+workflow-audit eligibility/use/process/outcome matrix. Model behavior is
+evaluation evidence, not a deterministic CI assertion, so prompt revisions stay
+surgical and rerun only affected cases.
+
+Run `node scripts/prepare-sessions-skill-forward-test.ts` in an interactive
+terminal. Its one-line JSON names the empty agent workspace, installed skill,
+packaged `sessions` launcher, and case prompts. Keep the process open while fresh
+agents run, then send one input line to clean the complete temporary environment.
+This opt-in evaluation is outside `pnpm check`.
 
 The V1 bounds are grounded in privacy-safe aggregate evidence, not committed
 transcripts. An audit of 1,444 retained sessions found at most 102 segments in a
@@ -122,6 +143,9 @@ physical line at a time, while
 preserving provider-tree immutability and the existing lifecycle journey. The
 package smoke installs offline from the populated pnpm store. Both clean
 temporary roots in `finally` and capture command/assertion context on failure.
+The package smoke also checks that only the ten intended Agent Skill files ship,
+that the installed copy is independent of the checkout, and that its metadata
+and direct references are valid.
 
 Add or broaden a smoke only for a critical journey that faster layers cannot
 credibly prove. Keep edge-case matrices focused. Use production-supported seams
