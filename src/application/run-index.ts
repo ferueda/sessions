@@ -10,7 +10,9 @@ import {
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
 import type {
   IndexRunFailureCode,
+  RecordableSessionFailureCode,
   SessionFreshness,
+  SessionIndexRun,
   SessionIndexWriter,
 } from "./ports/session-index.ts";
 import type {
@@ -22,6 +24,7 @@ import { readSessionReplacement } from "./read-session-document.ts";
 import { isSourceFailureError } from "./source-failure.ts";
 import {
   selectSessionSource,
+  type AdmittedDiscoveredSession,
   type SessionRevision,
   type ValidatedSessionReplacement,
 } from "./validate-session.ts";
@@ -124,25 +127,20 @@ async function runSource(
     if (!discovery.complete) return await finish("incomplete", "discovery-failed");
 
     const seen = new Set<string>();
+    const deferred: AdmittedDiscoveredSession[] = [];
     for (const candidate of discovery.candidates) {
       const observation = candidate.observation;
       seen.add(observation.identity.nativeId);
-      const freshness = await index.getFreshness(observation.identity);
-      if (matchesLastGoodRevision(freshness, observation.revision)) {
-        await index.recordUnchanged(run, observation);
-        continue;
+      const failure = await applyCandidate(index, run, selection, candidate);
+      if (failure === "source-changed") {
+        deferred.push(candidate);
+      } else if (failure !== undefined) {
+        await index.recordFailure(run, observation, failure);
       }
+    }
 
-      let replacement: ValidatedSessionReplacement;
-      try {
-        replacement = await readSessionReplacement(selection.adapter, candidate);
-      } catch (error) {
-        if (!isSourceFailureError(error)) throw error;
-        await index.recordFailure(run, observation, error.failure.kind);
-        continue;
-      }
-      // Repository replacement failures are already durably recorded once by the port.
-      await index.replaceSession(run, replacement);
+    if (deferred.length > 0) {
+      await retrySourceChanged(index, run, selection, workspace, deferred);
     }
 
     const tracked = await index.listTrackedIdentities(selection.instance);
@@ -163,6 +161,63 @@ async function runSource(
       );
     }
     throw operationError;
+  }
+}
+
+async function applyCandidate(
+  index: SessionIndexWriter,
+  run: SessionIndexRun,
+  selection: SelectedSessionSource,
+  candidate: AdmittedDiscoveredSession,
+): Promise<RecordableSessionFailureCode | undefined> {
+  const observation = candidate.observation;
+  const freshness = await index.getFreshness(observation.identity);
+  if (matchesLastGoodRevision(freshness, observation.revision)) {
+    await index.recordUnchanged(run, observation);
+    return undefined;
+  }
+
+  let replacement: ValidatedSessionReplacement;
+  try {
+    replacement = await readSessionReplacement(selection.adapter, candidate);
+  } catch (error) {
+    if (!isSourceFailureError(error)) throw error;
+    return error.failure.kind;
+  }
+  // Repository replacement failures are already durably recorded once by the port.
+  await index.replaceSession(run, replacement);
+  return undefined;
+}
+
+async function retrySourceChanged(
+  index: SessionIndexWriter,
+  run: SessionIndexRun,
+  selection: SelectedSessionSource,
+  workspace: SourceDiscoveryWorkspace,
+  deferred: readonly AdmittedDiscoveredSession[],
+): Promise<void> {
+  const discovery = await discoverSessions(selection, workspace);
+  if (!discovery.complete) {
+    for (const candidate of deferred) {
+      await index.recordFailure(run, candidate.observation, "source-changed");
+    }
+    return;
+  }
+
+  const freshByNativeId = new Map(
+    discovery.candidates.map((candidate) => [candidate.observation.identity.nativeId, candidate]),
+  );
+  for (const candidate of deferred) {
+    const fresh = freshByNativeId.get(candidate.observation.identity.nativeId);
+    if (fresh === undefined) {
+      await index.recordFailure(run, candidate.observation, "source-changed");
+      continue;
+    }
+
+    const failure = await applyCandidate(index, run, selection, fresh);
+    if (failure !== undefined) {
+      await index.recordFailure(run, fresh.observation, failure);
+    }
   }
 }
 

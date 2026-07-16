@@ -202,9 +202,11 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M9 packaged Agent Skill work is complete. M10 hardens core capture evidence,
-bounded source-change recovery, and routine indexing cost. M11 proves Cursor
-parity. Markdown remains deferred beyond V1; `--format md` is not accepted today.
+M9 packaged Agent Skill work is complete. M10 capture truth, all-tracked
+reconciliation, and bounded source-change recovery are complete. M10 now moves
+to indexing instrumentation and measured routine-index optimization before M11
+proves Cursor parity. Markdown remains deferred beyond V1; `--format md` is not
+accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

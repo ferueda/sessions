@@ -25,9 +25,8 @@ plan and independently reviewable pull request before work starts. The accepted
 ## Current state
 
 Milestones 0 through 9 are complete. M10 core evidence hardening is underway:
-capture truth and all-tracked reconciliation are implemented, bounded
-source-change retry is next, and instrumentation plus measured optimization
-follow.
+capture truth, all-tracked reconciliation, and bounded source-change retry are
+implemented. Instrumentation and measured optimization follow.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -42,8 +41,8 @@ The repository now includes:
   last-good freshness state, bounded run diagnostics, and derived FTS data;
 - an internal provider-neutral indexing service with complete-discovery admission,
   incremental reads, last-good preservation, all-tracked exact-source
-  reconciliation, and
-  repository-authoritative reports;
+  reconciliation, bounded source-change recovery, and repository-authoritative
+  reports;
 - renewable writer leases, transactional mutation fencing, abandoned-run
   interruption, and valid WAL recovery;
 - internal only-owned-file clear/repair/compact maintenance and immutable
@@ -85,11 +84,10 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have bounded recovery for a source that changes during its first
-read, indexing instrumentation or measured unchanged-run optimization, the
-Cursor adapter, release automation, or pinned Harness integration. M10 settles
-the provider-neutral capture and indexing contract before M11 proves the same
-complete surface through a second passive adapter.
+It does not yet have indexing instrumentation or measured unchanged-run
+optimization, the Cursor adapter, release automation, or pinned Harness
+integration. Instrumentation and measured optimization complete M10 before M11
+proves the same provider-neutral surface through a second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -1111,9 +1109,9 @@ This milestone may use separate scoped executor plans when capture truth, retry
 recovery, and measured performance work would be safer to review independently.
 All parts remain provider-neutral and land before Cursor adapter work.
 
-Capture-scope reporting and all-tracked complete-scan reconciliation are
-implemented. Bounded source-change retry is the next scoped item;
-instrumentation and measured stable-run optimization follow it.
+Capture-scope reporting, all-tracked complete-scan reconciliation, and bounded
+source-change retry are implemented. Instrumentation and measured stable-run
+optimization are the remaining M10 work.
 
 Primary change areas:
 
