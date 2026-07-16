@@ -9,7 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. The next M8 work adds literal-any search,
-list/search root attribution, and activity bounds. M9 packages the Agent Skill,
+Active executor plan:
+
+- [Add any-term search, query roots, and activity bounds](260715-search-roots-activity.md)
+
+This completes the remaining M8 query contract. M9 packages the Agent Skill,
 M10 proves Cursor equivalence, and Markdown presentation remains deferred beyond
 V1.
