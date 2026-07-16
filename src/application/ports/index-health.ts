@@ -5,8 +5,11 @@ export type IndexHealthCheck = "failed" | "ok";
 export type IndexFtsSecureDeleteHealth = "enabled" | "missing" | "unsupported";
 export type IndexPageReclamationHealth = "incremental" | "invalid";
 export type IndexContentReachabilityHealth = "inspection-failed" | "ok" | "orphaned";
+export type ReadySessionCaptureScope = Omit<SessionCaptureScope, "status"> & {
+  readonly status: "complete" | "incomplete";
+};
 export type IndexCaptureScopeHealth =
-  | SessionCaptureScope
+  | ReadySessionCaptureScope
   | { readonly status: "inspection-failed" };
 export type IndexWriterLeaseHealth =
   | "clear-live"

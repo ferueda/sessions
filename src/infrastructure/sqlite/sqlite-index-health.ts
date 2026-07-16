@@ -116,7 +116,9 @@ function inspectCaptureScope(
 ): IndexCaptureScopeHealth {
   if (canonicalIntegrity !== "ok") return { status: "inspection-failed" };
   try {
-    return readSqliteCaptureScope(database);
+    const scope = readSqliteCaptureScope(database);
+    if (scope.status === "uninitialized") return { status: "inspection-failed" };
+    return { ...scope, status: scope.status };
   } catch {
     return { status: "inspection-failed" };
   }

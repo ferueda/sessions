@@ -3,13 +3,13 @@ import { describe, expect, test } from "vitest";
 import type {
   IndexHealthInspector,
   ReadyIndexHealth,
+  ReadySessionCaptureScope,
 } from "../../src/application/ports/index-health.ts";
 import type {
   IndexPaths,
   IndexStateInspector,
 } from "../../src/application/ports/index-lifecycle.ts";
 import type { IndexState } from "../../src/domain/index-state.ts";
-import type { SessionCaptureScope } from "../../src/domain/session-capture-scope.ts";
 import { createIndexStateDiagnostic } from "../../src/infrastructure/state/index-state-diagnostic.ts";
 
 const paths: IndexPaths = {
@@ -362,7 +362,7 @@ const healthyIndex: ReadyIndexHealth = {
   interruptedRuns: 0,
 };
 
-const incompleteCaptureScope: SessionCaptureScope = {
+const incompleteCaptureScope: ReadySessionCaptureScope = {
   status: "incomplete",
   trackedSessions: 1,
   retainedSessions: { current: 0, stale: 0 },
