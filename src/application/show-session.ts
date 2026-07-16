@@ -1,6 +1,7 @@
 import { SessionLibraryError } from "./library-error.ts";
 import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
+import { admitSessionEntryRange, resolveSessionEntryWindow } from "./session-entry-range.ts";
 import { selectSessionTranscript, type SelectedSessionTranscript } from "./session-presentation.ts";
 import { projectPublicSessionDocument } from "../domain/public-session-document.ts";
 import type { SessionIdentity } from "../domain/session.ts";
@@ -18,9 +19,12 @@ export async function showSession(input: {
   readonly identity: SessionIdentity;
   readonly entry?: number;
   readonly context?: number;
+  readonly fromEntry?: number;
+  readonly toEntry?: number;
 }): Promise<ShowSessionResult> {
   formatSessionIdentity(input.identity);
-  validateSelection(input.entry, input.context);
+  const entryRange = admitSessionEntryRange(input);
+  validateSelection(input.entry, input.context, entryRange !== undefined);
   const state = await input.lifecycle.inspect(input.paths);
   if (state.status === "uninitialized") throw new SessionLibraryError("session-not-found");
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
@@ -31,7 +35,9 @@ export async function showSession(input: {
     const total = indexed.document.entries.length;
     let start = 0;
     let end = Math.min(total, DEFAULT_SHOW_ENTRY_COUNT);
-    if (input.entry !== undefined) {
+    if (entryRange !== undefined) {
+      ({ start, end } = resolveSessionEntryWindow(entryRange, total));
+    } else if (input.entry !== undefined) {
       if (input.entry >= total) throw new SessionLibraryError("entry-not-found");
       const context = input.context ?? DEFAULT_SHOW_CONTEXT;
       start = Math.max(0, input.entry - context);
@@ -46,7 +52,14 @@ export async function showSession(input: {
   });
 }
 
-function validateSelection(entry: number | undefined, context: number | undefined): void {
+function validateSelection(
+  entry: number | undefined,
+  context: number | undefined,
+  hasEntryRange: boolean,
+): void {
+  if (hasEntryRange && (entry !== undefined || context !== undefined)) {
+    throw new TypeError("Entry range cannot be combined with entry or context");
+  }
   if (entry !== undefined && (!Number.isSafeInteger(entry) || entry < 0)) {
     throw new TypeError("Entry must be a non-negative integer");
   }

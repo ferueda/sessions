@@ -45,6 +45,7 @@ node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
 node dist/bin/sessions.js search 'query engine' --context 2
 node dist/bin/sessions.js search -- '-term'
 node dist/bin/sessions.js show '<canonical-id>'
+node dist/bin/sessions.js show '<canonical-id>' --from-entry 120 --to-entry 139
 node dist/bin/sessions.js export '<canonical-id>' --format jsonl
 ```
 
@@ -57,8 +58,10 @@ sessions index [--source codex] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--limit N] [--context N] [--cursor TOKEN]
                        [--format human|json|jsonl]
-sessions show <canonical-id> [--entry N --context N] [--format human|json|jsonl]
-sessions export <canonical-id> --format json|jsonl [--full]
+sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
+                             [--format human|json|jsonl]
+sessions export <canonical-id> --format json|jsonl
+                               [--full | --from-entry N --to-entry N]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -81,7 +84,10 @@ human, JSON, and independently attributable JSONL output. List defaults to 50
 sessions; search defaults to 20 entry hits and zero adjacent context; both accept
 at most 200 primary rows and emit an opaque next cursor when another page exists.
 Show defaults to the first 50 entries or 3 entries of context around `--entry`
-(maximum context 100). Format does not change query ordering or cursor identity.
+(maximum context 100). Show and export also accept one inclusive
+`--from-entry`/`--to-entry` range of at most 200 entries. Both options are
+required; invalid, reversed, conflicting, or out-of-document ranges fail rather
+than being clamped. Format does not change query ordering or cursor identity.
 
 Search treats whitespace-delimited input as literal FTS terms combined with AND,
 not as public FTS syntax. Use the `--` delimiter before search text that begins
@@ -96,9 +102,13 @@ the [CLI contract](docs/reference/cli-contract.md).
 `export` extracts one retained canonical snapshot as JSON or JSONL without
 reopening Codex, following relations, or delivering it anywhere. Default
 show/export output applies explicit title, relation, entry, segment, and raw-text
-bounds. `export --full` removes those presentation bounds for export-eligible
-fields in that one snapshot; it does not expose raw provider payloads or omitted
-media. Every transcript-bearing structured record is marked
+bounds after entry selection. A selected range can still contain truncated text
+or omitted segments under those bounds. Every result keeps the digest of the
+complete retained document, not a digest of the selected range. Sessions still
+reads and validates that complete document before selecting the range.
+`export --full` removes presentation bounds for export-eligible fields in that
+one snapshot; it does not expose raw provider payloads or omitted media. Every
+transcript-bearing structured record is marked
 `untrusted-history`, and every bounded machine result is encoded fully before
 stdout and limited to 16 MiB. See the
 [structured output contract](docs/reference/structured-output.md) for the exact

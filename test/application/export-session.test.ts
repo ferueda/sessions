@@ -61,6 +61,62 @@ describe("exportSession", () => {
     expect(serialized).not.toContain("memory://synthetic");
   });
 
+  test("exports one exact inclusive range with complete-document attribution", async () => {
+    const indexed = sessionWithEntries(8, "present");
+    const lifecycle = lifecycleWith(indexed);
+
+    const result = await exportSession({
+      paths,
+      lifecycle,
+      identity,
+      fromEntry: 3,
+      toEntry: 3,
+    });
+
+    expect(result.entries.map(({ ordinal }) => ordinal)).toEqual([3]);
+    expect(result.snapshot.selection).toMatchObject({
+      mode: "bounded",
+      entries: {
+        selected: 1,
+        total: 8,
+        truncated: true,
+        firstOrdinal: 3,
+        lastOrdinal: 3,
+      },
+    });
+    expect(result.snapshot.documentDigest).toEqual(indexed.summary.documentDigest);
+    const reader = await lifecycle.openReader.mock.results[0]!.value;
+    expect(reader.sessions.getSession).toHaveBeenCalledOnce();
+    expect(reader.close).toHaveBeenCalledOnce();
+  });
+
+  test("rejects full mode plus a range before inspection", async () => {
+    const lifecycle = lifecycleWith(sessionWithEntries(3, "present"));
+
+    await expect(
+      exportSession({
+        paths,
+        lifecycle,
+        identity,
+        full: true,
+        fromEntry: 0,
+        toEntry: 1,
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(lifecycle.inspect).not.toHaveBeenCalled();
+  });
+
+  test("rejects an out-of-document range after closing one immutable reader", async () => {
+    const lifecycle = lifecycleWith(sessionWithEntries(3, "present"));
+
+    await expect(
+      exportSession({ paths, lifecycle, identity, fromEntry: 2, toEntry: 3 }),
+    ).rejects.toMatchObject({ code: "entry-not-found" });
+    const reader = await lifecycle.openReader.mock.results[0]!.value;
+    expect(reader.sessions.getSession).toHaveBeenCalledOnce();
+    expect(reader.close).toHaveBeenCalledOnce();
+  });
+
   test("does not create storage or open a reader for an absent library", async () => {
     const lifecycle = lifecycleWith(undefined, "uninitialized");
 

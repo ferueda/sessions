@@ -239,7 +239,20 @@ describe("sessions CLI", () => {
       documentDigest: bundle.snapshot.documentDigest,
       entry: bundle.entries[0],
     });
-    expect(show).toHaveBeenCalledTimes(2);
+    expect(show.mock.calls.map(([input]) => input)).toEqual([
+      {
+        identity: {
+          source: { kind: "synthetic", instanceId: "one" },
+          nativeId: "session",
+        },
+      },
+      {
+        identity: {
+          source: { kind: "synthetic", instanceId: "one" },
+          nativeId: "session",
+        },
+      },
+    ]);
   });
 
   test("requires an export format and forwards the explicit full request", async () => {
@@ -272,6 +285,56 @@ describe("sessions CLI", () => {
         nativeId: "session",
       },
       full: true,
+    });
+  });
+
+  test("forwards exact bounded entry ranges to show and export", async () => {
+    const show = vi.fn<ProgramOptions["show"]>(async () => selectedSnapshot());
+    const exportSession = vi.fn<ProgramOptions["export"]>(async () => selectedSnapshot());
+
+    const shown = await invoke(
+      [
+        "show",
+        "synthetic@one:session",
+        "--from-entry",
+        "0",
+        "--to-entry",
+        "199",
+        "--format",
+        "json",
+      ],
+      { show },
+    );
+    const exported = await invoke(
+      [
+        "export",
+        "synthetic@one:session",
+        "--from-entry",
+        "7",
+        "--to-entry",
+        "7",
+        "--format",
+        "jsonl",
+      ],
+      { export: exportSession },
+    );
+
+    expect([shown.exitCode, exported.exitCode]).toEqual([0, 0]);
+    expect(show).toHaveBeenCalledExactlyOnceWith({
+      identity: {
+        source: { kind: "synthetic", instanceId: "one" },
+        nativeId: "session",
+      },
+      fromEntry: 0,
+      toEntry: 199,
+    });
+    expect(exportSession).toHaveBeenCalledExactlyOnceWith({
+      identity: {
+        source: { kind: "synthetic", instanceId: "one" },
+        nativeId: "session",
+      },
+      fromEntry: 7,
+      toEntry: 7,
     });
   });
 
@@ -481,6 +544,73 @@ describe("sessions CLI", () => {
     expect(invalidIdentity.exitCode).toBe(2);
     expect(invalidContext.exitCode).toBe(2);
     expect(show).not.toHaveBeenCalled();
+  });
+
+  test("rejects invalid or conflicting entry ranges before calling handlers", async () => {
+    const show = vi.fn<ProgramOptions["show"]>();
+    const exportSession = vi.fn<ProgramOptions["export"]>();
+    const showCases = [
+      ["show", "synthetic@one:session", "--from-entry", "1"],
+      ["show", "synthetic@one:session", "--to-entry", "1"],
+      ["show", "synthetic@one:session", "--from-entry", "2", "--to-entry", "1"],
+      ["show", "synthetic@one:session", "--from-entry", "0", "--to-entry", "200"],
+      ["show", "synthetic@one:session", "--from-entry", "0", "--to-entry", "1", "--entry", "0"],
+      ["show", "synthetic@one:session", "--from-entry", "0", "--to-entry", "1", "--context", "1"],
+      ["show", "synthetic@one:session", "--from-entry", "-1", "--to-entry", "1"],
+    ];
+    const exportCases = [
+      ["export", "synthetic@one:session", "--format", "json", "--from-entry", "1"],
+      [
+        "export",
+        "synthetic@one:session",
+        "--format",
+        "json",
+        "--from-entry",
+        "2",
+        "--to-entry",
+        "1",
+      ],
+      [
+        "export",
+        "synthetic@one:session",
+        "--format",
+        "json",
+        "--from-entry",
+        "0",
+        "--to-entry",
+        "200",
+      ],
+      [
+        "export",
+        "synthetic@one:session",
+        "--format",
+        "json",
+        "--from-entry",
+        "0",
+        "--to-entry",
+        "1",
+        "--full",
+      ],
+      [
+        "export",
+        "synthetic@one:session",
+        "--format",
+        "json",
+        "--from-entry",
+        "9007199254740992",
+        "--to-entry",
+        "9007199254740992",
+      ],
+    ];
+
+    const results = [
+      ...(await Promise.all(showCases.map((argv) => invoke(argv, { show })))),
+      ...(await Promise.all(exportCases.map((argv) => invoke(argv, { export: exportSession })))),
+    ];
+
+    expect(results.every(({ exitCode }) => exitCode === 2)).toBe(true);
+    expect(show).not.toHaveBeenCalled();
+    expect(exportSession).not.toHaveBeenCalled();
   });
 
   test("rejects numeric values outside command bounds before calling handlers", async () => {

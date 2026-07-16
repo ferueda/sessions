@@ -10,6 +10,7 @@ import type { IndexReport } from "../application/index-report.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
 import type { SearchSessionsResult } from "../application/search-sessions.ts";
 import type { DoctorReport } from "../application/run-doctor.ts";
+import { MAX_SESSION_ENTRY_RANGE_COUNT } from "../application/session-entry-range.ts";
 import type { ShowSessionResult } from "../application/show-session.ts";
 import { MAX_LIST_LIMIT } from "../application/list-sessions.ts";
 import { MAX_SEARCH_CONTEXT, MAX_SEARCH_LIMIT } from "../application/search-sessions.ts";
@@ -78,10 +79,14 @@ export interface ProgramOptions {
     readonly identity: SessionIdentity;
     readonly entry?: number;
     readonly context?: number;
+    readonly fromEntry?: number;
+    readonly toEntry?: number;
   }) => Promise<ShowSessionResult>;
   readonly export: (input: {
     readonly identity: SessionIdentity;
     readonly full?: boolean;
+    readonly fromEntry?: number;
+    readonly toEntry?: number;
   }) => Promise<ExportSessionResult>;
   readonly forget: (identity: SessionIdentity) => Promise<ForgetSessionReport>;
   readonly clearData: () => Promise<DataClearReport>;
@@ -221,7 +226,7 @@ export function createProgram(options: ProgramOptions): Command {
       options.output.writeOut(renderSearchOutput(result, values.format));
     });
 
-  program
+  const show = program
     .command("show <canonical-id>")
     .description("Show a retained session transcript")
     .addOption(retainedQueryFormatOption())
@@ -234,34 +239,46 @@ export function createProgram(options: ProgramOptions): Command {
       new Option("--context <number>", "entries of context").argParser((value) =>
         parseInteger(value, { minimum: 0, maximum: MAX_SHOW_CONTEXT }),
       ),
-    )
-    .action(async (canonicalId: string, values: ShowOptionValues) => {
-      if (values.context !== undefined && values.entry === undefined)
-        usage("--context requires --entry");
-      const identity = parseIdentity(canonicalId);
-      const result = await options.show({
-        identity,
-        ...(values.entry === undefined ? {} : { entry: values.entry }),
-        ...(values.context === undefined ? {} : { context: values.context }),
-      });
-      options.output.writeOut(renderSnapshotOutput("show", result, values.format, false));
+    );
+  addEntryRangeOptions(show).action(async (canonicalId: string, values: ShowOptionValues) => {
+    const range = entryRangeInput(values);
+    if (range !== undefined && (values.entry !== undefined || values.context !== undefined)) {
+      usage("--from-entry/--to-entry cannot be combined with --entry or --context");
+    }
+    if (values.context !== undefined && values.entry === undefined)
+      usage("--context requires --entry");
+    const identity = parseIdentity(canonicalId);
+    const result = await options.show({
+      identity,
+      ...(values.entry === undefined ? {} : { entry: values.entry }),
+      ...(values.context === undefined ? {} : { context: values.context }),
+      ...range,
     });
+    options.output.writeOut(renderSnapshotOutput("show", result, values.format, false));
+  });
 
-  program
+  const exportCommand = program
     .command("export <canonical-id>")
     .description("Export one retained session as portable structured context")
     .addOption(exportFormatOption())
-    .option("--full", "include every export-eligible field without presentation bounds")
-    .action(async (canonicalId: string, values: ExportOptionValues) => {
+    .option("--full", "include every export-eligible field without presentation bounds");
+  addEntryRangeOptions(exportCommand).action(
+    async (canonicalId: string, values: ExportOptionValues) => {
+      const range = entryRangeInput(values);
+      if (range !== undefined && values.full === true) {
+        usage("--from-entry/--to-entry cannot be combined with --full");
+      }
       const identity = parseIdentity(canonicalId);
       const result = await options.export({
         identity,
         ...(values.full === true ? { full: true } : {}),
+        ...range,
       });
       options.output.writeOut(
         renderSnapshotOutput("export", result, values.format, values.full === true),
       );
-    });
+    },
+  );
 
   program
     .command("forget <canonical-id>")
@@ -359,11 +376,20 @@ interface ShowOptionValues {
   readonly format: RetainedQueryOutputFormat;
   readonly entry?: number;
   readonly context?: number;
+  readonly fromEntry?: number;
+  readonly toEntry?: number;
 }
 
 interface ExportOptionValues {
   readonly format: ExportOutputFormat;
   readonly full?: boolean;
+  readonly fromEntry?: number;
+  readonly toEntry?: number;
+}
+
+interface EntryRangeOptionValues {
+  readonly fromEntry?: number;
+  readonly toEntry?: number;
 }
 
 function renderListOutput(result: ListSessionsResult, format: RetainedQueryOutputFormat): string {
@@ -449,6 +475,36 @@ function addSessionFilterOptions(command: Command): Command {
       parseTimestamp,
     )
     .option("--session <canonical-id>", "exact canonical session", parseIdentity);
+}
+
+function addEntryRangeOptions(command: Command): Command {
+  return command
+    .addOption(
+      new Option("--from-entry <number>", "first entry ordinal, inclusive").argParser((value) =>
+        parseInteger(value, { minimum: 0 }),
+      ),
+    )
+    .addOption(
+      new Option("--to-entry <number>", "last entry ordinal, inclusive").argParser((value) =>
+        parseInteger(value, { minimum: 0 }),
+      ),
+    );
+}
+
+function entryRangeInput(
+  values: EntryRangeOptionValues,
+): { readonly fromEntry: number; readonly toEntry: number } | undefined {
+  if (values.fromEntry === undefined && values.toEntry === undefined) return undefined;
+  if (values.fromEntry === undefined || values.toEntry === undefined) {
+    usage("--from-entry and --to-entry must be used together");
+  }
+  if (values.fromEntry > values.toEntry) {
+    usage("entry range must not be reversed");
+  }
+  if (values.toEntry - values.fromEntry >= MAX_SESSION_ENTRY_RANGE_COUNT) {
+    usage(`entry range may contain at most ${String(MAX_SESSION_ENTRY_RANGE_COUNT)} entries`);
+  }
+  return { fromEntry: values.fromEntry, toEntry: values.toEntry };
 }
 
 function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefined {

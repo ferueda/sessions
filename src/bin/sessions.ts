@@ -93,20 +93,24 @@ const exitCode = await runCli(process.argv.slice(2), {
       ...(context === undefined ? {} : { context }),
       ...(cursor === undefined ? {} : { cursor }),
     }),
-  show: ({ identity, entry, context }) =>
+  show: ({ identity, entry, context, fromEntry, toEntry }) =>
     showSession({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       identity,
       ...(entry === undefined ? {} : { entry }),
       ...(context === undefined ? {} : { context }),
+      ...(fromEntry === undefined ? {} : { fromEntry }),
+      ...(toEntry === undefined ? {} : { toEntry }),
     }),
-  export: ({ identity, full }) =>
+  export: ({ identity, full, fromEntry, toEntry }) =>
     exportSession({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       identity,
       ...(full === undefined ? {} : { full }),
+      ...(fromEntry === undefined ? {} : { fromEntry }),
+      ...(toEntry === undefined ? {} : { toEntry }),
     }),
   forget: (identity) => forgetSession(resolvePaths(), maintenance, identity),
   clearData: () => clearData(resolvePaths(), maintenance),

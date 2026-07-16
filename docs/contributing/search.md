@@ -47,6 +47,15 @@ and lineage counts still inspect the full qualifying result, so broad searches c
 still take longer on large libraries. The design favors exact evidence over
 approximate counts or ranking.
 
+## Retrieve an exact span
+
+After search identifies useful entry ordinals, `show` or `export` can retrieve
+one paired inclusive range of at most 200 entries. Ranges never clamp and cannot
+combine with focused show or full export. Existing segment/text limits still
+apply inside the range, while the document digest continues to identify the
+complete retained document. This bounds returned evidence; the current reader
+still reconstructs and verifies the complete document first.
+
 ## Code and proof
 
 - Admission and result types: `src/domain/session-query.ts` and

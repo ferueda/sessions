@@ -326,6 +326,43 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "structured show",
     );
 
+    const rangedShow = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "show",
+      canonicalId,
+      "--from-entry",
+      "1",
+      "--to-entry",
+      "3",
+      "--format",
+      "json",
+    ]);
+    assertCommand(rangedShow, 0, "ranged structured show");
+    assertNoPrivateFixtureMarkers(rangedShow.stdout, "ranged structured show");
+    const rangedShowReport = parseJson(rangedShow.stdout);
+    assertStructuredHeader(rangedShowReport, "show", "snapshot");
+    const rangedSnapshot = readObject(rangedShowReport.snapshot);
+    assertSameAttribution(
+      rangedSnapshot,
+      structuredSession,
+      structuredDigest,
+      "ranged structured show",
+    );
+    const rangedSelection = readObject(rangedSnapshot.selection);
+    assert.equal(rangedSelection.mode, "bounded");
+    assert.deepEqual(readObject(rangedSelection.entries), {
+      selected: 3,
+      total: 6,
+      firstOrdinal: 1,
+      lastOrdinal: 3,
+      truncated: true,
+    });
+    assert.deepEqual(
+      readArray(rangedShowReport, "entries").map((entry) =>
+        readNonNegativeSafeInteger(readObject(entry).ordinal, "ranged entry ordinal"),
+      ),
+      [1, 2, 3],
+    );
+
     const structuredExport = await stableProviderCommand(options, fixture.codexHome, environment, [
       "export",
       canonicalId,
