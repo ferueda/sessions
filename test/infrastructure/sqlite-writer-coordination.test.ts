@@ -12,13 +12,19 @@ import {
   minimalDocument,
   observation,
 } from "../contracts/session-index.contract.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+  sqliteMigrations,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
+import { acquireWriterSchema } from "../../src/infrastructure/sqlite/writer-schema.ts";
 import {
   acquireWriterLease,
   heartbeatWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
+  interruptOwnedRunsMarkCleanAndReleaseWriterLease,
   readWriterLeaseHealth,
   runLeasedImmediateTransaction,
   startWriterLeaseHeartbeat,
@@ -125,6 +131,112 @@ describe("SQLite writer coordination", () => {
       expect(readWriterLeaseHealth(database, { now: clock.now })).toEqual({
         status: "free",
         generation: 1,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("binds fast-path eligibility to the exact clean generation and schema", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const first = acquireWriterSchema(database, "index", sqliteMigrations, {
+        now: clock.now,
+        token: () => "first-clean-owner",
+      });
+      expect(first.fastPathEligible).toBe(false);
+
+      const clean = interruptOwnedRunsMarkCleanAndReleaseWriterLease(database, first.lease, {
+        now: clock.now,
+      });
+      const libraryInstanceId = String(
+        database.prepare("SELECT instance_id FROM sessions_library WHERE singleton = 1").get()
+          ?.instance_id,
+      );
+      expect(clean).toEqual({
+        generation: 1,
+        schemaCookie: expect.any(Number),
+      });
+      expect(leaseRow(database)).toMatchObject({
+        generation: 1,
+        clean_generation: 1,
+        clean_schema_cookie: clean?.schemaCookie,
+        purpose: null,
+      });
+
+      const second = acquireWriterSchema(database, "index", sqliteMigrations, {
+        now: clock.now,
+        token: () => "second-clean-owner",
+        cleanClaim: {
+          generation: clean?.generation ?? -1,
+          schemaCookie: clean?.schemaCookie ?? -1,
+          schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+          libraryInstanceId,
+        },
+      });
+      expect(second.fastPathEligible).toBe(true);
+      expect(second.lease.generation).toBe(2);
+      expect(leaseRow(database)).toMatchObject({
+        generation: 2,
+        clean_generation: 1,
+        clean_schema_cookie: clean?.schemaCookie,
+        purpose: "index",
+      });
+      expect(
+        interruptOwnedRunsAndReleaseWriterLease(database, second.lease, { now: clock.now }),
+      ).toBe(true);
+
+      const mismatched = acquireWriterSchema(database, "index", sqliteMigrations, {
+        now: clock.now,
+        token: () => "mismatched-clean-owner",
+        cleanClaim: {
+          generation: 2,
+          schemaCookie: clean?.schemaCookie ?? -1,
+          schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+          libraryInstanceId: "different-library",
+        },
+      });
+      expect(mismatched.fastPathEligible).toBe(false);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("does not let a stale or backward-clock owner mark a generation clean", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const first = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "stale-clean-owner",
+      });
+      clock.set("2026-07-13T12:01:00.000Z");
+      const replacement = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "replacement-clean-owner",
+      });
+      expect(
+        interruptOwnedRunsMarkCleanAndReleaseWriterLease(database, first, { now: clock.now }),
+      ).toBeUndefined();
+      expect(leaseRow(database)).toMatchObject({
+        generation: 2,
+        clean_generation: null,
+        clean_schema_cookie: null,
+        purpose: "index",
+      });
+
+      clock.set("2026-07-13T11:59:59.000Z");
+      expect(() =>
+        interruptOwnedRunsMarkCleanAndReleaseWriterLease(database, replacement, {
+          now: clock.now,
+        }),
+      ).toThrow(expect.objectContaining({ code: "writer-lease-lost" }));
+      expect(leaseRow(database)).toMatchObject({
+        generation: 2,
+        clean_generation: null,
+        clean_schema_cookie: null,
+        purpose: "index",
       });
     } finally {
       database.close();

@@ -42,6 +42,7 @@ import {
   configureSqliteWriterDatabase,
   openSqliteWriterDatabase,
 } from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
+import { readWriterCleanProof } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
 
 const PRIOR_DOCUMENT_DIGEST_BOOTSTRAP_CHECKSUM =
   "sha256-utf8-v1:9e2233fa22b3dc8f999252985e3a65a036198d773ac4ebe6d787fd45ddbc2e5e";
@@ -115,6 +116,13 @@ describe("SQLite index lifecycle", () => {
       expect(firstHistory[index]?.checksum).toMatch(/^sha256-utf8-v1:[a-f0-9]{64}$/u);
     }
     await firstWriter.close();
+    const firstProof = await readWriterCleanProof(paths.database);
+    expect(firstProof).toMatchObject({
+      version: 1,
+      writerGeneration: 1,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      schemaCookie: expect.any(Number),
+    });
 
     const secondWriter = await lifecycle.openWriter(paths);
     expect(secondWriter.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
@@ -123,7 +131,20 @@ describe("SQLite index lifecycle", () => {
         .prepare("SELECT version, name, checksum, applied_at FROM sessions_schema_migrations")
         .all(),
     ).toEqual(firstHistory);
+    expect(
+      secondWriter.database.prepare("SELECT * FROM sessions_writer_lease").get(),
+    ).toMatchObject({
+      generation: 2,
+      clean_generation: 1,
+      clean_schema_cookie: firstProof?.schemaCookie,
+      purpose: "index",
+    });
     await secondWriter.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: 2,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      schemaCookie: firstProof?.schemaCookie,
+    });
     await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
       status: "ready",
       schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,

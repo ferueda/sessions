@@ -40,6 +40,7 @@ import {
   type WriterLeaseIdentity,
   type WriterLeaseScheduler,
 } from "./writer-lease.ts";
+import { clearWriterCleanProofFiles } from "./writer-clean-proof.ts";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
@@ -174,7 +175,18 @@ async function clearSqliteIndex(
   const scratch = await inspectScratchPresence(paths.scratch);
   const knownStatePresent =
     safety.presence.database || safety.presence.wal || safety.presence.shm || scratch.exists;
-  if (!knownStatePresent) return absentResult;
+  if (!knownStatePresent) {
+    if (!safety.safe) throw new IndexMaintenanceError("unsafe-index");
+    try {
+      await clearWriterCleanProofFiles(paths.database, {
+        platform: options.platform,
+        ...(options.unlinkFile === undefined ? {} : { unlinkFile: options.unlinkFile }),
+      });
+    } catch (error) {
+      throw new IndexMaintenanceError("clear-failed", { cause: error });
+    }
+    return absentResult;
+  }
   if (!safety.safe) {
     throw new IndexMaintenanceError("unsafe-index");
   }
@@ -467,6 +479,12 @@ async function removeKnownIndexFiles(
 
   try {
     const removeFile = options.unlinkFile ?? unlink;
+    // Removing proof first is conservative: a later file-removal failure only
+    // forces the next writer through full validation.
+    await clearWriterCleanProofFiles(paths.database, {
+      platform: options.platform,
+      unlinkFile: removeFile,
+    });
     removed.shm = await removeIfUnchanged(paths.shm, snapshots.shm, removeFile);
     removed.wal = await removeIfUnchanged(paths.wal, snapshots.wal, removeFile);
     removed.database = await removeIfUnchanged(paths.database, snapshots.database, removeFile);

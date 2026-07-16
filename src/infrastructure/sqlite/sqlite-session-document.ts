@@ -19,6 +19,7 @@ import type {
 import {
   deleteUnreferencedContentCandidates,
   readSessionContentCandidates,
+  type SqliteContentId,
 } from "./sqlite-content-maintenance.ts";
 import { decodeSqliteContentDigest, encodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import {
@@ -32,12 +33,9 @@ export function replaceCanonicalDocument(
   sessionId: number,
   document: SessionDocument,
   documentDigest: SessionDocumentDigest,
-): void {
+): readonly SqliteContentId[] {
   const storedDigest = encodeSqliteDocumentDigest(documentDigest);
   const obsoleteContentCandidates = readSessionContentCandidates(database, sessionId);
-  // Replacement keeps its established fail-closed JS-safe canonical ID boundary;
-  // storage maintenance uses the shared helper with full signed SQLite IDs.
-  for (const contentId of obsoleteContentCandidates) integerAt(contentId);
   database.prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?").run(sessionId);
   database
     .prepare(
@@ -64,8 +62,11 @@ export function replaceCanonicalDocument(
     );
 
   insertRelations(database, sessionId, document.relations);
-  insertEntries(database, sessionId, document.entries);
+  const resultingContentIds = insertEntries(database, sessionId, document.entries);
   deleteUnreferencedContentCandidates(database, obsoleteContentCandidates);
+  return [...new Set([...obsoleteContentCandidates, ...resultingContentIds])].toSorted(
+    compareContentIds,
+  );
 }
 
 export function readCanonicalDocument(
@@ -156,7 +157,7 @@ function insertEntries(
   database: DatabaseSync,
   sessionId: number,
   entries: readonly SessionEntry[],
-): void {
+): readonly SqliteContentId[] {
   const entryStatement = database.prepare(
     `INSERT INTO sessions_entries (
        session_id,
@@ -186,6 +187,7 @@ function insertEntries(
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   let contentStatements: ContentStatements | undefined;
+  const contentIds = new Set<SqliteContentId>();
 
   for (const entry of entries) {
     entryStatement.run(
@@ -206,6 +208,7 @@ function insertEntries(
         segment.kind === "text"
           ? internContent((contentStatements ??= prepareContentStatements(database)), segment)
           : null;
+      if (contentId !== null) contentIds.add(contentId);
       occurrenceStatement.run(
         sessionId,
         entry.ordinal,
@@ -219,37 +222,42 @@ function insertEntries(
       );
     }
   }
+  return [...contentIds];
 }
 
 function prepareContentStatements(database: DatabaseSync): ContentStatements {
-  return {
-    insert: database.prepare(
-      `INSERT INTO sessions_content_values (digest, text)
+  const insert = database.prepare(
+    `INSERT INTO sessions_content_values (digest, text)
        VALUES (?, ?)
        RETURNING content_id`,
-    ),
-    find: database.prepare(
-      `SELECT content_id
+  );
+  const find = database.prepare(
+    `SELECT content_id
        FROM sessions_content_values
        WHERE digest = ? AND text = ? COLLATE BINARY
        ORDER BY content_id
        LIMIT 2`,
-    ),
-  };
+  );
+  insert.setReadBigInts(true);
+  find.setReadBigInts(true);
+  return { insert, find };
 }
 
-function internContent(statements: ContentStatements, segment: TextContentSegment): number {
+function internContent(
+  statements: ContentStatements,
+  segment: TextContentSegment,
+): SqliteContentId {
   const digest = encodeSqliteContentDigest(segment.contentHash.digest);
   const rows = statements.find.all(digest, segment.text) as unknown as readonly {
     readonly content_id?: unknown;
   }[];
   if (rows.length > 1) throw new SqliteSessionIndexError("corrupt-data");
   const existing = rows[0];
-  if (existing !== undefined) return integerAt(existing.content_id);
+  if (existing !== undefined) return contentIdAt(existing.content_id);
   const inserted = statements.insert.get(digest, segment.text) as
     | { readonly content_id?: unknown }
     | undefined;
-  return integerAt(inserted?.content_id);
+  return contentIdAt(inserted?.content_id);
 }
 
 interface ContentStatements {
@@ -323,9 +331,8 @@ function readSegments(
   database: DatabaseSync,
   sessionId: number,
 ): ReadonlyMap<number, ContentSegment[]> {
-  const rows = database
-    .prepare(
-      `SELECT occurrence.entry_ordinal,
+  const statement = database.prepare(
+    `SELECT occurrence.entry_ordinal,
               occurrence.segment_ordinal,
               occurrence.origin,
               occurrence.confidence,
@@ -340,8 +347,9 @@ function readSegments(
          ON content.content_id = occurrence.content_id
        WHERE occurrence.session_id = ?
        ORDER BY occurrence.entry_ordinal, occurrence.segment_ordinal`,
-    )
-    .all(sessionId) as unknown as readonly SegmentRow[];
+  );
+  statement.setReadBigInts(true);
+  const rows = statement.all(sessionId) as unknown as readonly SegmentRow[];
   const result = new Map<number, ContentSegment[]>();
   for (const row of rows) {
     const entryOrdinal = integerAt(row.entry_ordinal);
@@ -370,7 +378,7 @@ function readSegments(
         sourceType: row.source_type,
       });
     } else {
-      integerAt(row.content_id);
+      contentIdAt(row.content_id);
       if (row.content_class !== null || row.source_type !== null || typeof row.text !== "string") {
         throw new SqliteSessionIndexError("corrupt-data");
       }
@@ -448,6 +456,21 @@ function integerAt(value: unknown): number {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   return integer;
+}
+
+function contentIdAt(value: unknown): SqliteContentId {
+  if (
+    typeof value !== "bigint" ||
+    value < -9_223_372_036_854_775_808n ||
+    value > 9_223_372_036_854_775_807n
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return value;
+}
+
+function compareContentIds(left: SqliteContentId, right: SqliteContentId): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 interface SessionRow {

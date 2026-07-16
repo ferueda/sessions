@@ -481,6 +481,41 @@ describe("SQLite ready-index health", () => {
     });
   });
 
+  test("detects semantic FTS damage without mutating the immutable library", async () => {
+    const paths = await initializedPaths();
+    const canonical = "alpha beta gamma";
+    const contentHash = hashContent(canonical);
+    mutateDatabase(paths.database, (database) => {
+      const inserted = database
+        .prepare(
+          `INSERT INTO sessions_content_values (digest, text)
+           VALUES (?, ?)
+           RETURNING content_id`,
+        )
+        .get(encodeSqliteContentDigest(contentHash.digest), canonical) as {
+        readonly content_id: number | bigint;
+      };
+      database
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(inserted.content_id, canonical);
+      database
+        .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+        .run(inserted.content_id, "alpha gamma beta");
+    });
+    const before = await persistenceSnapshot(paths);
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: false,
+      ftsStructure: "ok",
+      ftsContent: "failed",
+      ftsRemediation: "rebuild-required",
+    });
+    expect(await persistenceSnapshot(paths)).toEqual(before);
+  });
+
   test("detects a referenced malformed stored digest", async () => {
     expect.hasAssertions();
     const paths = await initializedPaths();

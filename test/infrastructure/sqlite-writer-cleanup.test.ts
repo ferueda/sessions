@@ -9,6 +9,13 @@ import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts"
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { openExistingSqliteWriterDatabase } from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { readWriterCleanProof } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
+import {
+  admittedReplacement,
+  identity,
+  minimalDocument,
+  observation,
+} from "../contracts/session-index.contract.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -43,10 +50,59 @@ describe("SQLite writer cleanup", () => {
     const database = new DatabaseSync(paths.database, { readOnly: true });
     try {
       expect(readWriterLeaseHealth(database, { now })).toEqual({ status: "free", generation: 1 });
+      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: null,
+        clean_schema_cookie: null,
+      });
     } finally {
       database.close();
     }
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
     await expect(lstat(paths.scratch)).resolves.toMatchObject({ isFile: expect.any(Function) });
+  });
+
+  test("does not publish clean proof after a repository write failure", async () => {
+    const paths = await fixturePaths();
+    const now = () => new Date("2026-07-14T13:00:00.000Z");
+    const writer = await createSqliteIndexLifecycle({
+      now,
+      writerToken: () => "failed-write-owner",
+    }).openWriter(paths);
+    const sessionIdentity = identity("failed-write-profile", "failed-write-session");
+    const run = await writer.sessions.startRun({
+      source: sessionIdentity.source,
+      startedAt: "2026-07-14T13:00:00.000Z",
+    });
+    writer.database.exec(`CREATE TRIGGER test_fail_canonical_insert
+                          BEFORE INSERT ON sessions_canonical_sessions
+                          BEGIN
+                            SELECT RAISE(ABORT, 'synthetic write failure');
+                          END`);
+
+    await expect(
+      writer.sessions.replaceSession(
+        run,
+        admittedReplacement(
+          observation(sessionIdentity, "failed-write-revision"),
+          minimalDocument(sessionIdentity),
+        ),
+      ),
+    ).rejects.toThrow("synthetic write failure");
+    await writer.close();
+
+    const database = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: null,
+        clean_schema_cookie: null,
+        purpose: null,
+      });
+    } finally {
+      database.close();
+    }
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
   });
 });
 

@@ -91,6 +91,40 @@ describe("canonical SQLite baseline", () => {
       });
       expect(tableColumns(database, "sessions_index_runs")).toContain("missing_count");
       expect(tableColumns(database, "sessions_index_runs")).not.toContain("removed_count");
+      expect(tableColumns(database, "sessions_writer_lease")).toEqual([
+        "singleton",
+        "generation",
+        "clean_generation",
+        "clean_schema_cookie",
+        "purpose",
+        "owner_token",
+        "acquired_at",
+        "heartbeat_at",
+        "expires_at",
+      ]);
+      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 0,
+        clean_generation: null,
+        clean_schema_cookie: null,
+      });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE sessions_writer_lease
+             SET clean_generation = 0,
+                 clean_schema_cookie = NULL`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint failed/u);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE sessions_writer_lease
+             SET clean_generation = 1,
+                 clean_schema_cookie = 1`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint failed/u);
       expect(
         database
           .prepare(

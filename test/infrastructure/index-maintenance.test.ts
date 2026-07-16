@@ -21,6 +21,7 @@ import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts"
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { writerCleanProofPaths } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
 
 const temporaryDirectories: string[] = [];
 const LEGACY_BOOTSTRAP_CHECKSUM =
@@ -49,6 +50,46 @@ describe("SQLite index maintenance", () => {
     });
     await expect(stat(paths.directory)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  test("removes proof-only residue without treating it as initialized storage", async () => {
+    const paths = await fixturePaths();
+    const proof = writerCleanProofPaths(paths.database);
+    const temporary = `${proof.temporaryPrefix}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`;
+    const neighbor = path.join(paths.directory, "keep.txt");
+    await mkdir(paths.directory, { mode: 0o700 });
+    await Promise.all([
+      writeFile(proof.proof, "stale proof", { mode: 0o600 }),
+      writeFile(temporary, "abandoned temporary proof", { mode: 0o600 }),
+      writeFile(neighbor, "unrelated", { mode: 0o600 }),
+    ]);
+
+    await expect(clearData(paths, createSqliteIndexMaintenance())).resolves.toEqual({
+      schemaVersion: 1,
+      command: "data-clear",
+      outcome: "absent",
+      scratchRemoved: false,
+      databaseRemoved: false,
+      walRemoved: false,
+      shmRemoved: false,
+    });
+    await expect(readdir(paths.directory)).resolves.toEqual(["keep.txt"]);
+  });
+
+  test.runIf(process.platform !== "win32")(
+    "does not remove proof residue through an unsafe owned directory",
+    async () => {
+      const paths = await fixturePaths();
+      const proof = writerCleanProofPaths(paths.database);
+      await mkdir(paths.directory, { mode: 0o700 });
+      await writeFile(proof.proof, "retain stale proof", { mode: 0o600 });
+      await chmod(paths.directory, 0o755);
+
+      await expect(clearData(paths, createSqliteIndexMaintenance())).rejects.toMatchObject({
+        code: "unsafe-index",
+      });
+      await expect(readFile(proof.proof, "utf8")).resolves.toBe("retain stale proof");
+    },
+  );
 
   test("removes an empty interrupted-initialization database", async () => {
     const paths = await fixturePaths();

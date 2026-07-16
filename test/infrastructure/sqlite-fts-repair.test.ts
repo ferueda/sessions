@@ -11,6 +11,10 @@ import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  publishWriterCleanProof,
+  readWriterCleanProof,
+} from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -137,6 +141,54 @@ describe("SQLite FTS projection repair", () => {
     }
   });
 
+  test("rejects a stat-valid clean proof from an older writer generation", async () => {
+    const paths = await initializedPaths();
+    const oldProof = await readWriterCleanProof(paths.database);
+    expect(oldProof).toBeDefined();
+    if (oldProof === undefined) throw new Error("Expected the initial clean proof");
+
+    const secondWriter = await createSqliteIndexLifecycle().openWriter(paths);
+    await secondWriter.close();
+
+    const text = "canonical alpha";
+    const contentHash = hashContent(text);
+    mutateDatabase(paths.database, (database) => {
+      const contentId = insertContent(database, contentHash.digest, text);
+      database
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(contentId, text);
+      database
+        .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+        .run(contentId, "poison beta");
+    });
+
+    // Bind the older generation to the current file stats. File identity alone
+    // must not authorize the fast path after a later writer sealed the library.
+    await publishWriterCleanProof(paths.database, {
+      libraryInstanceId: oldProof.libraryInstanceId,
+      writerGeneration: oldProof.writerGeneration,
+      schemaVersion: oldProof.schemaVersion,
+      schemaCookie: oldProof.schemaCookie,
+    });
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: oldProof.writerGeneration,
+    });
+
+    const repairingWriter = await createSqliteIndexLifecycle().openWriter(paths);
+    await repairingWriter.close();
+
+    const database = openImmutable(paths.database);
+    try {
+      expect(ftsMatchCount(database, "alpha")).toBe(1);
+      expect(ftsMatchCount(database, "beta")).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
   test("rebuilds an alternate tokenizer without changing canonical content", async () => {
     const paths = await initializedPaths();
     const text = "running evidence";
@@ -185,7 +237,7 @@ END;`);
       canonicalIntegrity: "ok",
       foreignKeys: "ok",
       ftsStructure: "failed",
-      ftsContent: "ok",
+      ftsContent: "failed",
       ftsRemediation: "rebuild-required",
     });
     expect(readFtsTableDefinition(paths.database)).toBe(alternateDefinition);

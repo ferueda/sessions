@@ -66,6 +66,7 @@ interface MeasurementSource {
 
 interface SemanticState {
   readonly staticRows: readonly SqliteRow[];
+  readonly writerLeaseRows: readonly SqliteRow[];
   readonly sourceRows: readonly SqliteRow[];
   readonly trackingRows: readonly SqliteRow[];
   readonly canonicalRows: readonly SqliteRow[];
@@ -115,9 +116,17 @@ async function main(): Promise<void> {
     assert.equal(seedSource.readCount(), CORPUS_SESSIONS, "seed run did not read each session");
     await assertCleanDatabase(seedPaths);
 
-    const seededState = readSemanticState(seedPaths);
     await cloneDatabase(seedPaths, controlPaths);
     await cloneDatabase(seedPaths, timedPaths);
+    await prepareCleanStableLibrary(controlPaths);
+    await prepareCleanStableLibrary(timedPaths);
+    const controlSeededState = readSemanticState(controlPaths);
+    const timedSeededState = readSemanticState(timedPaths);
+    assert.deepStrictEqual(
+      timedSeededState,
+      controlSeededState,
+      "timed and control libraries differ before the stable run",
+    );
 
     const control = await runStable(controlPaths, corpus);
     const collector = createIndexTimingCollector();
@@ -133,8 +142,8 @@ async function main(): Promise<void> {
     assert.deepStrictEqual(timed.health, control.health, "timing changed index health");
     assert.deepStrictEqual(timed.queries, control.queries, "timing changed query results");
     assert.equal(control.health.ok, true, "control library health is not ready");
-    assertStableTransition(seededState, control.state);
-    assertStableTransition(seededState, timed.state);
+    assertStableTransition(controlSeededState, control.state);
+    assertStableTransition(timedSeededState, timed.state);
     assertRepresentativeQueries(control.queries);
     assertTimingOwnership(timing);
 
@@ -476,6 +485,17 @@ function assertStableTransition(before: SemanticState, after: SemanticState): vo
     "stable run bookkeeping is incorrect",
   );
   assert.deepStrictEqual(after.runItemRows, before.runItemRows, "stable run added failure items");
+
+  const priorLease = singleRow(before.writerLeaseRows, "prior writer lease");
+  const stableLease = singleRow(after.writerLeaseRows, "stable writer lease");
+  assert.equal(stableLease.generation, Number(priorLease.generation) + 1);
+  assert.equal(stableLease.clean_generation, stableLease.generation);
+  assert.equal(stableLease.clean_schema_cookie, priorLease.clean_schema_cookie);
+  assert.deepStrictEqual(
+    withoutKeys(stableLease, ["generation", "clean_generation"]),
+    withoutKeys(priorLease, ["generation", "clean_generation"]),
+    "stable run changed writer integrity state outside its clean generation",
+  );
 }
 
 function assertTimingOwnership(snapshot: IndexTimingSnapshot): void {
@@ -507,6 +527,7 @@ function readSemanticState(paths: IndexPaths): SemanticState {
         ...rows(database, "SELECT * FROM sessions_schema_migrations ORDER BY version"),
         ...rows(database, "SELECT * FROM sessions_library ORDER BY singleton"),
       ],
+      writerLeaseRows: rows(database, "SELECT * FROM sessions_writer_lease ORDER BY singleton"),
       sourceRows: rows(
         database,
         "SELECT * FROM sessions_source_instances ORDER BY source_instance_id",
@@ -556,6 +577,12 @@ async function cloneDatabase(source: IndexPaths, target: IndexPaths): Promise<vo
   await mkdir(target.directory, { mode: 0o700 });
   await copyFile(source.database, target.database);
   await chmod(target.database, 0o600);
+}
+
+async function prepareCleanStableLibrary(paths: IndexPaths): Promise<void> {
+  const writer = await lifecycleAt(SEED_AT).openWriter(paths);
+  await writer.close();
+  await assertCleanDatabase(paths);
 }
 
 async function assertCleanDatabase(paths: IndexPaths): Promise<void> {
@@ -610,6 +637,11 @@ function withoutKeys(row: SqliteRow, keys: readonly string[]): SqliteRow {
   return Object.fromEntries(Object.entries(row).filter(([key]) => !omitted.has(key)));
 }
 
+function singleRow(rows: readonly SqliteRow[], label: string): SqliteRow {
+  assert.equal(rows.length, 1, `${label} is not singular`);
+  return rows[0]!;
+}
+
 function temporaryHome(): string {
   return process.platform === "win32" ? "C:\\sessions-measurement" : "/sessions-measurement";
 }
@@ -630,6 +662,7 @@ function createOutput(timing: IndexTimingSnapshot) {
       reports: true,
       canonicalState: true,
       trackingAndRuns: true,
+      writerIntegrityState: true,
       health: true,
       pagedListSearchEntries: true,
       supportAndLineage: true,
