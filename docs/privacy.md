@@ -29,8 +29,8 @@ not a best-effort feature.
   storage, modifying storage, or reading rollout content.
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/show are
-current. Cursor, Markdown presentation, library import/restore, and automatic
-analysis are not current commands.
+current. Cursor, library import/restore, and automatic analysis are not current
+commands; Markdown presentation is deferred beyond V1.
 
 ## Owned local state
 
@@ -212,9 +212,9 @@ manage backups according to their threat model.
 
 JSON/JSONL portable export reads only the canonical library, excludes diagnostic
 locators and private path metadata, labels history as untrusted, and never
-delivers content to another provider. Markdown presentation is deferred until
-after M8 and before M9/V1 over the same projection. It may not add private fields
-or change which evidence the document digest covers.
+delivers content to another provider. Markdown presentation is deferred beyond
+V1; any later format may not add private fields or change which evidence the
+document digest covers.
 
 No project, skill, provider configuration, or source transcript is automatically
 edited from analysis output.

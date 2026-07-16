@@ -1,6 +1,6 @@
 # Current architecture
 
-Status: M7 JSON/JSONL delivery complete; M8 Cursor parity is next.
+Status: M7 JSON/JSONL delivery complete; M8 agent analysis retrieval is next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -70,8 +70,8 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `test/`                                                           | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence |
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/show
-exist. Cursor, Markdown presentation, packaged Agent Skills, and a public adapter
-ABI do not exist yet. M7 owns one closed public document projection, its
+exist. Agent-efficient corpus selection, Cursor, packaged Agent Skills, and a
+public adapter ABI do not exist yet. M7 owns one closed public document projection, its
 deterministic digest, retained attribution, shared bounded selection, and the
 exact schema-1 machine records documented in
 [structured output](../reference/structured-output.md).

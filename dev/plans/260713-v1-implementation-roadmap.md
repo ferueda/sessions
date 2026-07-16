@@ -24,8 +24,8 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 7 are complete. M8 Cursor parity is the next implementation
-milestone.
+Milestones 0 through 7 are complete. M8 agent analysis retrieval is the next
+implementation milestone.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -75,10 +75,12 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the Cursor adapter, Markdown presentation, the packaged
-Agent Skill, release automation, or the pinned Harness integration. M8 now adds
-the second adapter without changing the complete provider-neutral query/export
-engine. Markdown follows M8 and remains a pre-M9/V1 gate.
+It does not yet have the agent-efficient corpus-selection queries, packaged
+Agent Skill, Cursor adapter, release automation, or pinned Harness integration.
+M8 strengthens the provider-neutral query engine over Codex, M9 packages the
+evidence playbooks, and M10 then proves the same complete surface through a
+second passive adapter. Markdown presentation is deferred beyond V1; JSON and
+JSONL are the portable machine formats for V1.
 
 ## Execution rules
 
@@ -113,18 +115,20 @@ flowchart TD
   M4 --> M5["M5 Codex vertical slice — complete"]
   M5 --> M6["M6 Query and evidence engine — complete"]
   M6 --> M7["M7 Export and CLI schemas — complete"]
-  M7 --> M8["M8 Cursor parity — next"]
+  M7 --> M8["M8 Agent analysis retrieval — next"]
   M8 --> M9["M9 Packaged Agent Skill"]
-  M9 --> M10["M10 Release qualification"]
-  M10 --> M11["M11 Parity, Harness cutover, V1"]
+  M9 --> M10["M10 Cursor parity"]
+  M10 --> M11["M11 Release qualification"]
+  M11 --> M12["M12 Parity, Harness cutover, V1"]
 ```
 
 Codex is intentionally first. Its state/rollout split, namespaced tools,
 non-text records, and structural lineage force the generic model to prove its
-assumptions before the query/export contract stabilizes. Cursor then becomes the
-second-adapter architecture proof: it must enter through the existing source port
-without provider-specific changes to domain, storage, indexing, query, export,
-or CLI semantics.
+assumptions before the query/export and Agent Skill contracts stabilize. M8 and
+M9 complete that provider-neutral evidence workflow over Codex. Cursor then
+becomes the second-adapter architecture proof: it must enter through the existing
+source port without provider-specific changes to domain, storage, indexing,
+query, export, CLI semantics, or skill playbooks.
 
 ## Milestones
 
@@ -209,7 +213,7 @@ Required decisions and behavior:
   use. Never reuse or auto-migrate the legacy Harness JSONL cache.
 - `sessions paths [--format human|json]` initially reports only Sessions-owned
   index/state locations plus initialized state without creating directories or
-  files. Registered adapters extend it with their own source roots in M5 and M8.
+  files. Registered adapters extend it with their own source roots in M5 and M10.
 - Only explicit `sessions index` opens a writer that creates state or applies
   migrations. Read commands report missing or incompatible state with a concise
   remediation path; they do not silently initialize or rebuild it.
@@ -684,21 +688,19 @@ Exit gate:
 
 ### M7 — Complete export and stabilize CLI/structured output (complete)
 
-Outcome: the entire planned V1 command surface is scriptable and bounded, and one
-retained session can be extracted as portable provider-neutral context without
-Sessions delivering it.
+Outcome: the retained-session query/export surface shipped through M7 is
+scriptable and bounded, and one retained session can be extracted as portable
+provider-neutral context without Sessions delivering it.
 
-Execution completed the foundation and JSON/JSONL delivery, with Markdown kept
-as separate deferred presentation work:
+Execution completed the foundation and JSON/JSONL delivery:
 
 1. **Complete:** build the canonical public projection, persisted document digest,
    and same-snapshot attribution;
-2. **Complete:** deliver bounded JSON/JSONL for list, search, show, and export;
-3. **Deferred:** add Markdown over the same projection after M8 and before M9/V1.
+2. **Complete:** deliver bounded JSON/JSONL for list, search, show, and export.
 
-The first two steps complete the provider-neutral export engine, so M8 may begin.
-Deferring Markdown changes sequencing, not V1 scope; it remains a pre-M9 gate
-unless the product contract is explicitly revised.
+These steps complete the provider-neutral V1 export engine, so M8 may begin.
+Markdown is a possible post-V1 presentation layer and is not a gate for analysis,
+the Agent Skill, adapter equivalence, or V1.
 
 The completed foundation field-by-field projects only export-eligible canonical
 evidence, excluding root identity, workspace, locators, source metadata, capture
@@ -738,8 +740,7 @@ Required behavior:
 
 - Support JSON and independently parseable JSONL export from retained
   canonical documents only, including when source state is missing or unknown.
-  Export never probes or reopens provider histories. Add Markdown later over the
-  exact same projection without changing eligible evidence or digest semantics.
+  Export never probes or reopens provider histories.
 - Define one public snapshot envelope: canonical identity, capture time, source
   state and observation time, adapter version, versioned document digest,
   freshness, lineage metadata, omissions, and truncation. The digest is stable
@@ -759,8 +760,7 @@ Required behavior:
   meaning requires a new version.
 - Make JSON one versioned bundle and JSONL its equivalent independently
   attributable record projection. Known relations are metadata only; export
-  never traverses related session bodies. Add structurally framed Markdown later
-  without changing the projection or digest.
+  never traverses related session bodies.
 - Keep requested data on stdout and diagnostics/progress on stderr. Empty success
   exits `0`, operational failure `1`, and invalid usage `2`.
 - Reject unknown flags/values, honor `NO_COLOR`, and require explicit `--full` for
@@ -788,58 +788,91 @@ Exit gate:
   versus `--full` behavior, independently attributable JSONL, non-recursive
   lineage, and absence of every private diagnostic/path field.
 - Adversarial terminal fixtures cannot turn transcript data into terminal control;
-  export or later equal text creates no lineage. The deferred Markdown change
-  separately proves its historical-data frame before M9/V1.
+  export or later equal text creates no lineage.
 - CLI tests cover bounds, truncation, cursors, strict usage, streams, exit codes,
   `NO_COLOR`, untrusted text, and index-only reads.
 - Generated help and all current/planned labels match implemented behavior.
 - `pnpm check` passes on all CI operating systems.
 
-### M8 — Add Cursor and prove adapter equivalence (next)
+### M8 — Improve agent-led corpus analysis (next)
 
-Outcome: Cursor reaches the complete existing CLI through only a new passive
-adapter and composition registration.
+Outcome: agents can efficiently discover, group, and extract bounded evidence
+across retained sessions without provider-specific analysis logic or full-library
+transcript export.
+
+Execution sequence:
+
+1. optimize query-scoped lineage resolution and prove the broad-search cost;
+2. expose bounded show/export ranges through the existing selector;
+3. add the textless entry inventory and its structured contract;
+4. add literal-any search, per-result root attribution, and activity bounds.
+
+Each item may use its own executor plan and pull request. Later items rebase on
+the accepted earlier query contract; none may move analysis policy into adapters.
 
 Primary change areas:
 
-- `src/adapters/cursor/source.ts`, `paths.ts`, `meta.ts`, `transcript.ts`,
-  `normalize.ts`, and `fingerprint.ts`;
-- Cursor synthetic fixtures, golden parser tests, and shared conformance;
-- composition registration, provider path reporting, and a Cursor format-support
-  matrix.
+- query-scoped lineage resolution and focused performance proof;
+- provider-neutral entry-query values, repository port, application service, and
+  SQLite implementation;
+- list/search/entry structured DTOs and CLI grammar;
+- bounded transcript-range selection for show/export;
+- query, CLI, structured-output, architecture, and Agent Skill contract docs.
 
 Required behavior:
 
-- Selectively port proven Cursor path, metadata, transcript, and malformed-input
-  behavior from the approved Harness baseline. Do not port its provider factory,
-  JSONL cache, source-reopening queries, classifications, analysis, or automation
-  filters.
-- Open provider databases read-only and transcript files without write access.
-  Every metadata or transcript input consumed by normalization participates in
-  the complete candidate fingerprint and mutation checks.
-- Preserve injected blocks such as user information, instructions, and user
-  query as classified content rather than deleting them. Do not make automation
-  or subagent exclusions a default.
-- Map only exact message, tool, non-text, and lineage evidence Cursor exposes.
-  Missing names, namespaces, call linkage, origins, or relations remain absent or
-  unknown rather than being inferred for parity.
-- Register Cursor in composition. No Cursor branch belongs in domain, repository,
-  indexing, query, export, or CLI renderers.
+- Build the retained-lineage identity index and resolution memo once per immutable
+  query snapshot. Reuse it for support and per-result root attribution rather than
+  rebuilding it for every matching session. Preserve the existing conservative
+  complete/unknown, confidence, missing-target, cycle, and convergent-root rules.
+- Add a textless, paginated `sessions entries` query over canonical entries. It
+  reuses shared session filters plus entry time, actor, origin, kind, tool name,
+  and tool namespace filters. `all`, `first`, and `last` select all qualifying
+  entries or the first/last qualifying entry per session after filtering.
+- Return one fixed compact entry record: session and entry coordinates, bounded
+  text preview when present, origin/confidence, tool/linkage fields, omission and
+  truncation facts, and explicit known/unknown root resolution. Entries without
+  text remain eligible. Use deterministic ordering, bounded pages, opaque cursors,
+  and JSON/JSONL suitable for agent cursor loops.
+- Extend literal search with one bounded `all|any` term mode. Existing literal
+  AND behavior remains `all`; `any` forms a safe literal union and returns the
+  matched terms for each primary hit. Preserve one-hit-per-entry grouping,
+  occurrence/content/root support units, linked call/result context, cursor
+  binding, and the rule that no public raw FTS syntax is accepted.
+- Expose explicit known/unknown root attribution on list, search, and entries.
+  This is query-derived snapshot state, not canonical document content; it does
+  not enter document digests or portable exports. Defer exact root filtering until
+  it can be applied correctly before ranking and pagination.
+- Add shared exclusive activity bounds using `updatedAt`, falling back to
+  `createdAt`. Missing activity never matches, and capture, observation, or entry
+  time is never substituted.
+- Add exact bounded entry ranges to show/export over the existing selection
+  layer. Ranged export remains bounded; it cannot combine with `--full` and never
+  broadens the canonical public projection.
+- Keep every addition provider-neutral and index-only. No source adapter change,
+  provider read, canonical schema migration, workflow classification, semantic
+  search, causal judgment, or automatic project/skill mutation belongs here.
+- Measure broad search and entry-query plans against deterministic generic
+  corpora. Add a SQLite index only when the measured plan and retained-size cost
+  justify it; never copy an index merely because a new filter exists.
 
 Exit gate:
 
-- Cursor passes the same conformance and end-to-end command contracts as Codex,
-  including missing metadata, changing inputs, malformed records, stable
-  ordering, read-only access, injected skill-name mentions, source-observed tool
-  calls/results where present, absent execution evidence, durable retention after
-  complete-scan disappearance, unknown state after incomplete discovery,
-  reappearance, forget, and data clear.
-- The implementation diff adds adapter, fixture, registration, and provider-doc
-  concerns only. Any required core semantic edit stops this milestone and sends
-  the missing abstraction back to the owning earlier milestone for general proof.
-- A third synthetic adapter kind still passes index/query/export without core
-  edits.
-- `pnpm check` passes on all CI operating systems.
+- A query-scoped lineage proof shows one retained-evidence index/memo serves all
+  matching sessions while preserving every existing root-resolution result.
+- Entry-query tests cover no-text entries, qualifying previews, first/last after
+  filters, stable ordering, pagination/cursor invalidation, omissions, private
+  metadata exclusion, and actor/origin/tool combinations.
+- Literal-any tests cover overlap without double-counting, per-hit matched terms,
+  bounded admission, support units, linked context, and unchanged literal-all
+  behavior.
+- Structured and CLI tests cover root attribution, activity bounds, ranged
+  show/export, JSON/JSONL records, output limits, streams, and exits.
+- A synthetic agent-forward corpus can enumerate initial direct-human tasks,
+  observed tool calls, last corrections, and independent known roots without
+  opening every retained transcript.
+- Focused broad-query benchmarks record the before/after lineage cost and guard
+  against rebuilding retained lineage per hit. `pnpm check` passes.
 
 ### M9 — Package the Sessions Agent Skill and user onboarding
 
@@ -863,9 +896,9 @@ Required behavior:
   capability discovery. Do not split overlapping trigger skills in V1.
 - Search/context recovery also prepares provider-neutral context transfer. It
   distinguishes a bounded excerpt from a user-requested full retained snapshot,
-  reports capture/source state and omissions, and provides the local Markdown
-  export without sending, uploading, pasting, importing, or opening a destination
-  conversation.
+  reports capture/source state and omissions, and provides local JSON/JSONL
+  context without sending, uploading, pasting, importing, or opening a
+  destination conversation.
 - The workflow-audit reference includes an evidence-backed skill-evaluation path;
   no skill-specific CLI command, index, or storage model is introduced.
 - Every playbook starts with capability checks, requests authorization before
@@ -928,10 +961,57 @@ Exit gate:
   unknowns, cite case evidence, make no causal claim, and include a no-finding
   control whose recommendation is no change.
 - A clean user journey works: install -> doctor -> paths -> explicit durable index
-  -> search/show/export -> optional forget or explicit data clear.
+  -> entries/search/show/export -> optional forget or explicit data clear.
 - `pnpm check` passes.
 
-### M10 — Qualify and automate public releases
+### M10 — Add Cursor and prove adapter equivalence
+
+Outcome: Cursor reaches the complete existing CLI through only a new passive
+adapter and composition registration.
+
+Primary change areas:
+
+- `src/adapters/cursor/source.ts`, `paths.ts`, `meta.ts`, `transcript.ts`,
+  `normalize.ts`, and `fingerprint.ts`;
+- Cursor synthetic fixtures, golden parser tests, and shared conformance;
+- composition registration, provider path reporting, and a Cursor format-support
+  matrix.
+
+Required behavior:
+
+- Selectively port proven Cursor path, metadata, transcript, and malformed-input
+  behavior from the approved Harness baseline. Do not port its provider factory,
+  JSONL cache, source-reopening queries, classifications, analysis, or automation
+  filters.
+- Open provider databases read-only and transcript files without write access.
+  Every metadata or transcript input consumed by normalization participates in
+  the complete candidate fingerprint and mutation checks.
+- Preserve injected blocks such as user information, instructions, and user
+  query as classified content rather than deleting them. Do not make automation
+  or subagent exclusions a default.
+- Map only exact message, tool, non-text, and lineage evidence Cursor exposes.
+  Missing names, namespaces, call linkage, origins, or relations remain absent or
+  unknown rather than being inferred for parity.
+- Register Cursor in composition. No Cursor branch belongs in domain, repository,
+  indexing, query, export, CLI renderers, or skill playbooks.
+
+Exit gate:
+
+- Cursor passes the same conformance and end-to-end command contracts as Codex,
+  including missing metadata, changing inputs, malformed records, stable
+  ordering, read-only access, injected skill-name mentions, source-observed tool
+  calls/results where present, absent execution evidence, durable retention after
+  complete-scan disappearance, unknown state after incomplete discovery,
+  reappearance, forget, and data clear.
+- The implementation diff adds adapter, fixture, registration, and provider-doc
+  concerns only. Any required core or skill semantic edit stops this milestone
+  and sends the missing abstraction back to the owning earlier milestone for
+  general proof.
+- A third synthetic adapter kind still passes index/query/export without core
+  edits.
+- `pnpm check` passes on all CI operating systems.
+
+### M11 — Qualify and automate public releases
 
 Outcome: a clean public pre-release can be installed without a source checkout,
 and subsequent releases use auditable versioning and short-lived publish
@@ -980,7 +1060,7 @@ Exit gate:
 - User docs require neither pnpm nor TypeScript nor a Sessions source checkout.
 - `pnpm check` passes from the release revision.
 
-### M11 — Establish parity, retain the Harness skill, and close V1
+### M12 — Establish parity, retain the Harness skill, and close V1
 
 Outcome: standalone Sessions becomes the only general implementation upstream;
 Harness keeps its `skills/sessions` entry as a thin, pinned consumer.
@@ -1027,10 +1107,11 @@ These are evidence checkpoints, not date commitments:
 | ---------------------- | --------------------------------------------------------------------- |
 | Foundation             | M0 complete; package and repository foundation                        |
 | Internal alpha         | M1-M5 complete; Codex index/list/show vertical slice                  |
-| Feature-complete alpha | M6-M7; Codex search/evidence/export and stable schemas                |
-| Beta                   | M8; Cursor equivalence and third-adapter architecture proof           |
-| Release candidate      | M9-M10; packaged skill, onboarding, install and publish qualification |
-| V1                     | M11; parity, released package, and pinned one-way Harness integration |
+| Feature-complete alpha | M6-M8; Codex evidence/export plus agent-efficient retrieval           |
+| Agent-ready alpha      | M9; packaged skill, onboarding, and forward-tested playbooks          |
+| Beta                   | M10; Cursor equivalence and third-adapter architecture proof          |
+| Release candidate      | M11; install and publish qualification                                |
+| V1                     | M12; parity, released package, and pinned one-way Harness integration |
 
 Do not publish an alpha whose help advertises placeholder behavior. Do not call a
 release beta until both adapters use the same complete engine. Do not call a
@@ -1057,8 +1138,7 @@ Every V1 release candidate must prove:
   clearing.
 - **CLI:** consistent filters, stable identity, bounded defaults, deterministic
   pagination/ranking, versioned JSON/JSONL, strict usage, clean streams, and
-  portable exit codes plus framed Markdown/JSON/JSONL context extraction without
-  destination delivery.
+  portable JSON/JSONL context extraction without destination delivery.
 - **Delivery:** clean compiled install, allowlisted tarball, packaged skill,
   multi-OS full/smoke gates, release provenance, and no source-checkout runtime.
 - **Adoption:** install-to-first-search guide, provider/troubleshooting reference,

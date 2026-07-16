@@ -9,8 +9,9 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > search with evidence context and support counts, show, scoped forget, all-data
 > clear, explicit orphan-content diagnosis/repair, explicit SQLite page
 > reclamation, source diagnostics, versioned JSON/JSONL query output, and
-> portable retained-session export. Cursor, Markdown presentation, the packaged
-> Agent Skill, and npm release remain planned.
+> portable retained-session export. Agent-efficient corpus selection, the
+> packaged Agent Skill, Cursor, and npm release remain planned; Markdown
+> presentation is deferred beyond V1.
 
 ## Why Sessions
 
@@ -138,12 +139,12 @@ supported state and rollout shapes.
 
 ```text
 sessions index --source cursor
-sessions export <canonical-id> --format md [--full]
+sessions entries [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 ```
 
-M7 JSON/JSONL delivery is complete, so M8 Cursor parity is next. Markdown remains
-a separate presentation layer over the same public projection after M8 and
-before M9/V1; `--format md` is not accepted today.
+M7 JSON/JSONL delivery is complete. M8 adds provider-neutral analysis retrieval,
+M9 packages the Agent Skill, and M10 proves Cursor parity. Markdown remains
+deferred beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

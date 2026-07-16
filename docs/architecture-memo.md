@@ -504,14 +504,23 @@ sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-Next planned adapter surface:
+Next planned query surface:
+
+```text
+sessions entries [filters] [--limit N] [--cursor TOKEN]
+                 [--format human|json|jsonl]
+```
+
+The same milestone adds literal-any search, per-result root attribution,
+activity bounds, and bounded show/export ranges. The next planned adapter surface
+then adds:
 
 ```text
 sessions index --source cursor
 ```
 
-Deferred presentation work after M8 and before M9/V1 adds `--format md` over the
-same projection. It does not change eligible evidence or digest semantics.
+Markdown presentation is deferred beyond V1. Any later format must preserve the
+same eligible evidence and digest semantics.
 
 Behavioral rules:
 
@@ -545,8 +554,7 @@ null rules, order, and bounds live in the
 `sessions export` emits one retained canonical snapshot from Sessions-owned
 storage and never reopens provider histories. JSON is one versioned bundle;
 JSONL carries equivalent provider-neutral evidence as independently attributable
-ordered records. Markdown remains later presentation
-work after M8 and before M9/V1. Sessions performs extraction only: it does not
+ordered records. Sessions performs extraction only: it does not
 import the artifact, call provider APIs, use a clipboard or application UI,
 create a destination conversation, or manage a target provider's context limits.
 
@@ -567,14 +575,13 @@ reasoning, raw payloads, media bytes or references, related-session bodies, or
 evidence the adapter never observed. Known relations are metadata and are not
 recursively exported.
 
-Later Markdown will structurally frame actor-labeled transcript content as
-untrusted historical data. JSON and JSONL carry the same disposition
-explicitly. JSON escaping protects syntax, not semantic trust. Source locators
-and local paths are never emitted as metadata by default, but secrets or
-paths written inside faithful transcript text are not automatically redacted.
-Users control whether an artifact leaves the local privacy boundary. Equal text,
-an export operation, or a matching document digest never creates lineage or
-proves later reuse.
+JSON and JSONL explicitly frame transcript content as untrusted historical data.
+JSON escaping protects syntax, not semantic trust. Source locators and local
+paths are never emitted as metadata by default, but secrets or paths written
+inside faithful transcript text are not automatically redacted. Users control
+whether an artifact leaves the local privacy boundary. Equal text, an export
+operation, or a matching document digest never creates lineage or proves later
+reuse.
 
 Default export selects the first 50 entries, first 50 relations, and first 100
 segments, with at most 8 KiB raw UTF-8 per title/text segment and 256 KiB across
@@ -810,10 +817,10 @@ Do not transplant:
 ## Roadmap
 
 The phase scopes below remain accepted. Phases 0 through 3 are implemented;
-M8 Cursor parity is next. Codex is the first vertical slice because
+M8 agent analysis retrieval is next. Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
-canonical model early. The provider-neutral query and export engine is completed
-over Codex before Cursor becomes the second-adapter proof. The
+canonical model early. The provider-neutral query, export, and Agent Skill
+workflow complete over Codex before Cursor becomes the second-adapter proof. The
 [V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
 supersedes the earlier phase ordering and refines it into dependency-ordered,
 independently reviewable milestones with explicit exit gates.
@@ -842,19 +849,25 @@ list, bounded adjacent and linked context, lineage-aware support reporting, and
 FTS repair. M7 implements the canonical public projection, JCS digest, atomic
 persistence, same-snapshot attribution, shared bounded selection, closed
 schema-1 JSON/JSONL DTOs, and portable retained-session export. Framed Markdown
-follows after M8 and before M9/V1 over the same projection.
+is deferred beyond V1.
 
-### Phase 4 — Equivalent second adapter
+### Phase 4 — Agent analysis retrieval
 
-Port Cursor discovery and transcript normalization through the same port. Prove
-no changes are required in domain, storage, indexing, query, export, or CLI
-behavior.
+Optimize query-scoped lineage resolution; add textless entry inventory,
+literal-any search, per-result root attribution, activity bounds, and bounded
+show/export ranges without changing adapters or canonical storage.
 
 ### Phase 5 — Agent Skill
 
 Generate the skill scaffold, write the seven evidence-first references, validate metadata/layout, forward-test representative prompts, and include it in package smoke.
 
-### Phase 6 — Public release and parity
+### Phase 6 — Equivalent second adapter
+
+Port Cursor discovery and transcript normalization through the same port. Prove
+no changes are required in domain, storage, indexing, query, export, or CLI
+behavior.
+
+### Phase 7 — Public release and parity
 
 Confirm npm scope ownership, configure trusted publisher/environment, add release-please/publish automation, run multi-OS install tests, document migration, establish parity, and switch Harness to a pinned one-way integration.
 

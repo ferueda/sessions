@@ -445,6 +445,6 @@ roots, source metadata, attachment paths, private media references, capture
 internals, and raw omitted payloads are excluded as metadata. Omitted non-text
 content exposes only its admitted class and source-type token.
 
-Markdown is not a current format and `--format md` is invalid usage. A later
-presentation layer will use this same selected projection after M8 and before
-M9/V1; it may not change eligible evidence or digest semantics.
+Markdown is not a current format and `--format md` is invalid usage. Any post-V1
+presentation layer must use the same selected projection and may not change
+eligible evidence or digest semantics.

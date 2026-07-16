@@ -27,7 +27,7 @@ It turns provider-specific histories into one faithful, queryable local library 
 
 ## V1 outcome
 
-V1 supports Cursor and Codex histories with equivalent index, list, search, show, and export behavior. Explicit indexing creates a durable normalized local copy, is incremental, idempotent, and transactional, and preserves the latest successful snapshot when refresh fails or a complete later scan no longer observes the provider session. Human-readable output works interactively; versioned JSON and JSONL work for scripts and agents, and provider-neutral Markdown export can be attached, pasted, or piped as historical context elsewhere.
+V1 supports Cursor and Codex histories with equivalent index, list, search, show, and export behavior. Explicit indexing creates a durable normalized local copy, is incremental, idempotent, and transactional, and preserves the latest successful snapshot when refresh fails or a complete later scan no longer observes the provider session. Human-readable output works interactively, while versioned JSON and JSONL support scripts, agents, and portable historical context. Markdown presentation remains post-V1 work.
 
 The first repository scaffold is intentionally smaller: help, version, doctor, internal canonical contracts, docs, packaging, and verification guardrails. Planned commands are not represented as shipped until implemented.
 

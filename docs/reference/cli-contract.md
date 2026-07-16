@@ -188,12 +188,14 @@ then index again. `data clear` does not claim that incompatible database.
 
 ```text
 sessions index --source cursor
-sessions export <canonical-id> --format md [--full]
+sessions entries [filters] [--limit N] [--cursor TOKEN]
+                 [--format human|json|jsonl]
 ```
 
-Markdown is deferred until after M8 and before M9/V1. `--format md` is not
-accepted today. These routes are added to generated help only when implemented
-and contract-tested.
+M8 also adds literal-any search, per-result root attribution, activity bounds,
+and bounded show/export ranges. Markdown is deferred beyond V1 and `--format md`
+is not accepted today. Planned routes are added to generated help only when
+implemented and contract-tested.
 
 ## Current retention and empty-library semantics
 
@@ -655,6 +657,6 @@ not import, upload, paste, call provider APIs, create a destination conversation
 manage destination context limits, or infer transfer lineage from equal text or
 matching digests.
 
-Markdown remains deferred presentation work after M8 and before M9/V1. It is not
-a current format and may not change the eligible evidence or document-digest
+Markdown remains deferred post-V1 presentation work. It is not a current format
+and any later design may not change the eligible evidence or document-digest
 semantics defined by JSON/JSONL.
