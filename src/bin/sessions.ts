@@ -70,11 +70,12 @@ const indexSessions = async (source: string | undefined) => {
   const collector = createIndexTimingCollector();
   try {
     return await timeIndexOperation(collector.recorder, "total", async () => {
+      const paths = resolvePaths();
       const sources = await timeIndexOperation(collector.recorder, "sourceResolution", () =>
         resolveIndexSources(source),
       );
       return runIndex({
-        paths: resolvePaths(),
+        paths,
         sources,
         lifecycle: indexLifecycle,
         clock: { now: () => new Date() },
