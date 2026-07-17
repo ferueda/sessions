@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { createIndexReport, createIndexSourceReport } from "../../src/application/index-report.ts";
+import {
+  createIndexReport,
+  createIndexSourceReport,
+  createSkippedIndexSourceReport,
+} from "../../src/application/index-report.ts";
 import type { IndexRunResult } from "../../src/application/ports/session-index.ts";
 
 describe("index reports", () => {
@@ -42,6 +46,7 @@ describe("index reports", () => {
 
     expect(report.counts).toEqual(counts({ discovered: 101, failed: 101, missing: 2 }));
     expect(report.incompleteSources).toBe(1);
+    expect(report.skippedSources).toBe(0);
     expect(report.omittedItemCount).toBe(101);
     expect(report.sources[0]?.items[0]).toMatchObject(firstResult.items[0]!);
     expect(report.sources[0]?.items[0]?.identity).toHaveProperty("canonicalId");
@@ -49,6 +54,41 @@ describe("index reports", () => {
     expect(Object.isFrozen(report)).toBe(true);
     expect(Object.isFrozen(report.sources)).toBe(true);
     expect(Object.isFrozen(report.sources[0]?.items)).toBe(true);
+  });
+
+  test("keeps unavailable skipped sources outside incomplete counts", () => {
+    const source = { kind: "optional-source", instanceId: "one" } as const;
+
+    const report = createIndexReport("start", "finish", [
+      createSkippedIndexSourceReport(source, "source-start", "source-finish"),
+    ]);
+
+    expect(report).toEqual({
+      schemaVersion: 1,
+      command: "index",
+      startedAt: "start",
+      finishedAt: "finish",
+      counts: counts(),
+      sources: [
+        {
+          schemaVersion: 1,
+          source,
+          status: "skipped",
+          reason: "source-unavailable",
+          startedAt: "source-start",
+          finishedAt: "source-finish",
+          counts: counts(),
+          coverage: { status: "not-attempted" },
+          items: [],
+          omittedItemCount: 0,
+        },
+      ],
+      incompleteSources: 0,
+      skippedSources: 1,
+      omittedItemCount: 0,
+    });
+    expect(Object.isFrozen(report.sources[0])).toBe(true);
+    expect(Object.isFrozen(report.sources[0]?.coverage)).toBe(true);
   });
 });
 

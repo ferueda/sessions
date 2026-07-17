@@ -3,7 +3,16 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, readdir, readFile, readlink, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
+import type {
+  SelectedSessionSource,
+  SourceProbeStatus,
+} from "../src/application/ports/session-source.ts";
+import type { runIndex as runIndexType } from "../src/application/run-index.ts";
+import type { renderIndex as renderIndexType } from "../src/cli/render.ts";
+import type { resolveIndexPaths as resolveIndexPathsType } from "../src/infrastructure/state/paths.ts";
+import type { createSqliteIndexLifecycle as createSqliteIndexLifecycleType } from "../src/infrastructure/sqlite/database.ts";
 import { codexRolloutRecords, createCodexSourceFixture } from "../test/fixtures/codex/source.ts";
 
 export interface SmokeCommandResult {
@@ -14,6 +23,7 @@ export interface SmokeCommandResult {
 
 export interface SmokeWorkflowOptions {
   readonly temporaryRoot: string;
+  readonly moduleRoot: string;
   readonly run: (args: readonly string[], environment: NodeJS.ProcessEnv) => SmokeCommandResult;
 }
 
@@ -33,8 +43,9 @@ const INDEX_TIMING_PREFIX = "sessions:index-timings ";
 const UNINITIALIZED_LIST_OUTPUT =
   "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n";
 
-/** Exercise the complete distribution journey through a spawned CLI, never through imports. */
+/** Exercise shipped modules plus the complete spawned-CLI distribution journey. */
 export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<void> {
+  await assertMixedOptionalProviderDistribution(options);
   const fixture = await createCodexSourceFixture();
   const dataDirectory = path.join(options.temporaryRoot, "sessions-data");
   const oldCacheDirectory = path.join(options.temporaryRoot, "old-sessions-cache");
@@ -540,14 +551,31 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assertCompleteIndex(repeatedMissing, { updated: 0, unchanged: 0, missing: 1 });
 
     await rm(fixture.stateDatabase);
+    const skipped = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "index",
+      "--format",
+      "json",
+    ]);
+    assertCommand(skipped, 0, "implicit index with unavailable source");
+    const skippedReport = parseJson(skipped.stdout);
+    assert.equal(skippedReport.incompleteSources, 0);
+    assert.equal(skippedReport.skippedSources, 1);
+    const skippedSource = readObject(readArray(skippedReport, "sources")[0]);
+    assert.equal(skippedSource.status, "skipped");
+    assert.equal(skippedSource.reason, "source-unavailable");
+    assert.equal(readObject(skippedSource.coverage).status, "not-attempted");
+
     const incomplete = await stableProviderCommand(options, fixture.codexHome, environment, [
       "index",
+      "--source",
+      "codex",
       "--format",
       "json",
     ]);
     assertCommand(incomplete, 1, "index with unavailable source");
     const incompleteReport = parseJson(incomplete.stdout);
     assert.equal(incompleteReport.incompleteSources, 1);
+    assert.equal(incompleteReport.skippedSources, 0);
     const incompleteSource = readObject(readArray(incompleteReport, "sources")[0]);
     assert.equal(incompleteSource.status, "incomplete");
     assert.equal(incompleteSource.failure, "source-unavailable");
@@ -694,6 +722,91 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
   }
 }
 
+async function assertMixedOptionalProviderDistribution(
+  options: SmokeWorkflowOptions,
+): Promise<void> {
+  const [{ runIndex }, { resolveIndexPaths }, { createSqliteIndexLifecycle }, { renderIndex }] =
+    await Promise.all([
+      importBuiltModule<{ readonly runIndex: typeof runIndexType }>(
+        options.moduleRoot,
+        "application/run-index.js",
+      ),
+      importBuiltModule<{ readonly resolveIndexPaths: typeof resolveIndexPathsType }>(
+        options.moduleRoot,
+        "infrastructure/state/paths.js",
+      ),
+      importBuiltModule<{
+        readonly createSqliteIndexLifecycle: typeof createSqliteIndexLifecycleType;
+      }>(options.moduleRoot, "infrastructure/sqlite/database.js"),
+      importBuiltModule<{ readonly renderIndex: typeof renderIndexType }>(
+        options.moduleRoot,
+        "cli/render.js",
+      ),
+    ]);
+  const dataDirectory = path.join(options.temporaryRoot, "mixed-provider-state");
+  const paths = resolveIndexPaths({
+    platform: process.platform,
+    env: { ...process.env, SESSIONS_DATA_DIR: dataDirectory },
+    homeDirectory: options.temporaryRoot,
+  });
+  const ready = syntheticProvider("available-smoke", "ready");
+  const unavailable = syntheticProvider("unavailable-smoke", "unavailable");
+  const lifecycle = createSqliteIndexLifecycle();
+
+  const report = await runIndex({
+    paths,
+    sources: [unavailable, ready],
+    sourceSelection: "optional",
+    lifecycle,
+    clock: { now: () => new Date() },
+  });
+
+  assert.equal(report.incompleteSources, 0);
+  assert.equal(report.skippedSources, 1);
+  assert.deepEqual(
+    report.sources.map(({ source, status }) => ({ kind: source.kind, status })),
+    [
+      { kind: "available-smoke", status: "completed" },
+      { kind: "unavailable-smoke", status: "skipped" },
+    ],
+  );
+  assert.equal(report.sources[0]?.coverage.status, "complete");
+  assert.deepEqual(report.sources[1]?.coverage, { status: "not-attempted" });
+  assert.equal(existsSync(paths.database), true);
+  assert.match(renderIndex(report, "human"), /unavailable-smoke: skipped; source unavailable/u);
+  assert.equal(parseJson(renderIndex(report, "json")).skippedSources, 1);
+  const health = await lifecycle.inspectHealth(paths);
+  assert.equal(health.ok, true);
+}
+
+function syntheticProvider(kind: string, status: SourceProbeStatus): SelectedSessionSource {
+  const instance = Object.freeze({ kind, instanceId: "distribution-smoke" });
+  return Object.freeze({
+    instance,
+    adapter: Object.freeze({
+      kind,
+      async probe() {
+        return {
+          source: instance,
+          status,
+          locations: [{ role: "root", locator: { uri: "memory://distribution-smoke" } }],
+          summary: `Synthetic ${kind} source is ${status}`,
+        };
+      },
+      async *discover() {
+        // A ready source with no sessions still proves the attempted-source lifecycle.
+      },
+      async read() {
+        throw new Error("Synthetic empty source cannot be read");
+      },
+    }),
+  });
+}
+
+async function importBuiltModule<T>(moduleRoot: string, relativePath: string): Promise<T> {
+  return import(pathToFileURL(path.join(moduleRoot, relativePath)).href) as Promise<T>;
+}
+
 async function stableProviderCommand(
   options: SmokeWorkflowOptions,
   providerRoot: string,
@@ -733,6 +846,7 @@ function assertCompleteIndex(
   assert.equal(report.schemaVersion, 1);
   assert.equal(report.command, "index");
   assert.equal(report.incompleteSources, 0);
+  assert.equal(report.skippedSources, 0);
   const reportCounts = readObject(report.counts);
   assert.equal(reportCounts.updated, counts.updated);
   assert.equal(reportCounts.unchanged, counts.unchanged);

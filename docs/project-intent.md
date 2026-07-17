@@ -54,6 +54,9 @@ The first repository scaffold is intentionally smaller: help, version, doctor, i
 
 - Source histories are read-only.
 - Indexing begins only through an explicit user command.
+- Registered providers are optional by default. Provider absence does not make
+  another provider unusable; explicitly selected or installed-but-unreadable
+  providers still fail honestly.
 - A successful index stores the latest normalized canonical snapshot as durable
   Sessions-owned user data until explicit Sessions deletion.
 - A session absent from a complete source scan is marked no longer observed; its

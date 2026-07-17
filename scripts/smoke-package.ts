@@ -105,6 +105,7 @@ try {
 
   await runSmokeWorkflow({
     temporaryRoot,
+    moduleRoot: path.join(installedPackage, "dist"),
     run: (args, environment) =>
       run(process.execPath, [installedBinary, ...args], project, false, environment),
   });

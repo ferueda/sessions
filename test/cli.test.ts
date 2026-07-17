@@ -137,6 +137,25 @@ describe("sessions CLI", () => {
     expect(JSON.parse(invocation.stdout)).toEqual(report);
   });
 
+  test("renders an unavailable skipped source without failing implicit indexing", async () => {
+    const report = skippedIndexReport();
+    const index = vi.fn<ProgramOptions["index"]>(async () => report);
+
+    const json = await invoke(["index", "--format", "json"], { index });
+    const human = await invoke(["index"], { index });
+
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual(report);
+    expect(human).toEqual({
+      exitCode: 0,
+      stdout:
+        "codex: skipped; source unavailable\nTotal: 0 discovered; 0 incomplete source(s); 1 skipped source(s)\n",
+      stderr: "",
+    });
+    expect(index).toHaveBeenNthCalledWith(1, undefined);
+    expect(index).toHaveBeenNthCalledWith(2, undefined);
+  });
+
   test("rejects an unregistered source before calling the index handler", async () => {
     const index = vi.fn<ProgramOptions["index"]>();
 
@@ -1400,6 +1419,34 @@ function indexReport(incomplete: boolean): IndexReport {
     counts: { discovered: 0, unchanged: 0, updated: 0, failed: 0, missing: 0, stale: 0 },
     sources: [],
     incompleteSources: incomplete ? 1 : 0,
+    skippedSources: 0,
+    omittedItemCount: 0,
+  };
+}
+
+function skippedIndexReport(): IndexReport {
+  return {
+    schemaVersion: 1,
+    command: "index",
+    startedAt: "2026-07-14T00:00:00.000Z",
+    finishedAt: "2026-07-14T00:00:01.000Z",
+    counts: { discovered: 0, unchanged: 0, updated: 0, failed: 0, missing: 0, stale: 0 },
+    sources: [
+      {
+        schemaVersion: 1,
+        source: { kind: "codex", instanceId: "local" },
+        status: "skipped",
+        reason: "source-unavailable",
+        startedAt: "2026-07-14T00:00:00.000Z",
+        finishedAt: "2026-07-14T00:00:01.000Z",
+        counts: { discovered: 0, unchanged: 0, updated: 0, failed: 0, missing: 0, stale: 0 },
+        coverage: { status: "not-attempted" },
+        items: [],
+        omittedItemCount: 0,
+      },
+    ],
+    incompleteSources: 0,
+    skippedSources: 1,
     omittedItemCount: 0,
   };
 }

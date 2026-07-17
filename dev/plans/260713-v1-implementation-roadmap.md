@@ -24,13 +24,14 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 10 and M11a are complete. M10 added honest capture scope,
-all-tracked reconciliation, bounded source-change retry, opt-in indexing
+Milestones 0 through 10, M11a, and M11b0 are complete. M10 added honest capture
+scope, all-tracked reconciliation, bounded source-change retry, opt-in indexing
 timings, and a recovery-safe proportional writer-open path. The pre-M11
 [Cursor source survey](../../docs/research/cursor-source-survey.md) found that
 current WAL-backed Cursor stores need the existing private capture workspace
-during changed reads. M11a completed that provider-neutral prerequisite; M11b
-adds Cursor parity next.
+during changed reads. M11a completed that capture prerequisite, and M11b0 made
+registered providers optional when they are not installed. M11b adds Cursor
+parity next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -1311,7 +1312,7 @@ Exit gate:
   bytes, and removes its temporary library. It is not part of routine CI.
 - `pnpm check` passes on all CI operating systems.
 
-### M11b0 — Make registered providers optional by default
+### M11b0 — Make registered providers optional by default (complete)
 
 Outcome: Sessions may register several adapters without requiring every provider
 to be installed.
@@ -1346,8 +1347,9 @@ Exit gate:
   state and do not mutate provider files.
 - Current ready-Codex indexing remains byte-for-byte equivalent after excluding
   the new skipped-source report shape.
-- Built and packed CLI smoke covers one ready plus one unavailable synthetic
-  provider and one strict explicit failure.
+- Built and packed distribution smoke covers one mixed ready/unavailable run
+  through shipped modules. Spawned CLI smoke covers the skipped report and one
+  strict explicit failure.
 - `pnpm check` passes.
 
 ### M11b — Add Cursor and prove adapter equivalence

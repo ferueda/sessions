@@ -51,9 +51,13 @@ remove lease or SQLite sidecar files by hand.
 
 ## The Codex source is unavailable
 
-A failed `source-codex` check prevents fresh indexing. It does not invalidate a
-ready retained library. Continue with provider-free `list`, `search`, `entries`,
-`show`, or `export`, and report the retained source state and freshness.
+An unavailable provider is optional. Doctor reports the condition without
+failing, and bare `sessions index` reports and skips that provider. Explicit
+`sessions index --source codex` remains strict and exits `1`.
+
+Provider absence does not invalidate a ready retained library. Continue with
+provider-free `list`, `search`, `entries`, `show`, or `export`, and report the
+retained source state and freshness.
 
 A retained session can be `missing` after a complete scan no longer sees it, or
 `unknown` when source coverage was incomplete. Its canonical snapshot remains

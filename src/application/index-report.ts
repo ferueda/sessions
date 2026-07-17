@@ -44,6 +44,18 @@ export type IndexSourceReport =
       readonly items: readonly IndexReportItem[];
       readonly omittedItemCount: number;
       readonly failure: IndexRunFailureCode;
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly source: SourceInstance;
+      readonly status: "skipped";
+      readonly reason: "source-unavailable";
+      readonly startedAt: string;
+      readonly finishedAt: string;
+      readonly counts: IndexRunCounts;
+      readonly coverage: { readonly status: "not-attempted" };
+      readonly items: readonly [];
+      readonly omittedItemCount: 0;
     };
 
 export interface IndexReport {
@@ -54,6 +66,7 @@ export interface IndexReport {
   readonly counts: IndexRunCounts;
   readonly sources: readonly IndexSourceReport[];
   readonly incompleteSources: number;
+  readonly skippedSources: number;
   readonly omittedItemCount: number;
 }
 
@@ -84,6 +97,25 @@ export function createIndexSourceReport(
       });
 }
 
+export function createSkippedIndexSourceReport(
+  selectedSource: SourceInstance,
+  startedAt: string,
+  finishedAt: string,
+): IndexSourceReport {
+  return Object.freeze({
+    schemaVersion: 1,
+    source: freezeSource(selectedSource),
+    status: "skipped",
+    reason: "source-unavailable",
+    startedAt,
+    finishedAt,
+    counts: freezeCounts(emptyCounts()),
+    coverage: Object.freeze({ status: "not-attempted" }),
+    items: Object.freeze([]) as readonly [],
+    omittedItemCount: 0,
+  });
+}
+
 export function createIndexReport(
   startedAt: string,
   finishedAt: string,
@@ -110,6 +142,7 @@ export function createIndexReport(
     counts: freezeCounts(counts),
     sources,
     incompleteSources: sources.filter(({ status }) => status === "incomplete").length,
+    skippedSources: sources.filter(({ status }) => status === "skipped").length,
     omittedItemCount: sources.reduce(
       (total, { omittedItemCount }) => addSafe(total, omittedItemCount),
       0,

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { runSmokeWorkflow } from "./smoke-workflow.ts";
 
 const binary = fileURLToPath(new URL("../dist/bin/sessions.js", import.meta.url));
+const moduleRoot = fileURLToPath(new URL("../dist", import.meta.url));
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), "sessions-dist-smoke-"));
 
 try {
@@ -21,6 +22,7 @@ try {
   }
   await runSmokeWorkflow({
     temporaryRoot,
+    moduleRoot,
     run: (args, environment) => run([binary, ...args], environment),
   });
 } finally {

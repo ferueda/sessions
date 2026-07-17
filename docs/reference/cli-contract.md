@@ -72,12 +72,16 @@ source. List, search, entries, show, and export are provider-free reads of the r
 library. `doctor` and `paths` inspect runtime, library, and registered-source
 readiness without indexing or creating state.
 
-`index` selects all registered sources when `--source` is omitted. The only
-current source is `codex`; an unknown source is invalid usage before writer open.
-A complete report exits `0`; an incomplete report is fully rendered and exits
-`1`. A successful capture stores the latest canonical snapshot. Complete later
-absence marks it missing without deletion; incomplete discovery leaves source
-state unknown.
+`index` considers all registered sources when `--source` is omitted. A valid
+unavailable provider is optional: it is reported as skipped and is not passed to
+the writer. If every registered provider is unavailable, the command exits `0`
+without opening or creating the library. Ready, unreadable, invalid, and
+throwing providers are attempted. `--source <kind>` is strict, so an explicitly
+selected unavailable provider remains incomplete and exits `1`; an unknown
+source is invalid usage before writer open. A complete attempted set exits `0`;
+an incomplete attempted source is fully rendered and exits `1`. A successful
+capture stores the latest canonical snapshot. Complete later absence marks it
+missing without deletion; incomplete discovery leaves source state unknown.
 
 `list` defaults to 50 and accepts 1 through 200. Activity is
 `updatedAt`, falling back to `createdAt`; missing activity sorts last, then
@@ -166,7 +170,8 @@ The current check order is `node-runtime`, `sqlite-fts5`, `library-state`, then
 `source-codex`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete`
 (`supported` or `unsupported`) in `details`; lack of FTS5 fails. An uninitialized
 library passes. Every non-ready initialized state fails. Ready Codex passes;
-unavailable or unreadable Codex fails without reading rollout content.
+optional unavailable Codex passes without reading rollout content; unreadable
+Codex fails.
 
 For `ready`, the library check uses an immutable snapshot and adds
 `canonicalIntegrity`, `foreignKeys`, `contentReachability`,
@@ -391,6 +396,7 @@ representative report is:
     }
   ],
   "incompleteSources": 0,
+  "skippedSources": 0,
   "omittedItemCount": 0
 }
 ```
@@ -404,8 +410,12 @@ either `missing`, or `failed` with one of
 `unsupported-format`, or `repository-write`. A source is either `completed` with
 complete coverage and no `failure`, or `incomplete` with unknown coverage and one
 of `source-unavailable`, `source-unreadable`, `probe-failed`, `discovery-failed`,
-`interrupted`, or `repository-write`. Source reports sort by raw source tuple;
-items retain persisted run-item order. Top counts and omissions are safe sums.
+`interrupted`, or `repository-write`. An implicitly unavailable source is
+`skipped` with `reason: "source-unavailable"`, zero counts/items,
+`coverage: { "status": "not-attempted" }`, and observed start/finish timestamps.
+Top-level `skippedSources` counts only that third state; `incompleteSources`
+counts attempted failures. Source reports sort by raw source tuple; items retain
+persisted run-item order. Top counts and omissions are safe sums.
 
 Forget, orphan repair, physical compaction, and all-data deletion emit these
 exact schema-1 shapes:
@@ -550,8 +560,8 @@ is `not-needed | rebuild-required`; writer-lease values are `free`, `index-live`
 defined in Doctor JSON above.
 
 An admitted `source-codex` check has only `probeStatus` with value
-`ready | unavailable | unreadable`. Ready passes; unavailable/unreadable fails. A
-malformed or thrown probe fails with exactly
+`ready | unavailable | unreadable`. Ready and optional unavailable pass;
+unreadable fails. A malformed or thrown probe fails with exactly
 `{ "probeStatus": "failed", "failure": "invalid-probe" | "probe-error" }`.
 Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are

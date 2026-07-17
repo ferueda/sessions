@@ -8,8 +8,12 @@ never writes to the provider.
 
 ## Flow
 
-1. Validate and sort the selected source instances before opening the library.
-2. Acquire the single index writer lease, which makes the new generation dirty,
+1. Validate and sort the selected source instances. For implicit all-provider
+   indexing, probe availability before writer open and report valid unavailable
+   providers as skipped. If every provider is unavailable, return without
+   opening or creating the library.
+2. Acquire the single index writer lease for every attempted source, which makes
+   the new generation dirty,
    and start one run per source. Starting a run changes that source's coverage
    to `unknown`.
 3. Probe the source, then exhaust and validate discovery before applying any
@@ -39,6 +43,11 @@ never writes to the provider.
 - An incomplete probe or primary discovery never proves that a retained session
   is missing. Coverage stays `unknown`, and canonical documents remain
   available.
+- Provider registration means support, not installation. Implicit indexing
+  skips only a valid `unavailable` probe. Unreadable, invalid, and throwing
+  probes remain attempted failures, as does every explicitly selected source.
+  A source that becomes unavailable after optional preflight fails its attempted
+  run rather than being reclassified as skipped.
 - A first-attempt `source-changed` failure receives at most one fresh retry per
   source run. Incomplete rediscovery, a vanished original identity, or another
   typed read failure records one terminal failure. Other candidate read failures
@@ -85,7 +94,8 @@ bounded failure handling, and last-good retention over parallel write throughput
 
 `SESSIONS_INDEX_TIMINGS=1 sessions index ...` measures the shipped indexing path.
 It writes one `sessions:index-timings` JSON record to stderr after the command.
-The fixed phases cover source resolution, writer open, probe/discovery,
+The fixed phases cover source resolution, writer open, availability and run
+probes, discovery,
 freshness reads, unchanged writes, changed reads, replacement, reconciliation,
 run bookkeeping, close, and total elapsed time. Each phase contains only a call
 count and elapsed milliseconds.

@@ -22,6 +22,7 @@ export interface FakeIndexingSource {
   candidate(nativeId: string, revision?: string, adapterVersion?: string): DiscoveredSession;
   setDiscovery(candidates: readonly DiscoveredSession[]): void;
   queueDiscoveries(...generations: readonly FakeDiscoveryGeneration[]): void;
+  queueProbes(...probes: readonly SourceProbe[]): void;
   failDiscovery(error: unknown, afterCandidates?: number): void;
   setProbe(probe: SourceProbe): void;
   failProbe(error: unknown): void;
@@ -49,6 +50,7 @@ export function createFakeIndexingSource(
     readonly failure?: { readonly error: unknown; readonly after: number };
   }> = [];
   let probe: SourceProbe = readyProbe(instance);
+  const queuedProbes: SourceProbe[] = [];
   let probeFailure: unknown;
   let hasProbeFailure = false;
   let probeCount = 0;
@@ -65,7 +67,7 @@ export function createFakeIndexingSource(
     async probe() {
       probeCount += 1;
       if (hasProbeFailure) throw probeFailure;
-      return probe;
+      return queuedProbes.shift() ?? probe;
     },
     async *discover(workspace) {
       discoveryWorkspaces.push(workspace);
@@ -145,15 +147,21 @@ export function createFakeIndexingSource(
         })),
       );
     },
+    queueProbes(...values) {
+      queuedProbes.push(...values);
+      hasProbeFailure = false;
+    },
     failDiscovery(error, afterCandidates = 0) {
       discoveryFailure = { error, after: afterCandidates };
       queuedDiscoveries.length = 0;
     },
     setProbe(value) {
       probe = value;
+      queuedProbes.length = 0;
       hasProbeFailure = false;
     },
     failProbe(error) {
+      queuedProbes.length = 0;
       hasProbeFailure = true;
       probeFailure = error;
     },
