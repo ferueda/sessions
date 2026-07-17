@@ -11,5 +11,11 @@ Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-r
 
 M10 capture truth, recovery, measurement, and recovery-safe writer-open
 optimization are complete. M11a extended the private capture workspace to
-changed reads. There is no active executor plan; M11b Cursor parity is next.
+changed reads.
+
+Active executor plan:
+
+- [Make registered providers optional by default](260716-optional-provider-defaults.md)
+
+Land this provider-neutral prerequisite before registering Cursor in M11b.
 Markdown presentation remains deferred beyond V1.

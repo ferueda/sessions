@@ -1311,10 +1311,53 @@ Exit gate:
   bytes, and removes its temporary library. It is not part of routine CI.
 - `pnpm check` passes on all CI operating systems.
 
+### M11b0 — Make registered providers optional by default
+
+Outcome: Sessions may register several adapters without requiring every provider
+to be installed.
+
+Required behavior:
+
+- Registration means supported, not installed or configured. When `index`
+  omits `--source`, valid unavailable providers are reported and skipped; ready
+  providers are indexed. An all-unavailable implicit run exits successfully
+  without opening or creating the Sessions library.
+- `index --source <kind>` remains strict. An explicitly selected unavailable
+  provider is incomplete and exits `1`; an unknown source remains usage exit
+  `2`.
+- Optional means absence is allowed. Unreadable, invalid, or throwing probes
+  remain failures in implicit and explicit operation.
+- Index JSON and human output distinguish `skipped` from `completed` and
+  `incomplete`, name `source-unavailable` as the reason, and report skipped
+  sources outside `incompleteSources`.
+- Doctor treats a valid unavailable provider as an informational passing check.
+  Ready passes; unreadable, invalid, and throwing probes fail. Paths continues
+  reporting the real status of every registered provider.
+- Availability preflight is provider-neutral, does not read transcripts, and is
+  not capture evidence. Attempted sources retain their existing probe,
+  discovery, capture, freshness, and reconciliation behavior.
+
+Exit gate:
+
+- All-unavailable, mixed ready/unavailable, unreadable, invalid-probe,
+  ready-then-disappears, and explicit-unavailable fixtures prove exact
+  report/exit behavior.
+- All-unavailable implicit indexing and doctor/path checks create no Sessions
+  state and do not mutate provider files.
+- Current ready-Codex indexing remains byte-for-byte equivalent after excluding
+  the new skipped-source report shape.
+- Built and packed CLI smoke covers one ready plus one unavailable synthetic
+  provider and one strict explicit failure.
+- `pnpm check` passes.
+
 ### M11b — Add Cursor and prove adapter equivalence
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
+
+Dependency: M11b0 lands first. The Cursor change consumes its optional-provider
+registry behavior rather than changing default selection or doctor semantics
+inside the adapter.
 
 Research authority: use the
 [Cursor source survey](../../docs/research/cursor-source-survey.md) for the
@@ -1402,9 +1445,9 @@ Exit gate:
   families, malformed/unsupported cohorts, and remote/cloud evidence outside
   coverage without exposing provider paths, IDs, titles, or content.
 - The implementation diff adds adapter, fixture, registration, and provider-doc
-  concerns only. Any required core or skill semantic edit stops this milestone
-  and sends the missing abstraction back to the owning earlier milestone for
-  general proof.
+  concerns only. Any further required core or skill semantic edit stops this
+  milestone and sends the missing abstraction back to its provider-neutral
+  owner.
 - A third synthetic adapter kind still passes index/query/export without core
   edits.
 - `pnpm check` passes on all CI operating systems.

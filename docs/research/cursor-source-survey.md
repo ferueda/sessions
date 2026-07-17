@@ -408,6 +408,24 @@ These are format questions for the M11 plan, not reasons to weaken the boundary:
 The implementation must stop rather than infer answers from private text,
 directory order, timestamps, product labels, or undocumented opaque fields.
 
+## Accepted multi-provider policy
+
+Cursor registration must not make Cursor a requirement for Codex users, and the
+same rule applies to every future adapter:
+
+- registered providers are optional by default;
+- bare indexing skips valid unavailable providers and attempts available ones;
+- explicit `--source` selection remains strict;
+- unreadable or invalid providers are failures rather than silently skipped;
+- doctor reports an unavailable provider as informational, while paths always
+  reports its real status; and
+- structured index output distinguishes skipped providers from complete or
+  incomplete capture.
+
+This provider-neutral prerequisite lands before Cursor registration. It does not
+weaken Cursor format validation, source-change checks, or capture completeness
+for an attempted provider.
+
 ## Official sources
 
 All links were accessed on 2026-07-16.
