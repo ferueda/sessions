@@ -70,6 +70,25 @@ describe("Cursor filesystem inventory", () => {
     ).rejects.toBeInstanceOf(CursorInventoryChangedError);
   });
 
+  test("excludes SQLite sidecar names only when the grammar-owned caller requests it", async () => {
+    const root = await temporaryCursorRoot();
+    await Promise.all([
+      mkdir(join(root, "names", "store.db-shm"), { recursive: true }),
+      mkdir(join(root, "names", "index.db-shm"), { recursive: true }),
+    ]);
+
+    const opaque = await listCursorDirectory(root, ["names"]);
+    const storeDirectory = await listCursorDirectory(root, ["names"], {
+      excludedNames: new Set(["store.db-shm"]),
+    });
+
+    expect(opaque.map(({ components }) => components.at(-1))).toEqual([
+      "index.db-shm",
+      "store.db-shm",
+    ]);
+    expect(storeDirectory.map(({ components }) => components.at(-1))).toEqual(["index.db-shm"]);
+  });
+
   test("classifies directory removal during traversal as source change", async () => {
     const root = await temporaryCursorRoot();
     await mkdir(join(root, "names", "one"), { recursive: true });
@@ -150,6 +169,48 @@ describe("Cursor structural discovery", () => {
       "chat-umlaut",
     ]);
     expect(inventory.chats.some(({ nativeId }) => nativeId === "chat-too-deep")).toBe(false);
+  });
+
+  test("admits sidecar-like opaque directory names while ignoring actual SHM files", async () => {
+    const root = await temporaryCursorRoot();
+    await writeChat(root, "store.db-shm", "index.db-shm");
+    const chatShm = join(root, "chats", "store.db-shm", "index.db-shm", "store.db-shm");
+    await writeFile(chatShm, "chat-shm-one");
+
+    await writeCatalog(root, "index.db-shm", "store.db-shm", "agent-one");
+    const catalogScope = join(root, "projects", "index.db-shm", "sdk-agent-store", "store.db-shm");
+    const catalogShm = join(catalogScope, "index.db-shm");
+    const agentShm = join(
+      catalogScope,
+      "agents",
+      cursorAgentStoreDirectory("agent-one"),
+      "store.db-shm",
+    );
+    await Promise.all([
+      writeFile(catalogShm, "catalog-shm-one"),
+      writeFile(agentShm, "agent-shm-one"),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const first = await inventoryCursorSource(paths);
+    const catalog = first.catalogs.find(({ scope }) => scope === "store.db-shm");
+    expect(catalog).toBeDefined();
+    const mapping = mapCursorDiscovery(first, [
+      materializedCatalog(catalog!, [agent("agent-one")]),
+    ]);
+
+    expect(mapping.outcome).toBe("supported");
+    expect(mapping.candidates.map(({ nativeId }) => nativeId)).toEqual([
+      "index.db-shm",
+      "agent-one",
+    ]);
+
+    await Promise.all([
+      writeFile(chatShm, "chat-shm-two"),
+      writeFile(catalogShm, "catalog-shm-two"),
+      writeFile(agentShm, "agent-shm-two"),
+    ]);
+    expect((await inventoryCursorSource(paths)).fingerprint).toBe(first.fingerprint);
   });
 
   test("maps one catalog only to its exact sibling agent store", async () => {

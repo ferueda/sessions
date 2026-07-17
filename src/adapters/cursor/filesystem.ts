@@ -36,6 +36,11 @@ export interface CursorFilesystemHooks {
   readonly beforeFileOpen?: (components: readonly string[]) => void | Promise<void>;
 }
 
+export interface CursorDirectoryOptions extends CursorFilesystemHooks {
+  /** Exact names excluded only at the grammar-owned directory passed by the caller. */
+  readonly excludedNames?: ReadonlySet<string>;
+}
+
 export class CursorInventoryChangedError extends Error {
   constructor() {
     super("Cursor source changed during discovery");
@@ -73,12 +78,12 @@ export async function describeCursorEntry(
 export async function listCursorDirectory(
   root: string,
   components: readonly string[],
-  hooks: CursorFilesystemHooks = {},
+  options: CursorDirectoryOptions = {},
 ): Promise<readonly CursorEntryDescriptor[]> {
   const directory = await describeCursorEntry(root, components);
   if (directory.kind !== "directory") return Object.freeze([]);
 
-  await hooks.beforeDirectoryRead?.(components);
+  await options.beforeDirectoryRead?.(components);
   let names: string[];
   try {
     names = (await readdir(cursorPath(root, components))).toSorted(compareCursorComponents);
@@ -86,12 +91,12 @@ export async function listCursorDirectory(
     if (isRaceError(error)) throw new CursorInventoryChangedError();
     throw error;
   }
-  await hooks.afterDirectoryRead?.(components);
+  await options.afterDirectoryRead?.(components);
   const afterRead = await describeCursorEntry(root, components);
   if (!sameCursorDescriptor(directory, afterRead)) throw new CursorInventoryChangedError();
   const descriptors: CursorEntryDescriptor[] = [];
   for (const name of names) {
-    if (isSqliteShm(name)) continue;
+    if (options.excludedNames?.has(name) === true) continue;
     const descriptor = await describeCursorEntry(root, [...components, name]);
     if (descriptor.kind === "missing") throw new CursorInventoryChangedError();
     descriptors.push(descriptor);
@@ -220,10 +225,6 @@ function sameStat(left: CursorFileStat | undefined, right: CursorFileStat | unde
     right !== undefined &&
     JSON.stringify(statTuple(left)) === JSON.stringify(statTuple(right))
   );
-}
-
-function isSqliteShm(name: string): boolean {
-  return name === "store.db-shm" || name === "index.db-shm";
 }
 
 function isMissing(error: unknown): boolean {

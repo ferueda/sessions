@@ -11,6 +11,9 @@ import {
   listCursorDirectory,
 } from "./filesystem.ts";
 
+const STORE_SHM_NAMES = new Set(["store.db-shm"]);
+const CATALOG_SHM_NAMES = new Set(["index.db-shm"]);
+
 export interface CursorSqliteInventory {
   readonly main: CursorEntryDescriptor;
   readonly wal: CursorEntryDescriptor;
@@ -91,7 +94,7 @@ async function inventoryChats(
       if (chatEntry.kind !== "directory") continue;
       const nativeId = lastComponent(chatEntry);
       const chatComponents = ["chats", scope, nativeId] as const;
-      const childrenByName = await childMap(paths, chatComponents, entries);
+      const childrenByName = await childMap(paths, chatComponents, entries, STORE_SHM_NAMES);
       const metadataEntry =
         childrenByName.get("meta.json") ??
         (await describeCursorEntry(paths.cursorHome, [...chatComponents, "meta.json"]));
@@ -144,7 +147,12 @@ async function inventoryProjects(
       entries.push(scopeEntry);
       if (scopeEntry.kind !== "directory") continue;
       const scope = lastComponent(scopeEntry);
-      const scopeChildren = await childMap(paths, scopeEntry.components, entries);
+      const scopeChildren = await childMap(
+        paths,
+        scopeEntry.components,
+        entries,
+        CATALOG_SHM_NAMES,
+      );
       const catalogMain =
         scopeChildren.get("index.db") ??
         (await describeCursorEntry(paths.cursorHome, [...scopeEntry.components, "index.db"]));
@@ -159,7 +167,12 @@ async function inventoryProjects(
         for (const storeDirectory of await children(paths, agentsDirectory.components)) {
           entries.push(storeDirectory);
           if (storeDirectory.kind !== "directory") continue;
-          const storeChildren = await childMap(paths, storeDirectory.components, entries);
+          const storeChildren = await childMap(
+            paths,
+            storeDirectory.components,
+            entries,
+            STORE_SHM_NAMES,
+          );
           const main =
             storeChildren.get("store.db") ??
             (await describeCursorEntry(paths.cursorHome, [
@@ -195,16 +208,22 @@ async function inventoryProjects(
 async function children(
   paths: ResolvedCursorPaths,
   components: readonly string[],
+  excludedNames?: ReadonlySet<string>,
 ): Promise<readonly CursorEntryDescriptor[]> {
-  return listCursorDirectory(paths.cursorHome, components);
+  return listCursorDirectory(
+    paths.cursorHome,
+    components,
+    excludedNames === undefined ? {} : { excludedNames },
+  );
 }
 
 async function childMap(
   paths: ResolvedCursorPaths,
   components: readonly string[],
   entries: CursorEntryDescriptor[],
+  excludedNames?: ReadonlySet<string>,
 ): Promise<ReadonlyMap<string, CursorEntryDescriptor>> {
-  const childEntries = await children(paths, components);
+  const childEntries = await children(paths, components, excludedNames);
   entries.push(...childEntries);
   return new Map(childEntries.map((entry) => [lastComponent(entry), entry]));
 }
