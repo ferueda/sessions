@@ -137,13 +137,14 @@ function validateTable(
     readonly primaryKey: number;
   }[],
 ): void {
-  const rows = database.prepare(`PRAGMA table_info("${table}")`).all() as readonly {
+  const rows = database.prepare(`PRAGMA table_xinfo("${table}")`).all() as readonly {
     readonly cid?: unknown;
     readonly name?: unknown;
     readonly type?: unknown;
     readonly notnull?: unknown;
     readonly dflt_value?: unknown;
     readonly pk?: unknown;
+    readonly hidden?: unknown;
   }[];
   if (rows.length !== expected.length) unsupportedCursorFormat();
   for (const [index, shape] of expected.entries()) {
@@ -154,22 +155,56 @@ function validateTable(
       row.type !== shape.type ||
       row.notnull !== 0 ||
       row.dflt_value !== null ||
-      row.pk !== shape.primaryKey
+      row.pk !== shape.primaryKey ||
+      row.hidden !== 0
     ) {
       unsupportedCursorFormat();
     }
   }
 
   const indexes = database.prepare(`PRAGMA index_list("${table}")`).all() as readonly {
+    readonly name?: unknown;
     readonly unique?: unknown;
     readonly origin?: unknown;
     readonly partial?: unknown;
   }[];
   if (
     indexes.length !== 1 ||
+    typeof indexes[0]?.name !== "string" ||
     indexes[0]?.unique !== 1 ||
     indexes[0]?.origin !== "pk" ||
     indexes[0]?.partial !== 0
+  ) {
+    unsupportedCursorFormat();
+  }
+  const indexColumns = database
+    .prepare(
+      `SELECT seqno, cid, name, desc, coll, key
+       FROM pragma_index_xinfo(?)
+       ORDER BY seqno`,
+    )
+    .all(indexes[0].name) as readonly {
+    readonly seqno?: unknown;
+    readonly cid?: unknown;
+    readonly name?: unknown;
+    readonly desc?: unknown;
+    readonly coll?: unknown;
+    readonly key?: unknown;
+  }[];
+  if (
+    indexColumns.length !== 2 ||
+    indexColumns[0]?.seqno !== 0 ||
+    indexColumns[0]?.cid !== 0 ||
+    indexColumns[0]?.name !== expected[0]?.name ||
+    indexColumns[0]?.desc !== 0 ||
+    indexColumns[0]?.coll !== "BINARY" ||
+    indexColumns[0]?.key !== 1 ||
+    indexColumns[1]?.seqno !== 1 ||
+    indexColumns[1]?.cid !== -1 ||
+    indexColumns[1]?.name !== null ||
+    indexColumns[1]?.desc !== 0 ||
+    indexColumns[1]?.coll !== "BINARY" ||
+    indexColumns[1]?.key !== 0
   ) {
     unsupportedCursorFormat();
   }

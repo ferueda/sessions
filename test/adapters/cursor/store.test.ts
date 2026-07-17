@@ -89,6 +89,47 @@ describe("Cursor local store reader", () => {
 
   test.each([
     [
+      "a generated hidden column",
+      (db: DatabaseSync) => {
+        db.exec(
+          `ALTER TABLE blobs
+           ADD COLUMN generated_id TEXT GENERATED ALWAYS AS (id) VIRTUAL`,
+        );
+      },
+    ],
+    [
+      "a case-insensitive blob primary key",
+      (db: DatabaseSync) => {
+        const lowerRoot = "ab".repeat(32);
+        replaceStoreMetadata(db, {
+          agentId: "generic-session",
+          createdAt: 0,
+          isRunEverything: false,
+          latestRootBlobId: lowerRoot,
+          mode: "agent",
+          name: "Generic",
+        });
+        db.exec(`
+          DROP TABLE blobs;
+          CREATE TABLE blobs(id TEXT COLLATE NOCASE PRIMARY KEY, data BLOB);
+        `);
+        insertBlob(db, lowerRoot.toUpperCase(), new Uint8Array());
+      },
+    ],
+  ])("rejects store schema drift from %s", (_name, mutate) => {
+    database = createCursorStoreDatabase();
+    mutate(database);
+
+    expect(() =>
+      materializeCursorStore(database!, {
+        family: "chat-store-v1",
+        nativeId: "generic-session",
+      }),
+    ).toThrowError(expect.objectContaining({ kind: "unsupported-format" }) as CursorFormatError);
+  });
+
+  test.each([
+    [
       "extra user schema",
       (db: DatabaseSync) => {
         db.exec(`CREATE TABLE extra(value TEXT)`);
