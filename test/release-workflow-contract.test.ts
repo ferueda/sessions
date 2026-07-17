@@ -3,8 +3,6 @@ import path from "node:path";
 
 import { beforeAll, describe, expect, test } from "vitest";
 
-import { classifyReleaseRoute, type ReleaseRoute } from "../scripts/release-order.ts";
-
 const root = path.resolve(import.meta.dirname, "..");
 let workflow = "";
 
@@ -40,9 +38,10 @@ describe("release workflow contract", () => {
     const createRelease = jobBlock("create-release");
     const publish = jobBlock("publish");
 
-    expect(releasePr).toContain("github.event_name == 'push'");
-    expect(releasePr).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
-    expect(qualify).toContain("needs.route.outputs.qualify == 'true'");
+    expect(releasePr).toContain(
+      "if: github.event_name == 'push' && vars.RELEASE_AUTOMATION_ENABLED == 'true'",
+    );
+    expect(qualify).toContain("if: needs.route.outputs.qualify == 'true'");
     expect(qualify).toContain("scripts/release-order.ts assert-checkout");
     expect(qualify).toContain("pnpm check");
     expect(qualify).toContain('--mode "$RELEASE_MODE"');
@@ -59,57 +58,12 @@ describe("release workflow contract", () => {
     expect(smoke).toContain("macos-latest");
     expect(smoke).toContain("windows-latest");
     expect(smoke).toContain("scripts/smoke-release-package.ts");
-    expect(createRelease).toContain("github.event_name == 'push'");
-    expect(createRelease).toContain("needs.route.outputs.release_target == 'true'");
-    expect(publish).toContain("github.event_name == 'push'");
-    expect(publish).toContain("needs.route.outputs.release_target == 'true'");
-  });
-
-  test("models the manual, manifest-seed, and supported reachability states", () => {
-    const bootstrap = classifyReleaseRoute({
-      eventName: "workflow_dispatch",
-      ref: "refs/heads/main",
-      bootstrapRequested: true,
-      previousManifestVersion: null,
-      currentManifestVersion: "0.0.0",
-      packageVersion: "0.0.0",
-      changelog: "# Changelog\n",
-    });
-    expect(reachableJobs("workflow_dispatch", false, bootstrap)).toEqual([
-      "route",
-      "qualify",
-      "smoke-release",
-    ]);
-
-    const seed = classifyReleaseRoute({
-      eventName: "push",
-      ref: "refs/heads/main",
-      bootstrapRequested: false,
-      previousManifestVersion: null,
-      currentManifestVersion: "0.0.0",
-      packageVersion: "0.0.0",
-      changelog: "# Changelog\n",
-    });
-    expect(reachableJobs("push", false, seed)).toEqual(["route"]);
-    expect(reachableJobs("push", true, seed)).toEqual(["route", "release-pr"]);
-
-    const supported = classifyReleaseRoute({
-      eventName: "push",
-      ref: "refs/heads/main",
-      bootstrapRequested: false,
-      previousManifestVersion: "0.0.0",
-      currentManifestVersion: "0.1.0",
-      packageVersion: "0.1.0",
-      changelog: "# Changelog\n\n## [0.1.0](https://example.invalid)\n",
-    });
-    expect(reachableJobs("push", true, supported)).toEqual([
-      "route",
-      "release-pr",
-      "qualify",
-      "smoke-release",
-      "create-release",
-      "publish",
-    ]);
+    expect(createRelease).toContain(
+      "if: >-\n      github.event_name == 'push' &&\n      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n      needs.route.outputs.release_target == 'true'",
+    );
+    expect(publish).toContain(
+      "if: >-\n      github.event_name == 'push' &&\n      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n      needs.route.outputs.release_target == 'true'",
+    );
   });
 
   test("uses separate least-privilege GitHub App tokens", () => {
@@ -171,6 +125,9 @@ describe("release workflow contract", () => {
     expect(smoke).not.toContain("path: release-artifact");
     expect(smoke).toContain('--sha256 "${{ needs.qualify.outputs.sha256 }}"');
     expect(publish).not.toContain("path: release-artifact");
+    expect(jobBlock("release-pr")).toContain("needs: route");
+    expect(qualify).toContain("needs: route");
+    expect(smoke).toContain("needs:\n      - route\n      - qualify");
     expect(createRelease).toContain(
       "needs:\n      - route\n      - release-pr\n      - qualify\n      - smoke-release",
     );
@@ -187,19 +144,4 @@ function jobBlock(name: string): string {
   const remainder = workflow.slice(start + header.length);
   const next = /^  [a-z][\w-]*:\n/mu.exec(remainder);
   return remainder.slice(0, next?.index ?? remainder.length);
-}
-
-function reachableJobs(
-  eventName: "push" | "workflow_dispatch",
-  automationEnabled: boolean,
-  route: ReleaseRoute,
-): readonly string[] {
-  const jobs = ["route"];
-  const releasePr = eventName === "push" && automationEnabled;
-  if (releasePr) jobs.push("release-pr");
-  if (route.qualify) jobs.push("qualify", "smoke-release");
-  if (eventName === "push" && automationEnabled && releasePr && route.releaseTarget) {
-    jobs.push("create-release", "publish");
-  }
-  return jobs;
 }
