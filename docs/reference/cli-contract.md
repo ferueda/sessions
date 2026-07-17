@@ -72,16 +72,13 @@ source. List, search, entries, show, and export are provider-free reads of the r
 library. `doctor` and `paths` inspect runtime, library, and registered-source
 readiness without indexing or creating state.
 
-`index` considers all registered sources when `--source` is omitted. A valid
-unavailable provider is optional: it is reported as skipped and is not passed to
-the writer. If every registered provider is unavailable, the command exits `0`
-without opening or creating the library. Ready, unreadable, invalid, and
-throwing providers are attempted. `--source <kind>` is strict, so an explicitly
-selected unavailable provider remains incomplete and exits `1`; an unknown
-source is invalid usage before writer open. A complete attempted set exits `0`;
-an incomplete attempted source is fully rendered and exits `1`. A successful
-capture stores the latest canonical snapshot. Complete later absence marks it
-missing without deletion; incomplete discovery leaves source state unknown.
+Without `--source`, `index` skips valid unavailable providers before writer open
+and attempts the rest. If all are skipped, it exits `0` without creating the
+library. Unreadable, invalid, or throwing probes fail. Explicitly selecting an
+unavailable provider exits `1`; an unknown source is usage exit `2`. Any
+incomplete attempted source exits `1`; otherwise indexing exits `0`. Successful
+captures remain durable, complete later absence marks a session missing, and
+incomplete discovery leaves source state unknown.
 
 `list` defaults to 50 and accepts 1 through 200. Activity is
 `updatedAt`, falling back to `createdAt`; missing activity sorts last, then
@@ -169,9 +166,7 @@ Check IDs, field names, and `schemaVersion` are machine-facing. Summaries are hu
 The current check order is `node-runtime`, `sqlite-fts5`, `library-state`, then
 `source-codex`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete`
 (`supported` or `unsupported`) in `details`; lack of FTS5 fails. An uninitialized
-library passes. Every non-ready initialized state fails. Ready Codex passes;
-optional unavailable Codex passes without reading rollout content; unreadable
-Codex fails.
+library passes. Every non-ready initialized state fails.
 
 For `ready`, the library check uses an immutable snapshot and adds
 `canonicalIntegrity`, `foreignKeys`, `contentReachability`,
@@ -413,9 +408,9 @@ of `source-unavailable`, `source-unreadable`, `probe-failed`, `discovery-failed`
 `interrupted`, or `repository-write`. An implicitly unavailable source is
 `skipped` with `reason: "source-unavailable"`, zero counts/items,
 `coverage: { "status": "not-attempted" }`, and observed start/finish timestamps.
-Top-level `skippedSources` counts only that third state; `incompleteSources`
-counts attempted failures. Source reports sort by raw source tuple; items retain
-persisted run-item order. Top counts and omissions are safe sums.
+`skippedSources` counts skipped sources; `incompleteSources` counts attempted
+failures. Source reports sort by raw source tuple; items retain persisted
+run-item order. Top counts and omissions are safe sums.
 
 Forget, orphan repair, physical compaction, and all-data deletion emit these
 exact schema-1 shapes:

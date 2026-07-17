@@ -410,21 +410,11 @@ directory order, timestamps, product labels, or undocumented opaque fields.
 
 ## Accepted multi-provider policy
 
-Cursor registration must not make Cursor a requirement for Codex users, and the
-same rule applies to every future adapter:
-
-- registered providers are optional by default;
-- bare indexing skips valid unavailable providers and attempts available ones;
-- explicit `--source` selection remains strict;
-- unreadable or invalid providers are failures rather than silently skipped;
-- doctor reports an unavailable provider as informational, while paths always
-  reports its real status; and
-- structured index output distinguishes skipped providers from complete or
-  incomplete capture.
-
-This provider-neutral prerequisite lands before Cursor registration. It does not
-weaken Cursor format validation, source-change checks, or capture completeness
-for an attempted provider.
+Cursor uses the provider-neutral
+[optional-source policy](../reference/cli-contract.md): implicit indexing skips
+only valid unavailable sources; explicit selection and all other probe failures
+remain strict. This does not weaken Cursor format validation, source-change
+checks, or capture completeness.
 
 ## Official sources
 

@@ -53,11 +53,9 @@ The composition root is the only production module that imports both a concrete
 adapter and infrastructure. It resolves Codex lazily: help, version, list,
 search, entries, show, export, forget, data repair-orphans, data compact, and data clear
 do not resolve provider configuration.
-Index, paths, and doctor intentionally resolve or probe registered sources.
-Registration means supported, not installed. Bare indexing skips valid
-unavailable providers before writer open; explicit selection remains strict.
-Doctor treats absence as informational and installed-but-unreadable state as a
-failure.
+Index, paths, and doctor resolve registered sources. Implicit indexing skips
+only valid unavailable sources; explicit selection and all other probe failures
+remain strict.
 
 ## Ownership
 

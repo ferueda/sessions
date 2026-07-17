@@ -51,13 +51,9 @@ remove lease or SQLite sidecar files by hand.
 
 ## The Codex source is unavailable
 
-An unavailable provider is optional. Doctor reports the condition without
-failing, and bare `sessions index` reports and skips that provider. Explicit
-`sessions index --source codex` remains strict and exits `1`.
-
-Provider absence does not invalidate a ready retained library. Continue with
-provider-free `list`, `search`, `entries`, `show`, or `export`, and report the
-retained source state and freshness.
+Bare indexing skips an unavailable provider, and doctor treats it as
+informational; explicit `sessions index --source codex` exits `1`. Retained
+snapshots remain available through provider-free queries and export.
 
 A retained session can be `missing` after a complete scan no longer sees it, or
 `unknown` when source coverage was incomplete. Its canonical snapshot remains

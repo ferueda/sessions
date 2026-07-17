@@ -12,8 +12,8 @@ never writes to the provider.
    indexing, probe availability before writer open and report valid unavailable
    providers as skipped. If every provider is unavailable, return without
    opening or creating the library.
-2. Acquire the single index writer lease for every attempted source, which makes
-   the new generation dirty,
+2. If any source remains, acquire the single index writer lease, which makes the
+   new generation dirty,
    and start one run per source. Starting a run changes that source's coverage
    to `unknown`.
 3. Probe the source, then exhaust and validate discovery before applying any
@@ -43,11 +43,8 @@ never writes to the provider.
 - An incomplete probe or primary discovery never proves that a retained session
   is missing. Coverage stays `unknown`, and canonical documents remain
   available.
-- Provider registration means support, not installation. Implicit indexing
-  skips only a valid `unavailable` probe. Unreadable, invalid, and throwing
-  probes remain attempted failures, as does every explicitly selected source.
-  A source that becomes unavailable after optional preflight fails its attempted
-  run rather than being reclassified as skipped.
+- Only valid `unavailable` probes are skipped. Explicitly selected, unreadable,
+  invalid, throwing, or post-preflight unavailable sources fail.
 - A first-attempt `source-changed` failure receives at most one fresh retry per
   source run. Incomplete rediscovery, a vanished original identity, or another
   typed read failure records one terminal failure. Other candidate read failures

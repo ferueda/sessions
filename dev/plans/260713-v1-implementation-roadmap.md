@@ -1326,14 +1326,12 @@ Required behavior:
 - `index --source <kind>` remains strict. An explicitly selected unavailable
   provider is incomplete and exits `1`; an unknown source remains usage exit
   `2`.
-- Optional means absence is allowed. Unreadable, invalid, or throwing probes
-  remain failures in implicit and explicit operation.
+- Unreadable, invalid, or throwing probes remain failures.
 - Index JSON and human output distinguish `skipped` from `completed` and
   `incomplete`, name `source-unavailable` as the reason, and report skipped
   sources outside `incompleteSources`.
-- Doctor treats a valid unavailable provider as an informational passing check.
-  Ready passes; unreadable, invalid, and throwing probes fail. Paths continues
-  reporting the real status of every registered provider.
+- Doctor treats valid unavailability as informational; paths reports actual
+  provider status.
 - Availability preflight is provider-neutral, does not read transcripts, and is
   not capture evidence. Attempted sources retain their existing probe,
   discovery, capture, freshness, and reconciliation behavior.
@@ -1357,9 +1355,8 @@ Exit gate:
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
 
-Dependency: M11b0 lands first. The Cursor change consumes its optional-provider
-registry behavior rather than changing default selection or doctor semantics
-inside the adapter.
+Dependency: M11b uses the completed M11b0 policy; Cursor adds no
+adapter-specific selection or doctor behavior.
 
 Research authority: use the
 [Cursor source survey](../../docs/research/cursor-source-survey.md) for the
