@@ -123,7 +123,7 @@ describe("Sessions Agent Skill contracts", () => {
     expect(contents).not.toMatch(
       /semantic search|Sessions automatically|automatically (?:creates?|sends?|uploads?)/iu,
     );
-    expect(contents).toMatch(/sessions index --source codex/u);
+    expect(contents).toMatch(/sessions index --source <authorized-source>/u);
     expect(contents).toMatch(/explicitly authorizes indexing/u);
     expect(contents).not.toMatch(/authorized provider reading/u);
     expect(contents).toMatch(/user-requested deletion of Sessions-owned data/u);

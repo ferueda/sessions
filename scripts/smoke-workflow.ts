@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, readdir, readFile, readlink, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, readlink, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -14,6 +14,10 @@ import type { renderIndex as renderIndexType } from "../src/cli/render.ts";
 import type { resolveIndexPaths as resolveIndexPathsType } from "../src/infrastructure/state/paths.ts";
 import type { createSqliteIndexLifecycle as createSqliteIndexLifecycleType } from "../src/infrastructure/sqlite/database.ts";
 import { codexRolloutRecords, createCodexSourceFixture } from "../test/fixtures/codex/source.ts";
+import {
+  CURSOR_AGENT_NATIVE_ID,
+  createCursorSourceFixture,
+} from "../test/fixtures/cursor/source.ts";
 
 export interface SmokeCommandResult {
   readonly status: number | null;
@@ -38,7 +42,8 @@ const TOOL_MENTION = `Ordinary text mentions ${TOOL_MARKER}, ${BARE_TOOL_NAME}, 
 const ACTIVITY_AFTER = "2025-07-14T14:19:59.999Z";
 const ACTIVITY_BEFORE = "2025-07-14T14:20:00.001Z";
 const ROLLOUT_PATH = `sessions/2026/07/14/rollout-2026-07-14T00-00-00-${NATIVE_ID}.jsonl`;
-const PRIVATE_FIXTURE_PATTERN = /synthetic-smoke-workspace|sourceMetadata|rollout-/u;
+const PRIVATE_FIXTURE_PATTERN =
+  /synthetic-smoke-workspace|synthetic\/cursor-workspace|sessions-cursor-source-|sourceMetadata|rollout-/u;
 const INDEX_TIMING_PREFIX = "sessions:index-timings ";
 const UNINITIALIZED_LIST_OUTPUT =
   "No sessions found.\n\nWarning: retained evidence may be incomplete (capture scope is uninitialized).\n";
@@ -49,6 +54,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
   const fixture = await createCodexSourceFixture();
   const dataDirectory = path.join(options.temporaryRoot, "sessions-data");
   const oldCacheDirectory = path.join(options.temporaryRoot, "old-sessions-cache");
+  const cursorHome = path.join(fixture.environment.home, ".cursor");
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
     CODEX_HOME: fixture.codexHome,
@@ -139,8 +145,9 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assert.equal(doctorReport.ok, true);
     assert.deepEqual(
       readArray(doctorReport, "checks").map((check) => readObject(check).id),
-      ["node-runtime", "sqlite-fts5", "library-state", "source-codex"],
+      ["node-runtime", "sqlite-fts5", "library-state", "source-codex", "source-cursor"],
     );
+    assert.equal(existsSync(cursorHome), false, "doctor created an unavailable Cursor source");
 
     const paths = await stableProviderCommand(options, fixture.codexHome, environment, [
       "paths",
@@ -155,14 +162,25 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assert.equal(library.directory, dataDirectory);
     assert.equal(library.initialized, false);
     assert.equal(library.state, "uninitialized");
-    const source = readObject(readArray(pathsReport, "sources")[0]);
-    assert.equal(readObject(source.source).kind, "codex");
-    assert.equal(readObject(source.probe).status, "ready");
+    const [codexSource, cursorSource] = readArray(pathsReport, "sources").map(readObject);
+    assert.equal(readObject(codexSource!.source).kind, "codex");
+    assert.equal(readObject(codexSource!.probe).status, "ready");
     assert.deepEqual(
-      readArray(readObject(source.probe), "locations").map((location) => readObject(location).role),
+      readArray(readObject(codexSource!.probe), "locations").map(
+        (location) => readObject(location).role,
+      ),
       ["codex-home", "sqlite-home"],
     );
+    assert.equal(readObject(cursorSource!.source).kind, "cursor");
+    assert.equal(readObject(cursorSource!.probe).status, "unavailable");
+    assert.deepEqual(
+      readArray(readObject(cursorSource!.probe), "locations").map(
+        (location) => readObject(location).role,
+      ),
+      ["cursor-home"],
+    );
     assert.equal(existsSync(dataDirectory), false, "doctor or paths created Sessions state");
+    assert.equal(existsSync(cursorHome), false, "paths created an unavailable Cursor source");
 
     const firstIndex = await stableProviderCommand(options, fixture.codexHome, environment, [
       "index",
@@ -524,7 +542,13 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "--format",
       "json",
     ]);
-    assertCompleteIndex(missingIndex, { updated: 0, unchanged: 0, missing: 1 });
+    assertCompleteIndex(missingIndex, {
+      updated: 0,
+      unchanged: 0,
+      missing: 1,
+      skipped: 1,
+      sourceKind: "codex",
+    });
     const missingReport = parseJson(missingIndex.stdout);
     const missingSource = readObject(readArray(missingReport, "sources")[0]);
     const missingItem = readObject(readArray(missingSource, "items")[0]);
@@ -548,7 +572,13 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "--format",
       "json",
     ]);
-    assertCompleteIndex(repeatedMissing, { updated: 0, unchanged: 0, missing: 1 });
+    assertCompleteIndex(repeatedMissing, {
+      updated: 0,
+      unchanged: 0,
+      missing: 1,
+      skipped: 1,
+      sourceKind: "codex",
+    });
 
     await rm(fixture.stateDatabase);
     const skipped = await stableProviderCommand(options, fixture.codexHome, environment, [
@@ -559,11 +589,30 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assertCommand(skipped, 0, "implicit index with unavailable source");
     const skippedReport = parseJson(skipped.stdout);
     assert.equal(skippedReport.incompleteSources, 0);
-    assert.equal(skippedReport.skippedSources, 1);
-    const skippedSource = readObject(readArray(skippedReport, "sources")[0]);
-    assert.equal(skippedSource.status, "skipped");
-    assert.equal(skippedSource.reason, "source-unavailable");
-    assert.equal(readObject(skippedSource.coverage).status, "not-attempted");
+    assert.equal(skippedReport.skippedSources, 2);
+    const skippedSources = readArray(skippedReport, "sources").map(readObject);
+    assert.deepEqual(
+      skippedSources.map((source) => ({
+        kind: readObject(source.source).kind,
+        status: source.status,
+        reason: source.reason,
+        coverage: readObject(source.coverage).status,
+      })),
+      [
+        {
+          kind: "codex",
+          status: "skipped",
+          reason: "source-unavailable",
+          coverage: "not-attempted",
+        },
+        {
+          kind: "cursor",
+          status: "skipped",
+          reason: "source-unavailable",
+          coverage: "not-attempted",
+        },
+      ],
+    );
 
     const incomplete = await stableProviderCommand(options, fixture.codexHome, environment, [
       "index",
@@ -608,7 +657,13 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "--format",
       "json",
     ]);
-    assertCompleteIndex(restoredIndex, { updated: 0, unchanged: 1, missing: 0 });
+    assertCompleteIndex(restoredIndex, {
+      updated: 0,
+      unchanged: 1,
+      missing: 0,
+      skipped: 1,
+      sourceKind: "codex",
+    });
 
     const forget = await stableProviderCommand(options, fixture.codexHome, environment, [
       "forget",
@@ -678,7 +733,13 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
       "--format",
       "json",
     ]);
-    assertCompleteIndex(recapture, { updated: 1, unchanged: 0, missing: 0 });
+    assertCompleteIndex(recapture, {
+      updated: 1,
+      unchanged: 0,
+      missing: 0,
+      skipped: 1,
+      sourceKind: "codex",
+    });
     const recapturedList = await stableProviderCommand(options, fixture.codexHome, environment, [
       "list",
     ]);
@@ -717,8 +778,208 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assertCommand(afterClear, 0, "list after data clear");
     assert.equal(afterClear.stdout, UNINITIALIZED_LIST_OUTPUT);
     assert.equal(existsSync(oldCacheDirectory), false, "CLI read or wrote the old cache location");
+
+    const cursorFixture = await createCursorSourceFixture();
+    try {
+      await mkdir(fixture.environment.home, { recursive: true });
+      await cp(cursorFixture.cursorHome, cursorHome, { recursive: true, errorOnExist: true });
+      await assertCursorDistributionJourney({
+        options,
+        providerRoots: [fixture.codexHome, cursorHome],
+        environment,
+        dataDirectory,
+      });
+    } finally {
+      await cursorFixture.dispose();
+    }
   } finally {
     await fixture.dispose();
+  }
+}
+
+async function assertCursorDistributionJourney(input: {
+  readonly options: SmokeWorkflowOptions;
+  readonly providerRoots: readonly string[];
+  readonly environment: NodeJS.ProcessEnv;
+  readonly dataDirectory: string;
+}): Promise<void> {
+  const { options, providerRoots, environment, dataDirectory } = input;
+
+  const doctor = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "doctor",
+    "--format",
+    "json",
+  ]);
+  assertCommand(doctor, 0, "doctor with ready Cursor source");
+  assert.deepEqual(
+    readArray(parseJson(doctor.stdout), "checks").map((check) => readObject(check).id),
+    ["node-runtime", "sqlite-fts5", "library-state", "source-codex", "source-cursor"],
+  );
+
+  const paths = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "paths",
+    "--format",
+    "json",
+  ]);
+  assertCommand(paths, 0, "paths with ready Cursor source");
+  const cursorPathReport = readArray(parseJson(paths.stdout), "sources")
+    .map(readObject)
+    .find((source) => readObject(source.source).kind === "cursor");
+  assert.ok(cursorPathReport !== undefined, "paths omitted the registered Cursor source");
+  assert.equal(readObject(cursorPathReport.probe).status, "ready");
+  assert.deepEqual(
+    readArray(readObject(cursorPathReport.probe), "locations").map(
+      (location) => readObject(location).role,
+    ),
+    ["cursor-home"],
+  );
+
+  const explicitIndex = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "index",
+    "--source",
+    "cursor",
+    "--format",
+    "json",
+  ]);
+  assertCompleteIndex(explicitIndex, {
+    updated: 2,
+    unchanged: 0,
+    missing: 0,
+    sourceKind: "cursor",
+  });
+
+  const mixedIndex = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "index",
+    "--format",
+    "json",
+  ]);
+  assertCommand(mixedIndex, 0, "implicit mixed-provider index");
+  const mixedReport = parseJson(mixedIndex.stdout);
+  assert.deepEqual(readObject(mixedReport.counts), {
+    discovered: 3,
+    unchanged: 2,
+    updated: 1,
+    failed: 0,
+    missing: 0,
+    stale: 0,
+  });
+  assert.equal(mixedReport.incompleteSources, 0);
+  assert.equal(mixedReport.skippedSources, 0);
+  assert.deepEqual(
+    readArray(mixedReport, "sources").map((value) => {
+      const source = readObject(value);
+      return {
+        kind: readObject(source.source).kind,
+        status: source.status,
+        coverage: readObject(source.coverage).status,
+      };
+    }),
+    [
+      { kind: "codex", status: "completed", coverage: "complete" },
+      { kind: "cursor", status: "completed", coverage: "complete" },
+    ],
+  );
+
+  const nativeLookup = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "list",
+    "--source",
+    "cursor",
+    "--native-id",
+    CURSOR_AGENT_NATIVE_ID,
+    "--format",
+    "json",
+  ]);
+  assertCommand(nativeLookup, 0, "Cursor provider-native ID lookup");
+  assertNoPrivateFixtureMarkers(nativeLookup.stdout, "Cursor provider-native ID lookup");
+  const nativeSessions = readArray(parseJson(nativeLookup.stdout), "sessions").map(readObject);
+  assert.equal(nativeSessions.length, 1);
+  const cursorSession = readObject(nativeSessions[0]!.session);
+  assert.equal(readObject(cursorSession.source).kind, "cursor");
+  assert.equal(cursorSession.nativeId, CURSOR_AGENT_NATIVE_ID);
+  const canonicalId = String(cursorSession.canonicalId);
+
+  const linkedSearch = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "search",
+    "value",
+    "--source",
+    "cursor",
+    "--native-id",
+    CURSOR_AGENT_NATIVE_ID,
+    "--tool-name",
+    "cursor_agent_tool",
+    "--context",
+    "0",
+    "--format",
+    "json",
+  ]);
+  assertCommand(linkedSearch, 0, "linked Cursor tool search");
+  assertNoPrivateFixtureMarkers(linkedSearch.stdout, "linked Cursor tool search");
+  const linkedHits = readArray(parseJson(linkedSearch.stdout), "hits").map(readObject);
+  assert.equal(linkedHits.length, 1);
+  const primaryEntry = readObject(linkedHits[0]!.entry);
+  assert.equal(primaryEntry.kind, "tool-call");
+  assert.equal(primaryEntry.toolName, "cursor_agent_tool");
+  const linkedContext = readArray(linkedHits[0]!, "context").map(readObject);
+  assert.equal(linkedContext.length, 1);
+  assert.equal(linkedContext[0]!.linked, true);
+  assert.equal(readObject(linkedContext[0]!.entry).kind, "tool-result");
+
+  const show = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "show",
+    canonicalId,
+    "--format",
+    "json",
+  ]);
+  assertCommand(show, 0, "Cursor show");
+  assertNoPrivateFixtureMarkers(show.stdout, "Cursor show");
+  const showReport = parseJson(show.stdout);
+  assertStructuredHeader(showReport, "show", "snapshot");
+  assert.equal(
+    readObject(readObject(showReport.snapshot).session).nativeId,
+    CURSOR_AGENT_NATIVE_ID,
+  );
+  assert.ok(readArray(showReport, "entries").length > 0, "Cursor show returned no entries");
+
+  const exported = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "export",
+    canonicalId,
+    "--format",
+    "jsonl",
+  ]);
+  assertCommand(exported, 0, "Cursor export");
+  assertNoPrivateFixtureMarkers(exported.stdout, "Cursor export");
+  const exportRecords = parseJsonLines(exported.stdout);
+  assertStructuredHeader(exportRecords[0]!, "export", "session");
+  assert.ok(
+    exportRecords.some((record) => record.type === "entry"),
+    "Cursor export returned no entry records",
+  );
+
+  assert.equal(
+    existsSync(path.join(dataDirectory, ".scratch")),
+    false,
+    "Cursor commands retained source-capture scratch data",
+  );
+  const clear = await stableProviderTreesCommand(options, providerRoots, environment, [
+    "data",
+    "clear",
+    "--yes",
+    "--format",
+    "json",
+  ]);
+  assertCommand(clear, 0, "data clear after Cursor journey");
+  assert.equal(parseJson(clear.stdout).outcome, "cleared");
+  for (const file of [
+    "sessions.sqlite3",
+    "sessions.sqlite3-wal",
+    "sessions.sqlite3-shm",
+    ".scratch",
+  ]) {
+    assert.equal(
+      existsSync(path.join(dataDirectory, file)),
+      false,
+      `Cursor cleanup retained ${file}`,
+    );
   }
 }
 
@@ -813,9 +1074,18 @@ async function stableProviderCommand(
   environment: NodeJS.ProcessEnv,
   args: readonly string[],
 ): Promise<SmokeCommandResult> {
-  const before = await snapshotTree(providerRoot);
+  return stableProviderTreesCommand(options, [providerRoot], environment, args);
+}
+
+async function stableProviderTreesCommand(
+  options: SmokeWorkflowOptions,
+  providerRoots: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  args: readonly string[],
+): Promise<SmokeCommandResult> {
+  const before = await Promise.all(providerRoots.map(snapshotTree));
   const result = options.run(args, environment);
-  const after = await snapshotTree(providerRoot);
+  const after = await Promise.all(providerRoots.map(snapshotTree));
   assert.deepEqual(after, before, `provider tree changed while running sessions ${args.join(" ")}`);
   return result;
 }
@@ -839,19 +1109,30 @@ function assertCommand(result: SmokeCommandResult, status: number, label: string
 
 function assertCompleteIndex(
   result: SmokeCommandResult,
-  counts: { readonly updated: number; readonly unchanged: number; readonly missing: number },
+  counts: {
+    readonly updated: number;
+    readonly unchanged: number;
+    readonly missing: number;
+    readonly skipped?: number;
+    readonly sourceKind?: string;
+  },
 ): void {
   assertCommand(result, 0, "complete index");
   const report = parseJson(result.stdout);
   assert.equal(report.schemaVersion, 1);
   assert.equal(report.command, "index");
   assert.equal(report.incompleteSources, 0);
-  assert.equal(report.skippedSources, 0);
+  assert.equal(report.skippedSources, counts.skipped ?? 0);
   const reportCounts = readObject(report.counts);
   assert.equal(reportCounts.updated, counts.updated);
   assert.equal(reportCounts.unchanged, counts.unchanged);
   assert.equal(reportCounts.missing, counts.missing);
-  const source = readObject(readArray(report, "sources")[0]);
+  const sources = readArray(report, "sources").map(readObject);
+  const source =
+    counts.sourceKind === undefined
+      ? sources.find((candidate) => candidate.status === "completed")
+      : sources.find((candidate) => readObject(candidate.source).kind === counts.sourceKind);
+  assert.ok(source !== undefined, `index omitted source ${String(counts.sourceKind)}`);
   assert.equal(source.status, "completed");
   assert.equal(readObject(source.coverage).status, "complete");
 }

@@ -23,6 +23,7 @@ export type SessionSourceContractScenario =
   | "unsupported-format";
 
 export type SourceInputOwnership = "live" | "snapshot-owned";
+export type OptionalSessionMetadataField = "title" | "workspace" | "createdAt" | "updatedAt";
 
 export interface ExpectedSourceInput {
   readonly identity: SessionIdentity;
@@ -37,7 +38,14 @@ export interface SessionSourceContractFixture {
   readonly sourceInstance: SourceInstance;
   readonly identities: readonly SessionIdentity[];
   readonly primaryIdentity: SessionIdentity;
-  readonly missingMetadataIdentity: SessionIdentity;
+  readonly metadataAbsence: Readonly<{
+    identity: SessionIdentity;
+    fields: readonly OptionalSessionMetadataField[];
+  }>;
+  readonly expectedProvenance: Readonly<{
+    origin: SessionDocument["entries"][number]["content"][number]["origin"];
+    originConfidence: SessionDocument["entries"][number]["content"][number]["originConfidence"];
+  }>;
   readonly repeatedText: string;
   readonly repeatedTextProvenance: Readonly<{
     origin: SessionDocument["entries"][number]["content"][number]["origin"];
@@ -204,14 +212,14 @@ export function registerSessionSourceContract(
       }
     });
 
-    test("preserves missing metadata and unknown provenance without recurrence inference", async () => {
+    test("preserves supported metadata absence and provenance without recurrence inference", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {
         const documents = await readAll(
           fixture.source,
           await discover(fixture),
           fixture.captureWorkspace,
         );
-        const missing = requireDocument(documents, fixture.missingMetadataIdentity);
+        const metadata = requireDocument(documents, fixture.metadataAbsence.identity);
         const repeatedSegments = documents.flatMap((document) =>
           document.entries.flatMap((entry) =>
             entry.content.filter(
@@ -219,24 +227,24 @@ export function registerSessionSourceContract(
             ),
           ),
         );
-        const unknownProvenanceSegments = documents.flatMap((document) =>
+        const expectedProvenanceSegments = documents.flatMap((document) =>
           document.entries.flatMap((entry) =>
             entry.content.filter(
               ({ origin, originConfidence }) =>
-                origin === "unknown" && originConfidence === "unknown",
+                origin === fixture.expectedProvenance.origin &&
+                originConfidence === fixture.expectedProvenance.originConfidence,
             ),
           ),
         );
 
-        expect(missing).not.toHaveProperty("title");
-        expect(missing).not.toHaveProperty("workspace");
-        expect(missing).not.toHaveProperty("createdAt");
-        expect(missing).not.toHaveProperty("updatedAt");
+        for (const field of fixture.metadataAbsence.fields) {
+          expect(metadata).not.toHaveProperty(field);
+        }
         expect(repeatedSegments).toHaveLength(2);
         expect(
           repeatedSegments.map(({ origin, originConfidence }) => ({ origin, originConfidence })),
         ).toEqual([fixture.repeatedTextProvenance, fixture.repeatedTextProvenance]);
-        expect(unknownProvenanceSegments.length).toBeGreaterThan(0);
+        expect(expectedProvenanceSegments.length).toBeGreaterThan(0);
       });
     });
 

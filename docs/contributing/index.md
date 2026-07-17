@@ -30,6 +30,7 @@ Contracts:
 - [CLI](../reference/cli-contract.md)
 - [Agent Skill](../reference/agent-skill.md)
 - [Codex format support](../reference/codex-format-support.md)
+- [Cursor format support](../reference/cursor-format-support.md)
 - [Source adapters](adapter-contract.md)
 - [Repository commands](commands.md)
 - [Architecture decisions](../decisions/README.md)
@@ -41,5 +42,7 @@ Research baselines:
 - [Cursor source survey](../research/cursor-source-survey.md) — official product
   semantics, sanitized local formats, capture-workspace prerequisite, and M11
   boundaries.
+- [Cursor local format v1 evidence](../research/cursor-format-v1.md) — exact
+  M11b field, authority, ordering, normalization, and failure matrix.
 
 Active implementation work is indexed in [`dev/plans/README.md`](../../dev/plans/README.md).

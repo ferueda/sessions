@@ -9,7 +9,7 @@ not a best-effort feature.
 ## Current behavior
 
 - Indexing starts only when the user runs `sessions index`.
-- Codex histories are read-only inputs. Sessions performs no provider writes,
+- Cursor and Codex histories are read-only inputs. Sessions performs no provider writes,
   network requests, telemetry, or uploads.
 - A successful index stores an independent durable normalized copy of the latest
   successfully captured session in Sessions-owned application data. It also
@@ -32,9 +32,9 @@ not a best-effort feature.
   stores and uploads nothing and includes no identities, paths, fingerprints,
   timestamps, errors, or transcript-derived values.
 
-Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show are
-current. Cursor adapter support, library import/restore, and automatic analysis are not current
-commands; Markdown presentation is deferred beyond V1.
+Portable JSON/JSONL export and transcript-bearing JSON/JSONL
+list/search/entries/show are current. Library import/restore and automatic
+analysis are not current commands; Markdown presentation is deferred beyond V1.
 
 ## Owned local state
 
@@ -59,8 +59,8 @@ Sessions-owned directory and index again; provider histories remain untouched.
 Data-preserving migration support begins with the first published release.
 
 `sessions paths` reports these owned paths without creating them. It also reports
-sanitized Codex home/state roots; it does not enumerate rollout files or print
-transcript content.
+sanitized registered-source roots; it does not enumerate transcript files or
+print transcript content.
 
 On POSIX, writer-created directories are constrained to `0700` and database,
 sidecar, and scratch files to `0600` where applicable. On Windows, state remains
@@ -125,6 +125,17 @@ though it is not retained product data.
 Rollouts are streamed from declared plain JSONL or Zstandard files. File identity
 is checked before and after reading. Malformed or changing input never replaces a
 last-good canonical document with partial content.
+
+## Cursor capture
+
+Cursor uses its default local root. During explicit indexing, Sessions traverses
+only the supported local store grammar and stages required SQLite main/WAL bytes
+in the same private capture workspace. It never opens or copies provider SHM.
+Deferred JSONL files are not read. See the
+[Cursor format support boundary](reference/cursor-format-support.md).
+
+Changing, malformed, or conflicting Cursor evidence fails closed. Unsupported
+JSONL-only, legacy, and cloud-only history is not captured or inferred.
 
 ## Stored content
 

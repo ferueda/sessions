@@ -61,10 +61,18 @@ describe("doctor persistence boundary", () => {
       "sqlite-fts5",
       "library-state",
       "source-codex",
+      "source-cursor",
     ]);
-    expect(report.checks?.at(-1)).toEqual({
+    expect(report.checks?.at(-2)).toEqual({
       id: "source-codex",
       label: "codex source",
+      ok: true,
+      summary: "Source is unavailable (optional)",
+      details: { probeStatus: "unavailable" },
+    });
+    expect(report.checks?.at(-1)).toEqual({
+      id: "source-cursor",
+      label: "cursor source",
       ok: true,
       summary: "Source is unavailable (optional)",
       details: { probeStatus: "unavailable" },

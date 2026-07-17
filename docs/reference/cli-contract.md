@@ -17,7 +17,7 @@ sessions --help
 sessions --version
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
-sessions index [--source codex] [--format human|json]
+sessions index [--source codex|cursor] [--format human|json]
 sessions list [--source SOURCE] [--instance INSTANCE]
               [--native-id NATIVE-ID]
               [--source-state present|missing|unknown] [--workspace WORKSPACE]
@@ -86,7 +86,7 @@ activity descends, then the raw source/instance/native tuple ascends with binary
 collation. When another page exists, output ends with the copyable
 `Next cursor: <token>` line. A fresh library renders `No sessions found.`, then
 the uninitialized-capture warning described below, exits `0`, and does not create
-state or resolve Codex. JSON emits an empty page bundle; JSONL emits one page record.
+state or resolve a provider. JSON emits an empty page bundle; JSONL emits one page record.
 Every non-empty result includes one query-derived known retained root or
 `unknown`.
 
@@ -95,7 +95,7 @@ and accepts 1 through 200. `--context` defaults to 0 and accepts 0 through 10
 adjacent entries on each side. A no-match result renders `No matches found.`,
 then a capture warning when the page scope is not complete, and exits `0`.
 Search, list, entries, and show read one immutable retained-library
-snapshot per operation and never resolve or reopen Codex. JSON emits an empty
+snapshot per operation and never resolve or reopen a provider. JSON emits an empty
 page bundle; JSONL emits one page record.
 
 `entries` requires no search text. It defaults to `--select all` and 50 records,
@@ -163,8 +163,8 @@ state. All leave provider data untouched.
 
 Check IDs, field names, and `schemaVersion` are machine-facing. Summaries are human-facing. Checks run in declared order and continue after failure. A thrown probe becomes a sanitized failed check.
 
-The current check order is `node-runtime`, `sqlite-fts5`, `library-state`, then
-`source-codex`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete`
+The current check order is `node-runtime`, `sqlite-fts5`, `library-state`,
+`source-codex`, then `source-cursor`. The SQLite check reports `sqliteVersion` and `fts5SecureDelete`
 (`supported` or `unsupported`) in `details`; lack of FTS5 fails. An uninitialized
 library passes. Every non-ready initialized state fails.
 
@@ -208,27 +208,8 @@ All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed c
 
 ### Paths JSON
 
-`sessions paths --format json` writes one schema-1 document. Before
-initialization, a Linux default may look like:
-
-```json
-{
-  "schemaVersion": 1,
-  "command": "paths",
-  "library": {
-    "directory": "/home/user/.local/share/sessions",
-    "scratch": "/home/user/.local/share/sessions/.scratch",
-    "database": "/home/user/.local/share/sessions/sessions.sqlite3",
-    "wal": "/home/user/.local/share/sessions/sessions.sqlite3-wal",
-    "shm": "/home/user/.local/share/sessions/sessions.sqlite3-shm",
-    "initialized": false,
-    "state": "uninitialized",
-    "schemaVersion": null,
-    "supportedSchemaVersion": 1
-  },
-  "sources": []
-}
-```
+`sessions paths --format json` writes one schema-1 document. The exact schema and
+example are in Current machine-readable contracts below.
 
 Schema 1 reports the Sessions-owned application-data library, scratch workspace,
 known database/sidecar paths, state, schema support, and admitted source probes.
@@ -242,15 +223,8 @@ closed with recovery guidance: select a fresh `SESSIONS_DATA_DIR`, or back up an
 remove only the obsolete Sessions-owned directory reported by `sessions paths`,
 then index again. `data clear` does not claim that incompatible database.
 
-## Remaining V1 commands
-
-```text
-sessions index --source cursor
-```
-
-Markdown is deferred beyond V1
-and `--format md` is not accepted today. Planned routes are added to generated
-help only when implemented and contract-tested.
+Markdown is deferred beyond V1 and `--format md` is not accepted today. Planned
+routes are added to generated help only when implemented and contract-tested.
 
 ## Current retention and empty-library semantics
 
@@ -514,6 +488,16 @@ Paths schema 1 uses `library` and includes admitted source probes:
           { "role": "sqlite-home", "uri": "file:///home/user/.codex" }
         ]
       }
+    },
+    {
+      "source": {
+        "kind": "cursor",
+        "instanceId": "local-sha256-v1:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "probe": {
+        "status": "ready",
+        "locations": [{ "role": "cursor-home", "uri": "file:///home/user/.cursor" }]
+      }
     }
   ]
 }
@@ -522,15 +506,14 @@ Paths schema 1 uses `library` and includes admitted source probes:
 Library state values remain `uninitialized`, `ready`, `migration-required`,
 `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`. An admitted
 probe status is `ready | unavailable | unreadable`; sources sort by raw identity
-tuple and Codex's two canonical file-URL locations keep the shown order even when
-equal. A malformed/thrown probe becomes
+tuple. Locations retain their adapter-declared order. A malformed/thrown probe becomes
 `{ "status": "failed", "failure": "invalid-probe" | "probe-error", "locations": [] }`
 without failing paths. Failure before a stable source identity exists, or library
 inspection failure, emits no partial report and exits `1`.
 
 Doctor schema 1 uses `{ schemaVersion, command: "doctor", ok, checks }` and each
 `{ id, label, ok, summary, details }` check. Check order is `node-runtime`,
-`sqlite-fts5`, `library-state`, `source-codex`. The ready `library-state` string
+`sqlite-fts5`, `library-state`, `source-codex`, `source-cursor`. The ready `library-state` string
 details are exactly `state`, `initialized`, `schemaVersion`,
 `supportedSchemaVersion`, `canonicalIntegrity`, `foreignKeys`,
 `contentReachability`, `orphanContentRows`, `orphanContentBytes`, `ftsStructure`,
@@ -554,7 +537,7 @@ is `not-needed | rebuild-required`; writer-lease values are `free`, `index-live`
 `invalid`. Ready-library capture values follow the health and warning semantics
 defined in Doctor JSON above.
 
-An admitted `source-codex` check has only `probeStatus` with value
+An admitted `source-codex` or `source-cursor` check has only `probeStatus` with value
 `ready | unavailable | unreadable`. Ready and optional unavailable pass;
 unreadable fails. A malformed or thrown probe fails with exactly
 `{ "probeStatus": "failed", "failure": "invalid-probe" | "probe-error" }`.

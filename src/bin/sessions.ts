@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 
 import { createCodexSource } from "../adapters/codex/source.ts";
+import { createCursorSource } from "../adapters/cursor/source.ts";
 import { clearData } from "../application/clear-index.ts";
 import { compactIndex } from "../application/compact-index.ts";
 import { exportSession } from "../application/export-session.ts";
@@ -37,9 +38,12 @@ const indexLifecycle = createSqliteIndexLifecycle();
 const maintenance = createSqliteIndexMaintenance();
 const indexTimingsEnabled = process.env.SESSIONS_INDEX_TIMINGS === "1";
 let codexSource: ReturnType<typeof createCodexSource> | undefined;
+let cursorSource: ReturnType<typeof createCursorSource> | undefined;
 const resolveCodexSource = () => (codexSource ??= createCodexSource());
+const resolveCursorSource = () => (cursorSource ??= createCursorSource());
 const registeredSources = Object.freeze([
   Object.freeze({ kind: "codex", resolve: resolveCodexSource }),
+  Object.freeze({ kind: "cursor", resolve: resolveCursorSource }),
 ]);
 const resolveAllSources = () => Promise.all(registeredSources.map((source) => source.resolve()));
 const resolveIndexSources = async (kind: string | undefined) => {

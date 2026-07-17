@@ -4,14 +4,14 @@ Local-first search and analysis for AI coding-agent session history.
 
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local library. Humans and agents can preserve sessions beyond provider retention, recover or carry forward context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
-> **Status: pre-alpha.** The Codex-backed retained-library and query slice is
-> implemented: explicit durable indexing, bounded list/search/entries/show,
+> **Status: pre-alpha.** The Cursor- and Codex-backed retained-library and query
+> slice is implemented: explicit durable indexing, bounded list/search/entries/show,
 > portable JSON/JSONL export, scoped deletion, source diagnostics, orphan
 > repair, and SQLite page reclamation. The packaged Sessions Agent Skill adds
 > seven evidence-first analysis routes over those commands. Retained query pages
 > now report capture scope so empty or partial results expose stale, unindexed,
-> and unknown-coverage limits. Cursor indexing and
-> the npm release remain planned; Markdown presentation is deferred beyond V1.
+> and unknown-coverage limits. The npm release remains planned; Markdown
+> presentation is deferred beyond V1.
 
 ## Why Sessions
 
@@ -45,18 +45,20 @@ npx skills add . --skill sessions
 ```
 
 You can instead copy `skills/sessions/` into a host's skill directory, preserving
-its layout. Codex and Cursor can host the skill, but the CLI currently indexes
-Codex only. This pre-alpha guide documents only the locally verified install;
-add the remote shorthand after an exact default-branch install is verified.
+its layout. Codex and Cursor can host the same skill and are both registered
+local index sources. This pre-alpha guide documents only the locally verified
+install; add the remote shorthand after an exact default-branch install is
+verified.
 
 See [getting started](docs/getting-started.md) for the complete first-use flow
 and [Agent Skill](docs/reference/agent-skill.md) for routes and limits.
 
-Index the default local Codex installation, then inspect its retained copy:
+After authorizing the source read, index Cursor, Codex, or both, then inspect the
+retained copy:
 
 ```bash
 node dist/bin/sessions.js doctor
-node dist/bin/sessions.js index --source codex
+node dist/bin/sessions.js index
 node dist/bin/sessions.js list
 node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
 node dist/bin/sessions.js search 'query engine' --context 2
@@ -74,7 +76,7 @@ Current command surface:
 ```text
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
-sessions index [--source codex] [--format human|json]
+sessions index [--source codex|cursor] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
                        [--cursor TOKEN]
@@ -98,11 +100,11 @@ and `--instance` to narrow the match. The same filter scopes transcript
 `search`, while `show`, `export`, and `forget` continue to require the
 unambiguous canonical ID returned by list.
 
-`index` is the only ordinary command that reads Codex transcripts or initializes
+`index` is the only ordinary command that reads provider transcripts or initializes
 the library. It copies normalized evidence into Sessions-owned application data;
 a later complete scan that no longer sees a provider thread marks it missing but
 retains its content. `list`, `search`, `entries`, and `show` read only that durable library,
-so they continue working when Codex data changes or disappears. They support
+so they continue working when provider data changes or disappears. They support
 human, JSON, and independently attributable JSONL output. List defaults to 50
 sessions; search defaults to 20 entry hits and zero adjacent context; both accept
 at most 200 primary rows and emit an opaque next cursor when another page exists.
@@ -148,7 +150,7 @@ generation. See [entry inventory](docs/contributing/entries.md) for the query
 flow and cost.
 
 `export` extracts one retained canonical snapshot as JSON or JSONL without
-reopening Codex, following relations, or delivering it anywhere. Default
+reopening a provider, following relations, or delivering it anywhere. Default
 show/export output applies explicit title, relation, entry, segment, and raw-text
 bounds after entry selection. A selected range can still contain truncated text
 or omitted segments under those bounds. Every result keeps the digest of the
@@ -162,7 +164,7 @@ stdout and limited to 16 MiB. See the
 [structured output contract](docs/reference/structured-output.md) for the exact
 schema, null rules, bounds, and trust limits.
 
-`forget` deletes one Sessions-owned retained copy without touching Codex. A later
+`forget` deletes one Sessions-owned retained copy without touching its provider. A later
 index can capture it again while the provider still has it. Deleted database
 pages become reusable, but forget does not promise immediate file shrink.
 `doctor` reports canonical content that no retained occurrence reaches;
@@ -177,7 +179,7 @@ pages. A failed run can leave completed batches durably reclaimed and is safe to
 rerun. Its byte report is the observed main-database file length, not guaranteed
 savings. `data clear --yes` deletes the known Sessions database/sidecars and its
 exact temporary workspace.
-`doctor` and `paths` inspect runtime, library, and Codex source readiness without
+`doctor` and `paths` inspect runtime, library, and registered-source readiness without
 indexing or creating state. All runtime operation is local, network-free, and
 telemetry-free.
 For a ready library, incomplete capture evidence is a warning with `ok: true`;
@@ -203,13 +205,8 @@ Codex defaults to `~/.codex`. `CODEX_HOME` selects another Codex home. The state
 database location follows Codex's `sqlite_home` configuration, then
 `CODEX_SQLITE_HOME`, then the Codex home. See the
 [Codex format support reference](docs/reference/codex-format-support.md) for the
-supported state and rollout shapes.
-
-## Remaining V1
-
-```text
-sessions index --source cursor
-```
+supported state and rollout shapes. Cursor uses its default local root; see the
+[Cursor format support reference](docs/reference/cursor-format-support.md).
 
 M9 packaged Agent Skill work, M10 capture/routine-index hardening, and the M11a
 provider-neutral capture workspace are complete. The same opaque writer-owned
@@ -217,8 +214,8 @@ workspace now reaches discovery and changed reads; unchanged candidates still
 skip reads and read-time staging. The M10 clean-open proof measured a fixed
 synthetic 2,000-session run at 2.767 ms writer open / 264.666 ms total and an
 authorized read-only real Codex 120-session stable run at 3.262 ms / 366.055 ms.
-M11b Cursor parity is next. Markdown remains deferred beyond V1; `--format md`
-is not accepted today.
+M11b adds Cursor as the equivalent second adapter. Markdown remains deferred
+beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 
@@ -238,6 +235,7 @@ See the [privacy contract](docs/privacy.md) for promises and limitations.
 - [Accepted architecture memo](docs/architecture-memo.md)
 - [V1 implementation roadmap](dev/plans/260713-v1-implementation-roadmap.md)
 - [Cursor source survey](docs/research/cursor-source-survey.md)
+- [Cursor format support](docs/reference/cursor-format-support.md)
 - [CLI contract](docs/reference/cli-contract.md)
 - [Structured output contract](docs/reference/structured-output.md)
 - [Agent Skill](docs/reference/agent-skill.md)

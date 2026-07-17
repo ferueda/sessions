@@ -1,8 +1,7 @@
 # Current architecture
 
-Status: M10 core evidence/routine-index hardening, the M11a changed-read capture
-workspace, and optional provider defaults are complete. M11b Cursor parity is
-next.
+Status: M11b Cursor parity is complete over the existing provider-neutral
+capture, library, query, export, and maintenance contracts.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -21,10 +20,10 @@ src/bin/sessions.ts
 doctor / paths
   -> src/application/{run-doctor,get-paths,source-diagnostic}.ts
   -> runtime + SQLite + library-state diagnostics
-  -> lazy Codex probe
+  -> lazy registered-source probes
 
 index
-  -> src/adapters/codex/source.ts
+  -> src/adapters/{cursor,codex}/source.ts
   -> src/application/run-index.ts
   -> writer-leased SourceCaptureWorkspace for discovery and changed reads
   -> src/infrastructure/sqlite/sqlite-session-index.ts
@@ -50,7 +49,7 @@ forget / data repair-orphans / data compact / data clear
 ```
 
 The composition root is the only production module that imports both a concrete
-adapter and infrastructure. It resolves Codex lazily: help, version, list,
+adapter and infrastructure. It resolves Cursor and Codex lazily: help, version, list,
 search, entries, show, export, forget, data repair-orphans, data compact, and data clear
 do not resolve provider configuration.
 Index, paths, and doctor resolve registered sources. Implicit indexing skips
@@ -73,6 +72,7 @@ remain strict.
 | `src/application/session-presentation.ts`                                              | Shared title, relation, entry, segment, and UTF-8 text selection                                    |
 | `src/application/session-root-presentation.ts`                                         | Query-derived known/unknown root copying                                                            |
 | `src/application/*report.ts`                                                           | Versioned provider-neutral operational reports                                                      |
+| `src/adapters/cursor/`                                                                 | Cursor path/store discovery and canonical normalization                                             |
 | `src/adapters/codex/`                                                                  | Codex path/state/rollout discovery and canonical normalization                                      |
 | `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral capture workspace                    |
 | `src/infrastructure/sqlite/`                                                           | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance     |
@@ -86,9 +86,9 @@ remain strict.
 | `test/`                                                                                | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence              |
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show
-exist. Agent-efficient corpus selection exists over the retained Codex library;
-the packaged Agent Skill routes seven analysis playbooks over that surface.
-Cursor and a public adapter ABI do not exist yet. M7 owns one closed public
+exist. Agent-efficient corpus selection works across retained Cursor and Codex
+sessions; the packaged Agent Skill routes seven analysis playbooks over that
+surface. A public adapter ABI does not exist yet. M7 owns one closed public
 document projection, its deterministic digest, retained
 attribution, shared bounded selection, and the exact schema-1 machine records documented in
 [structured output](../reference/structured-output.md).
@@ -147,6 +147,12 @@ lease. Snapshot validation fails closed if concurrent checkpoint/reset evidence
 cannot prove one complete generation. Rollout reads stream plain JSONL or Zstd,
 verify live file identity before and after consumption, and admit no partial
 document after change or parse failure.
+
+Cursor discovery traverses only its documented local store grammar. It snapshots
+selected SQLite main/WAL bytes into the same private workspace, never opens
+provider SHM, and normalizes only the two families in the
+[Cursor format support reference](../reference/cursor-format-support.md).
+Deferred JSONL, legacy, and cloud-only history remain outside current coverage.
 
 ## Durable library
 
@@ -248,7 +254,7 @@ from one immutable snapshot and requires their stored digests to agree. Full
 document reads reconstruct the closed public projection and verify the persisted
 digest; a mismatch is canonical corruption, not FTS damage. List/search read the
 stored digest directly and do not reconstruct every document. None resolve or
-reopen Codex, so retained content remains usable after provider disappearance.
+reopen a provider, so retained content remains usable after provider disappearance.
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content. Doctor
 stays read-only and reports canonical integrity, content reachability,
@@ -295,9 +301,8 @@ on collision, so search does not scan or hydrate the rest of the library.
 selection. One query-scoped root resolver serves support plus list/search/entries
 attribution. Support remains exact and query-wide rather than being inferred from the page.
 `fts-projection.ts` is the shared bootstrap/repair definition. These modules do
-not import adapters. Codex supplies canonical lineage coverage/relations and
-observed tool evidence only; it cannot decide roots, counts, filters, ranking, or
-presentation.
+not import adapters. Adapters supply only source-supported lineage and observed
+tool evidence; they cannot decide roots, counts, filters, ranking, or presentation.
 
 Capture scope is page-level evidence availability, not another search-support
 unit. It does not classify tracking-only rows against unassessed filters and

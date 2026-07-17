@@ -24,7 +24,7 @@ environment.
 do not create storage. After explicit user authorization, initialize it with:
 
 ```bash
-sessions index --source codex
+sessions index --source '<authorized-source>'
 ```
 
 `show`, `export`, and `forget` still need an existing canonical ID.
@@ -41,7 +41,7 @@ Use one of these reset paths:
 2. Back up and manually remove only the exact obsolete Sessions-owned directory
    reported by `sessions paths`, then index again.
 
-Never remove Codex or other provider directories to reset Sessions.
+Never remove provider directories to reset Sessions.
 
 ## The library is busy
 
@@ -49,11 +49,12 @@ Another index, forget, repair, compact, or clear writer owns the library. Let it
 finish, then retry. Use doctor to inspect the aggregate writer state. Do not
 remove lease or SQLite sidecar files by hand.
 
-## The Codex source is unavailable
+## A source is unavailable
 
 Bare indexing skips an unavailable provider, and doctor treats it as
-informational; explicit `sessions index --source codex` exits `1`. Retained
-snapshots remain available through provider-free queries and export.
+informational; explicit `sessions index --source '<source>'` exits `1`. Retained
+snapshots remain available through provider-free queries and export. Current
+source kinds are `codex` and `cursor`.
 
 A retained session can be `missing` after a complete scan no longer sees it, or
 `unknown` when source coverage was incomplete. Its canonical snapshot remains

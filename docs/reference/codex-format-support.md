@@ -23,11 +23,10 @@ state, or provider caches.
 
 ## Agent Skill boundary
 
-Codex is the only current Sessions index source. The packaged Agent Skill queries
-the retained canonical library through the provider-neutral CLI; it does not
-read Codex files directly or change this adapter contract. Codex and Cursor may
-both host the skill, but Cursor history cannot be indexed until M11. M10 hardens
-provider-neutral capture evidence before that second-adapter proof.
+The packaged Agent Skill queries the retained canonical library through the
+provider-neutral CLI; it does not read Codex files directly or change this
+adapter contract. Cursor has a separate
+[format support boundary](cursor-format-support.md).
 
 ## Instance and path resolution
 

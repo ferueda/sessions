@@ -1,6 +1,6 @@
 # Source adapter contract
 
-Status: implemented internal contract with one conforming Codex adapter.
+Status: implemented internal contract with conforming Cursor and Codex adapters.
 
 Adapters translate provider histories into canonical documents. They do not define indexing, storage, queries, rendering, or analysis policy.
 
@@ -77,8 +77,9 @@ snapshot-owned inputs must remain deterministic from the frozen generation and
 surface changes on the next discovery. Its synthetic source proves the contract
 now; every concrete adapter must invoke the same suite alongside provider-
 specific golden fixtures that enumerate every input affecting normalized output.
-The Codex adapter runs both proof layers against generated SQLite and plain/Zstd
-rollout fixtures. Fixtures contain no personal paths or transcripts.
+The Cursor and Codex adapters run both proof layers against generated
+SQLite/store and plain/Zstd rollout fixtures. Fixtures contain no personal paths
+or transcripts.
 
 The V1 contract is internal. A public plugin ABI is deferred until multiple independent adapters prove the boundary.
 
@@ -133,3 +134,16 @@ Sessions database, decides retention or source absence, renders output, or owns
 durable files. See the
 [format support reference](../reference/codex-format-support.md) for its current
 compatibility boundary.
+
+## Cursor implementation
+
+`src/adapters/cursor/` resolves one default local Cursor instance and discovers
+only the two store-backed families in the
+[Cursor format support reference](../reference/cursor-format-support.md).
+Discovery is stable across exact path inventories and captures SQLite main/WAL
+bytes only in the leased private workspace. Reads normalize the selected root
+and message blobs without inferring lineage or reopening deferred JSONL history.
+
+The adapter shares only provider-neutral SQLite byte-capture mechanics with
+Codex. Cursor schema, path authority, identity, normalization, and failure
+classification remain adapter-owned.

@@ -54,9 +54,15 @@ describe("optional source indexing persistence boundary", () => {
           reason: "source-unavailable",
           coverage: { status: "not-attempted" },
         },
+        {
+          source: { kind: "cursor" },
+          status: "skipped",
+          reason: "source-unavailable",
+          coverage: { status: "not-attempted" },
+        },
       ],
       incompleteSources: 0,
-      skippedSources: 1,
+      skippedSources: 2,
       omittedItemCount: 0,
     });
     await expect(readdir(sandbox, { recursive: true })).resolves.toEqual([]);

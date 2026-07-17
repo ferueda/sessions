@@ -11,7 +11,8 @@ research, recall, or context-transfer question.
 
 1. Use `sessions list --format jsonl` with activity, capture, source, instance,
    workspace, or source-state filters. If the provider-native thread ID is known,
-   resolve it with `sessions list --source codex --native-id '<id>' --format json`.
+   resolve it with
+   `sessions list --source '<registered-source>' --native-id '<id>' --format json`.
 2. Use literal `sessions search '<terms>' --match all --limit 20 --format json`
    for a precise phrase. Use `--match any` only when the terms are alternatives;
    inspect each hit's `matchedTerms`.

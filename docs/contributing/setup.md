@@ -39,9 +39,9 @@ changes, use a fresh `SESSIONS_DATA_DIR` or manually remove the old Sessions-own
 directory and index again; provider data is never part of that cleanup. Ordered,
 data-preserving forward migrations become supported after the first release.
 
-The current Codex adapter resolves the default local installation. Tests use only
-generated state databases and plain/Zstandard rollouts under temporary roots; no
-developer provider history is a test dependency.
+The Cursor and Codex adapters resolve their default local installations. Tests
+use only generated stores, state databases, and plain/Zstandard rollouts under
+temporary roots; no developer provider history is a test dependency.
 
 ## Hooks
 
@@ -59,4 +59,5 @@ The pre-commit hook formats/lints staged files and runs the full typecheck. Bypa
 
 Setup never invents credentials or provider configuration. No environment file
 is required. `CODEX_HOME`, Codex `sqlite_home`, and `CODEX_SQLITE_HOME` are
-adapter path inputs, not Sessions credentials.
+Codex adapter path inputs, not Sessions credentials. Cursor uses its default
+local root and has no public path override.
