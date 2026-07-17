@@ -9,6 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-There are no active executor plans. Resume M12 as the next roadmap work.
+Active executor plan:
+
+- [Add Cursor JSONL fallback without evidence downgrade](260717-cursor-jsonl-fallback.md)
+
+Complete this final Cursor coverage step before resuming M12 release work.
 
 Markdown presentation remains deferred beyond V1.
