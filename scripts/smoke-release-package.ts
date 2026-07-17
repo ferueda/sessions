@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       temporaryRoot,
       moduleRoot: path.join(installedPackage, "dist"),
       run: (args, commandEnvironment) =>
-        runCommand(shim, args, temporaryRoot, {
+        runCommand(process.execPath, [installedBinary, ...args], temporaryRoot, {
           ...environment,
           ...commandEnvironment,
         }),

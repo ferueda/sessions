@@ -1,5 +1,5 @@
 import { gzipSync } from "node:zlib";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -17,6 +17,7 @@ import {
   inspectPackageArtifact,
   PACKAGED_SKILL_FILES,
   parsePackageManifest,
+  runCommand,
 } from "../scripts/package-artifact.ts";
 
 const VERSION = "0.1.0";
@@ -209,6 +210,36 @@ describe("package release artifact contract", () => {
     ).toThrow(/npm or lifecycle warning/u);
     expect(() => assertCheckoutUnchanged(" M package.json\n", " M package.json\n")).not.toThrow();
     expect(() => assertCheckoutUnchanged("", "?? leaked.tgz\n")).toThrow(/changed/u);
+  });
+
+  test("keeps shim checks while preserving workflow arguments across platforms", async () => {
+    const smoke = await readFile(
+      path.resolve(import.meta.dirname, "../scripts/smoke-release-package.ts"),
+      "utf8",
+    );
+
+    expect(smoke).toContain('runCommand(shim, ["--help"]');
+    expect(smoke).toContain('runCommand(shim, ["--version"]');
+    expect(smoke).toMatch(/runCommand\(\s*process\.execPath,\s*\[installedBinary, \.\.\.args\]/u);
+    expect(smoke).not.toContain("runCommand(shim, args");
+  });
+
+  test("passes multi-word workflow arguments unchanged through Node", async () => {
+    const temporaryRoot = await createTemporaryRoot();
+    const capture = path.join(temporaryRoot, "capture-arguments.mjs");
+    await writeFile(capture, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
+
+    const result = runCommand(
+      process.execPath,
+      [capture, "distribution smoke", "--limit", "1"],
+      temporaryRoot,
+    );
+
+    expect(result).toEqual({
+      status: 0,
+      stdout: '["distribution smoke","--limit","1"]',
+      stderr: "",
+    });
   });
 
   test("reads and validates the normalized manifest and exact skill from a tarball", async () => {
