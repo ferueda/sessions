@@ -11,7 +11,10 @@ Build Sessions as a new local-first product, using the Harness implementation as
 
 The core owns a provider-neutral session model, durable capture lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; after explicit indexing, the durable canonical library is the only source for list, search, entries, show, analysis, and export.
 
-The public delivery target is an npm package named `@ferueda/sessions` with a `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, package-install smoke tests, cross-platform CI, and later release-please plus npm trusted publishing and provenance.
+The public delivery target is an npm package named `@ferueda/sessions` with a
+`sessions` binary, compiled JavaScript, Node.js 24.16 or newer, one exact
+cross-platform-qualified tarball, Release Please, npm trusted publishing, and
+provenance.
 
 ## Context
 
@@ -522,7 +525,8 @@ baseline checksum. Current
 `data clear` does not claim an incompatible earlier database; the pre-launch
 reset is a fresh `SESSIONS_DATA_DIR` or manual removal of only the exact obsolete
 Sessions-owned directory followed by reindexing.
-Compatibility begins with the first published release. From that point, SQLite
+Compatibility begins with the first supported `0.1.0` release. The unsupported
+`0.0.0` bootstrap seed has no migration promise. From `0.1.0`, SQLite
 migrations are ordered, checksummed, transactional, and forward-only; they must
 preserve canonical evidence, arbitrate writer ownership before schema mutation,
 and fail recoverably. Repair and projection rebuilds distinguish canonical
@@ -917,7 +921,12 @@ honest observational conclusion.
   release-tag verification and documentation step.
 - One local `pnpm check` gate covers format, lint, dependency rules, types, tests, build, dist smoke, and package smoke. CI calls the same gate.
 - CI covers Linux, macOS, and Windows before release.
-- Release automation uses release-please and npm trusted publishing/OIDC with provenance after the package scope and GitHub environment are configured.
+- Release Please owns versions, changelog, and tags. One exact tarball passes
+  the full gate and Linux/macOS/Windows release smokes before the protected npm
+  job publishes it through OIDC with provenance.
+- One interactive, 2FA-protected `0.0.0` publish under `bootstrap` seeds npm so
+  trusted publishing can be configured. It is unsupported and not `latest`;
+  `0.1.0` is the first supported and compatibility-bearing release.
 
 No V1 daemon, watcher, TUI, native binary, Homebrew formula, shell-piped
 installer, or self-update path. Revisit another distribution channel only when
@@ -1079,7 +1088,10 @@ provider-neutral.
 
 ### Phase 8 — Public release and parity
 
-Confirm npm scope ownership, configure trusted publisher/environment, add release-please/publish automation, run multi-OS install tests, document migration, establish parity, and switch Harness to a pinned one-way integration.
+Release automation and qualification are checked in. Maintainers must qualify
+and seed `0.0.0`, configure the GitHub App, environment, and trusted publisher,
+then publish and verify `0.1.0`. M13 establishes parity and switches Harness to
+a pinned one-way integration.
 
 ## V1 acceptance criteria
 
@@ -1137,9 +1149,14 @@ automated changes, raw provider backup, immutable history for every provider
 revision, library import/restore, and destination-provider delivery. Each
 requires a separate intent and privacy review.
 
-## Known release decisions still requiring verification
+## Remaining release rollout gates
 
 - Confirm ownership and public publishing rights for the intended npm scope.
-- Configure the GitHub release environment and npm trusted publisher before adding publish automation.
+- Run the exact-artifact `0.0.0` bootstrap with maintainer 2FA.
+- Configure the GitHub App, protected npm environment, and trusted publisher,
+  then enable automation.
+- Publish and verify supported `0.1.0` before calling the public route current.
 
-These do not block the repository foundation or internal V1 architecture.
+These account-owned operations are outside repository tests. See
+[releasing](contributing/releasing.md) and
+[ADR 0009](decisions/0009-establish-the-supported-release-baseline.md).

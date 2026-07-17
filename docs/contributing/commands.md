@@ -4,7 +4,8 @@
 
 | Command                                                | Purpose                                                                 | Mutates                            | Network                             |
 | ------------------------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------- | ----------------------------------- |
-| `pnpm install --frozen-lockfile`                       | Install exact contributor dependencies and prepare hook                 | `node_modules/`, local Git hook    | Package registry unless cached      |
+| `pnpm install --frozen-lockfile`                       | Install exact contributor dependencies                                  | `node_modules/`                    | Package registry unless cached      |
+| `pnpm hooks:install`                                   | Install the contributor-only pre-commit hook                            | Local Git hook                     | No                                  |
 | `pnpm format`                                          | Apply repository formatting                                             | Tracked files                      | No                                  |
 | `pnpm format:check`                                    | Check formatting                                                        | No                                 | No                                  |
 | `pnpm format:docs:check`                               | Check Markdown formatting                                               | No                                 | No                                  |
@@ -23,10 +24,15 @@
 | `pnpm build`                                           | Clean and compile distributable JS                                      | `dist/`                            | No                                  |
 | `pnpm smoke:dist`                                      | Exercise compiled Cursor/Codex capture, query, export, and maintenance  | Temporary directory, removed       | No                                  |
 | `pnpm smoke:package`                                   | Offline-install tarball and exercise the same shared workflow           | Temporary directory, removed       | No after dependencies are installed |
+| `pnpm smoke:release-package -- <args>`                 | Qualify one existing tarball through ordinary npm install and `npx`     | Temporary isolated prefixes        | Package registry                    |
 | `pnpm check` / `pnpm check:ci`                         | Complete definition-of-done gate                                        | Build/temp state                   | No after dependencies are installed |
 | `pnpm check:docs`                                      | Run the documentation-only CI gate                                      | No                                 | No                                  |
 
 `pnpm prepack` rebuilds the package and is run by normal npm publishing/packing flows. The package smoke deliberately packs with lifecycle scripts disabled after an explicit build, preventing recursive smoke execution.
+
+Release qualification pins npm separately, hashes one tarball, and tests those
+same bytes on every supported operating system. It is additive to routine
+offline `pnpm check`; see [releasing](releasing.md).
 
 `pnpm measure:content-storage` is an opt-in diagnostic outside `pnpm check`. It
 uses deterministic generic content in temporary SQLite databases, removes the

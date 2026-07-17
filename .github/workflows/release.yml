@@ -1,0 +1,407 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Qualify the unsupported 0.0.0 bootstrap artifact
+        required: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  route:
+    name: Classify release event
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      qualify: ${{ steps.route.outputs.qualify }}
+      release_target: ${{ steps.route.outputs.release_target }}
+      mode: ${{ steps.route.outputs.mode }}
+      version: ${{ steps.route.outputs.version }}
+      parent_version: ${{ steps.route.outputs.parent_version }}
+
+    steps:
+      - name: Checkout the triggering revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          package-manager-cache: false
+
+      - name: Classify the event
+        id: route
+        env:
+          BOOTSTRAP_REQUESTED: ${{ inputs.bootstrap || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
+          EVENT_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: >
+          node scripts/release-order.ts route
+          --cwd .
+          --event "$EVENT_NAME"
+          --ref "$EVENT_REF"
+          --bootstrap "$BOOTSTRAP_REQUESTED"
+          --before-sha "$EVENT_BEFORE"
+          --head-sha "$RELEASE_SHA"
+
+  release-pr:
+    name: Manage the Release Please PR
+    needs: route
+    if: github.event_name == 'push' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Mint the PR-management App token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Open or update the release PR
+        uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: main
+          skip-github-release: true
+
+  qualify:
+    name: Qualify the exact release revision
+    needs: route
+    if: needs.route.outputs.qualify == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      filename: ${{ steps.artifact.outputs.filename }}
+      sha256: ${{ steps.artifact.outputs.sha256 }}
+      tag_name: ${{ steps.artifact.outputs.tag_name }}
+      version: ${{ steps.artifact.outputs.version }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout the triggering revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          package-manager-cache: false
+
+      - name: Pin release npm
+        run: npm install --global npm@11.17.0 && npm --version
+
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify the exact release checkout
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: >
+          node scripts/release-order.ts assert-checkout
+          --cwd .
+          --head-sha "$RELEASE_SHA"
+
+      - name: Run the canonical exact-SHA gate
+        run: pnpm check
+
+      - name: Build and inspect one release artifact
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/sessions-release-artifact
+          ARTIFACT_REPORT: ${{ runner.temp }}/release-artifact-report.json
+          RELEASE_MODE: ${{ needs.route.outputs.mode }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node scripts/package-artifact.ts build \
+            --mode "$RELEASE_MODE" \
+            --release-sha "$RELEASE_SHA" \
+            --tag-phase before \
+            --output-directory "$ARTIFACT_DIRECTORY" \
+            > "$ARTIFACT_REPORT"
+
+      - name: Validate artifact report
+        id: artifact
+        env:
+          ARTIFACT_REPORT: ${{ runner.temp }}/release-artifact-report.json
+        run: >
+          node scripts/release-order.ts artifact-output
+          --file "$ARTIFACT_REPORT"
+
+      - name: Upload the qualified artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sessions-${{ steps.artifact.outputs.version }}
+          path: ${{ runner.temp }}/sessions-release-artifact/${{ steps.artifact.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize qualification
+        env:
+          ARTIFACT_FILENAME: ${{ steps.artifact.outputs.filename }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          QUALIFICATION_MODE: ${{ needs.route.outputs.mode }}
+          RELEASE_VERSION: ${{ steps.artifact.outputs.version }}
+        run: |
+          printf '## Qualified Sessions artifact\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- Mode: `%s`\n' "$QUALIFICATION_MODE" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- Version: `%s`\n' "$RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- File: `%s`\n' "$ARTIFACT_FILENAME" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- SHA-256: `%s`\n' "$ARTIFACT_SHA256" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke-release:
+    name: Smoke the release package (${{ matrix.os }})
+    needs:
+      - route
+      - qualify
+    if: needs.route.outputs.qualify == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout the triggering revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          package-manager-cache: false
+
+      - name: Pin release npm
+        run: npm install --global npm@11.17.0 && npm --version
+
+      - name: Download the qualified artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sessions-${{ needs.qualify.outputs.version }}
+          path: ${{ runner.temp }}/sessions-release-artifact
+
+      - name: Smoke the downloaded artifact
+        run: >
+          node scripts/smoke-release-package.ts
+          --tarball "${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}"
+          --sha256 "${{ needs.qualify.outputs.sha256 }}"
+          --version "${{ needs.qualify.outputs.version }}"
+
+  create-release:
+    name: Create the GitHub release and tag
+    needs:
+      - route
+      - release-pr
+      - qualify
+      - smoke-release
+    if: >-
+      github.event_name == 'push' &&
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      needs.route.outputs.release_target == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout the release revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          package-manager-cache: false
+
+      - name: Pin release npm
+        run: npm install --global npm@11.17.0 && npm --version
+
+      - name: Mint the release-only App token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Create or recover the exact GitHub release
+        uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: main
+          skip-github-pull-request: true
+
+      - name: Fetch the exact release tag
+        env:
+          RELEASE_TAG: ${{ needs.qualify.outputs.tag_name }}
+        run: git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+
+      - name: Verify the immutable release tag
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ needs.route.outputs.version }}
+        run: >
+          node scripts/package-artifact.ts verify-tag
+          --version "$RELEASE_VERSION"
+          --release-sha "$RELEASE_SHA"
+          --tag-phase after
+
+      - name: Verify the immutable packaged-skill route
+        env:
+          DISABLE_TELEMETRY: "1"
+          RELEASE_TAG: ${{ needs.qualify.outputs.tag_name }}
+        run: >
+          npx --yes skills@1.5.19 add
+          "https://github.com/${GITHUB_REPOSITORY}/tree/${RELEASE_TAG}/skills/sessions"
+          --list
+
+  publish:
+    name: Publish the qualified npm package
+    needs:
+      - route
+      - qualify
+      - smoke-release
+      - create-release
+    if: >-
+      github.event_name == 'push' &&
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      needs.route.outputs.release_target == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: npm
+    concurrency:
+      group: npm-${{ needs.route.outputs.version }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout the release revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Pin trusted-publishing npm
+        run: npm install --global npm@11.17.0 && npm --version
+
+      - name: Download the qualified artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sessions-${{ needs.qualify.outputs.version }}
+          path: ${{ runner.temp }}/sessions-release-artifact
+
+      - name: Decide registry ordering before mutation
+        id: order
+        env:
+          PARENT_VERSION: ${{ needs.route.outputs.parent_version }}
+          QUALIFIED_SHA256: ${{ needs.qualify.outputs.sha256 }}
+          RELEASE_VERSION: ${{ needs.route.outputs.version }}
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+        run: >
+          node scripts/release-order.ts prepublish
+          --package @ferueda/sessions
+          --target "$RELEASE_VERSION"
+          --parent "$PARENT_VERSION"
+          --tarball "$TARBALL"
+          --sha256 "$QUALIFIED_SHA256"
+
+      - name: Publish through npm trusted publishing
+        if: steps.order.outputs.action == 'publish'
+        env:
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+        run: npm publish "$TARBALL" --access public
+
+      - name: Verify registry metadata and integrity
+        env:
+          PARENT_VERSION: ${{ needs.route.outputs.parent_version }}
+          QUALIFIED_SHA256: ${{ needs.qualify.outputs.sha256 }}
+          RELEASE_VERSION: ${{ needs.route.outputs.version }}
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+        run: >
+          node scripts/release-order.ts verify-registry
+          --package @ferueda/sessions
+          --target "$RELEASE_VERSION"
+          --parent "$PARENT_VERSION"
+          --tarball "$TARBALL"
+          --sha256 "$QUALIFIED_SHA256"
+
+      - name: Verify a clean registry install
+        env:
+          RELEASE_VERSION: ${{ needs.route.outputs.version }}
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/sessions-registry" "@ferueda/sessions@$RELEASE_VERSION"
+          test "$("$RUNNER_TEMP/sessions-registry/bin/sessions" --version)" = "$RELEASE_VERSION"
+
+      - name: Verify registry signatures and provenance
+        env:
+          RELEASE_VERSION: ${{ needs.route.outputs.version }}
+        run: |
+          mkdir "$RUNNER_TEMP/sessions-audit"
+          cd "$RUNNER_TEMP/sessions-audit"
+          npm init --yes
+          npm install --ignore-scripts "@ferueda/sessions@$RELEASE_VERSION"
+          npm audit signatures

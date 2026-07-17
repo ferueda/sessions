@@ -9,11 +9,10 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
+There are no active executor plans.
 
-- [Qualify and automate npm releases](260717-m12-release-qualification.md)
-
-Resume M13 after M12 is implemented and the first supported release is
-qualified.
+Complete the M12 maintainer rollout in
+[Releasing](../../docs/contributing/releasing.md), including the unsupported
+bootstrap seed and first supported `0.1.0` release, before resuming M13.
 
 Markdown presentation remains deferred beyond V1.

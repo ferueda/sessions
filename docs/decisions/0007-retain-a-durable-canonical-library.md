@@ -4,6 +4,8 @@
 - Date: 2026-07-14
 - Supersedes: the rebuildable-state and automatic-removal consequences of
   [ADR 0001](0001-use-a-canonical-local-index.md)
+- First-release consequence narrowed by:
+  [ADR 0009](0009-establish-the-supported-release-baseline.md)
 
 ## Context
 
@@ -69,9 +71,10 @@ provider, create a destination conversation, or execute its contents.
 - Retention, absence reconciliation, deletion, paths, migrations, health checks,
   and export are core application/storage concerns; source adapters remain
   limited to probe, discover, read, and normalize.
-- Before the first published release, one current baseline is recognized and
+- Before the first supported `0.1.0` release, one current baseline is recognized and
   earlier development databases fail closed; users may need a fresh library and
-  reindex. From the first release onward, schema upgrades and repair guidance must
+  reindex. The unsupported `0.0.0` bootstrap seed adds no promise. From `0.1.0`
+  onward, schema upgrades and repair guidance must
   preserve canonical user data because reindexing may no longer be possible after
   provider expiry.
 - Clear language must distinguish rebuilding derived search state from deleting

@@ -25,6 +25,10 @@ export type SessionSourceContractScenario =
 export type SourceInputOwnership = "live" | "snapshot-owned";
 export type OptionalSessionMetadataField = "title" | "workspace" | "createdAt" | "updatedAt";
 
+// These cases open and mutate every provider input. Windows CI can take longer
+// than the ordinary per-test limit while the same assertions still make progress.
+const EXHAUSTIVE_SOURCE_CONTRACT_TIMEOUT_MS = 90_000;
+
 export interface ExpectedSourceInput {
   readonly identity: SessionIdentity;
   readonly inputIndex: number;
@@ -126,27 +130,31 @@ export function registerSessionSourceContract(
       });
     });
 
-    test("invalidates the aggregate when any complete input changes", async () => {
-      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
+    test(
+      "invalidates the aggregate when any complete input changes",
+      async () => {
+        const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const key of expectedInputKeys) {
-        await withFixture(createFixture, "ready", async (fixture) => {
-          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
-          const before = requireCandidate(await discover(fixture), expectedInput.identity);
-          await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
-          const after = requireCandidate(await discover(fixture), expectedInput.identity);
+        for (const key of expectedInputKeys) {
+          await withFixture(createFixture, "ready", async (fixture) => {
+            const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+            const before = requireCandidate(await discover(fixture), expectedInput.identity);
+            await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
+            const after = requireCandidate(await discover(fixture), expectedInput.identity);
 
-          expect(after.aggregateFingerprint).not.toEqual(before.aggregateFingerprint);
-          expect(after.inputs[expectedInput.inputIndex]?.fingerprint).not.toBe(
-            before.inputs[expectedInput.inputIndex]?.fingerprint,
-          );
-          for (const [index, input] of after.inputs.entries()) {
-            if (index === expectedInput.inputIndex) continue;
-            expect(input).toEqual(before.inputs[index]);
-          }
-        });
-      }
-    });
+            expect(after.aggregateFingerprint).not.toEqual(before.aggregateFingerprint);
+            expect(after.inputs[expectedInput.inputIndex]?.fingerprint).not.toBe(
+              before.inputs[expectedInput.inputIndex]?.fingerprint,
+            );
+            for (const [index, input] of after.inputs.entries()) {
+              if (index === expectedInput.inputIndex) continue;
+              expect(input).toEqual(before.inputs[index]);
+            }
+          });
+        }
+      },
+      EXHAUSTIVE_SOURCE_CONTRACT_TIMEOUT_MS,
+    );
 
     test("reads deterministic canonical documents independent of candidate order", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {
@@ -164,53 +172,61 @@ export function registerSessionSourceContract(
       });
     });
 
-    test("applies each input's ownership when it changes before read", async () => {
-      expect.hasAssertions();
-      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
+    test(
+      "applies each input's ownership when it changes before read",
+      async () => {
+        expect.hasAssertions();
+        const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const key of expectedInputKeys) {
-        await withFixture(createFixture, "ready", async (fixture) => {
-          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
-          const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
-          const frozenDocument = await readSessionDocument(
-            fixture.source,
-            candidate,
-            fixture.captureWorkspace,
-          );
-          await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
-          await ownershipAssertions[expectedInput.ownership](
-            fixture,
-            expectedInput,
-            candidate,
-            frozenDocument,
-          );
-        });
-      }
-    });
+        for (const key of expectedInputKeys) {
+          await withFixture(createFixture, "ready", async (fixture) => {
+            const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+            const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
+            const frozenDocument = await readSessionDocument(
+              fixture.source,
+              candidate,
+              fixture.captureWorkspace,
+            );
+            await fixture.mutateInput(expectedInput.identity, expectedInput.inputIndex);
+            await ownershipAssertions[expectedInput.ownership](
+              fixture,
+              expectedInput,
+              candidate,
+              frozenDocument,
+            );
+          });
+        }
+      },
+      EXHAUSTIVE_SOURCE_CONTRACT_TIMEOUT_MS,
+    );
 
-    test("applies each input's ownership when it changes during read", async () => {
-      expect.hasAssertions();
-      const expectedInputKeys = await loadExpectedInputKeys(createFixture);
+    test(
+      "applies each input's ownership when it changes during read",
+      async () => {
+        expect.hasAssertions();
+        const expectedInputKeys = await loadExpectedInputKeys(createFixture);
 
-      for (const key of expectedInputKeys) {
-        await withFixture(createFixture, "ready", async (fixture) => {
-          const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
-          const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
-          const frozenDocument = await readSessionDocument(
-            fixture.source,
-            candidate,
-            fixture.captureWorkspace,
-          );
-          await fixture.mutateDuringNextRead(expectedInput.identity, expectedInput.inputIndex);
-          await ownershipAssertions[expectedInput.ownership](
-            fixture,
-            expectedInput,
-            candidate,
-            frozenDocument,
-          );
-        });
-      }
-    });
+        for (const key of expectedInputKeys) {
+          await withFixture(createFixture, "ready", async (fixture) => {
+            const expectedInput = requireExpectedInput(fixture.expectedInputs, key);
+            const candidate = requireCandidate(await discover(fixture), expectedInput.identity);
+            const frozenDocument = await readSessionDocument(
+              fixture.source,
+              candidate,
+              fixture.captureWorkspace,
+            );
+            await fixture.mutateDuringNextRead(expectedInput.identity, expectedInput.inputIndex);
+            await ownershipAssertions[expectedInput.ownership](
+              fixture,
+              expectedInput,
+              candidate,
+              frozenDocument,
+            );
+          });
+        }
+      },
+      EXHAUSTIVE_SOURCE_CONTRACT_TIMEOUT_MS,
+    );
 
     test("preserves supported metadata absence and provenance without recurrence inference", async () => {
       await withFixture(createFixture, "ready", async (fixture) => {

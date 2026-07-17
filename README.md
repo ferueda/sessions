@@ -10,7 +10,8 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 > repair, and SQLite page reclamation. The packaged Sessions Agent Skill adds
 > seven evidence-first analysis routes over those commands. Retained query pages
 > now report capture scope so empty or partial results expose stale, unindexed,
-> and unknown-coverage limits. The npm release remains planned; Markdown
+> and unknown-coverage limits. npm installation remains planned until the first
+> supported `0.1.0` release; Markdown
 > presentation is deferred beyond V1.
 
 ## Why Sessions
@@ -41,14 +42,15 @@ The skill needs a working `sessions` command in the agent process. From this
 repository checkout, install the packaged skill with:
 
 ```bash
-npx skills add . --skill sessions
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions
 ```
 
 You can instead copy `skills/sessions/` into a host's skill directory, preserving
 its layout. Codex and Cursor can host the same skill and are both registered
-local index sources. This pre-alpha guide documents only the locally verified
-install; add the remote shorthand after an exact default-branch install is
-verified.
+local index sources. This pre-alpha guide documents the current local route. The
+[release-pinned agent setup](docs/agent-setup.md) records the planned public
+route without advertising the unavailable release. The pinned external
+installer contacts npm; the command above disables its anonymous telemetry.
 
 See [getting started](docs/getting-started.md) for the complete first-use flow
 and [Agent Skill](docs/reference/agent-skill.md) for routes and limits.
@@ -189,8 +191,9 @@ existing failed-health semantics.
 Pre-alpha builds recognize one current on-disk baseline. Databases created by
 earlier development builds are not upgraded or deleted automatically; use a fresh
 `SESSIONS_DATA_DIR` or manually remove the old Sessions-owned directory and index
-again. Data-preserving forward migrations become a compatibility promise with the
-first published release.
+again. Data-preserving forward migrations become a compatibility promise with
+the first supported `0.1.0` release. The unsupported `0.0.0` bootstrap seed
+carries no migration promise.
 
 An index writer marks its lease generation dirty when acquired. A normal close
 can seal only that exact generation and publish a private, bounded post-close
@@ -218,7 +221,10 @@ M11b added rich Cursor store capture; M11c adds the reduced local
 `agent-transcripts` JSONL fallback without replacing richer retained evidence.
 Markdown remains deferred beyond V1; `--format md` is not accepted today.
 
-The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
+The planned public delivery target is
+`npm install --global @ferueda/sessions@<version>`; pinned `npx` is trial-only.
+It becomes current after package ownership, cross-platform qualification, and
+trusted publishing are complete.
 
 ## Privacy
 
@@ -240,6 +246,7 @@ See the [privacy contract](docs/privacy.md) for promises and limitations.
 - [CLI contract](docs/reference/cli-contract.md)
 - [Structured output contract](docs/reference/structured-output.md)
 - [Agent Skill](docs/reference/agent-skill.md)
+- [Agent setup](docs/agent-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Active implementation plans](dev/plans/README.md)

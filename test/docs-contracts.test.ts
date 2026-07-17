@@ -14,16 +14,20 @@ const requiredDocs = [
   "docs/architecture-memo.md",
   "docs/privacy.md",
   "docs/getting-started.md",
+  "docs/agent-setup.md",
   "docs/troubleshooting.md",
   "docs/reference/agent-skill.md",
   "docs/reference/cli-contract.md",
+  "docs/reference/structured-output.md",
   "docs/contributing/index.md",
   "docs/contributing/architecture.md",
   "docs/contributing/adapter-contract.md",
   "docs/contributing/testing.md",
   "docs/contributing/setup.md",
   "docs/contributing/commands.md",
+  "docs/contributing/releasing.md",
   "docs/decisions/README.md",
+  "docs/decisions/0009-establish-the-supported-release-baseline.md",
 ];
 
 describe("documentation contracts", () => {
@@ -70,7 +74,91 @@ describe("documentation contracts", () => {
 
     expect(agents.split("\n").length).toBeLessThanOrEqual(100);
   });
+
+  test("keeps onboarding aligned with the release manifest", async () => {
+    const manifest = JSON.parse(
+      await readFile(path.join(root, ".release-please-manifest.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const version = manifest["."];
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/u);
+    if (typeof version !== "string") throw new Error("root release version must be a string");
+
+    const [readme, gettingStarted, agentSetup, agentSkill, security] = await Promise.all([
+      readFile(path.join(root, "README.md"), "utf8"),
+      readFile(path.join(root, "docs/getting-started.md"), "utf8"),
+      readFile(path.join(root, "docs/agent-setup.md"), "utf8"),
+      readFile(path.join(root, "docs/reference/agent-skill.md"), "utf8"),
+      readFile(path.join(root, "SECURITY.md"), "utf8"),
+    ]);
+    const markers = [
+      ...agentSetup.matchAll(
+        /Supported CLI\/skill release: (\d+\.\d+\.\d+) <!-- x-release-please-version -->/gu,
+      ),
+    ];
+
+    expect(markers).toHaveLength(1);
+    expect(markers[0]?.[1]).toBe(version);
+
+    const assertOnboarding = isSupportedRelease(version)
+      ? assertSupportedOnboarding
+      : assertBootstrapOnboarding;
+    assertOnboarding({ version, readme, gettingStarted, agentSetup, agentSkill, security });
+  });
 });
+
+interface OnboardingDocuments {
+  readonly version: string;
+  readonly readme: string;
+  readonly gettingStarted: string;
+  readonly agentSetup: string;
+  readonly agentSkill: string;
+  readonly security: string;
+}
+
+function assertSupportedOnboarding(documents: OnboardingDocuments): void {
+  const install = `npm install --global @ferueda/sessions@${documents.version}`;
+  expect(documents.readme).toContain(install);
+  expect(documents.gettingStarted).toContain(install);
+  expect(documents.agentSetup).toContain("- Status: current");
+  expect(documents.agentSetup).toContain(`export SESSIONS_VERSION='${documents.version}'`);
+  expect(documents.agentSetup).toContain(
+    "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions",
+  );
+  expect(`${documents.readme}\n${documents.gettingStarted}`).not.toContain(
+    "npm installation remains planned",
+  );
+  expect(documents.readme).not.toContain("pnpm install --frozen-lockfile");
+  expect(documents.readme).not.toContain("git clone https://github.com/ferueda/sessions.git");
+  expect(documents.readme).not.toContain("Pre-alpha builds recognize");
+  expect(documents.gettingStarted).not.toContain("pnpm install --frozen-lockfile");
+  expect(documents.gettingStarted).not.toContain("install is from a source checkout");
+  expect(documents.gettingStarted).not.toContain("npm package is not published yet");
+  expect(documents.agentSkill).not.toContain("public release route is planned");
+  expect(documents.agentSkill).not.toMatch(/From a Sessions source\s+checkout/u);
+  expect(documents.security).toContain(
+    `Security fixes target supported Sessions releases beginning with \`${documents.version}\``,
+  );
+  expect(documents.security).not.toContain("target the current `main` branch");
+}
+
+function assertBootstrapOnboarding(documents: OnboardingDocuments): void {
+  expect(documents.version).toBe("0.0.0");
+  expect(documents.readme).toContain("npm installation remains planned");
+  expect(documents.gettingStarted).toContain("current pre-alpha install is from a source checkout");
+  expect(documents.readme).toContain("pnpm install --frozen-lockfile");
+  expect(documents.readme).toContain("git clone https://github.com/ferueda/sessions.git");
+  expect(documents.gettingStarted).toContain("pnpm install --frozen-lockfile");
+  expect(documents.agentSetup).toContain("- Status: planned while the release manifest is `0.0.0`");
+  expect(documents.agentSkill).toMatch(/public release route is planned until\s+`0\.1\.0`/u);
+  expect(documents.agentSkill).toMatch(/From a Sessions source\s+checkout/u);
+  expect(documents.security).toContain("target the current `main` branch");
+  expect(documents.security).toContain("unsupported `0.0.0`");
+}
+
+function isSupportedRelease(version: string): boolean {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major > 0 || minor > 0;
+}
 
 async function findMarkdownFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });

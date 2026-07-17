@@ -9,10 +9,12 @@ Requirements: Node.js 24.16 or newer, Corepack, Git, and a platform supported by
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
+pnpm hooks:install
 pnpm check
 ```
 
-The install configures a lightweight pre-commit hook. It formats/lints staged files and typechecks the repository; it does not replace `pnpm check`.
+Hook setup is explicit and contributor-only. The pre-commit hook formats/lints
+staged files and typechecks the repository; it does not replace `pnpm check`.
 
 ## Change flow
 
