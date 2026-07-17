@@ -41,15 +41,20 @@ describe("doctor persistence boundary", () => {
       },
     });
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     const report = JSON.parse(result.stdout) as {
-      readonly checks?: readonly { readonly id?: unknown }[];
+      readonly checks?: readonly {
+        readonly id?: unknown;
+        readonly ok?: unknown;
+        readonly summary?: unknown;
+        readonly details?: unknown;
+      }[];
     };
     expect(report).toMatchObject({
       schemaVersion: 1,
       command: "doctor",
-      ok: false,
+      ok: true,
     });
     expect(report.checks?.map((check) => check.id)).toEqual([
       "node-runtime",
@@ -57,6 +62,13 @@ describe("doctor persistence boundary", () => {
       "library-state",
       "source-codex",
     ]);
+    expect(report.checks?.at(-1)).toEqual({
+      id: "source-codex",
+      label: "codex source",
+      ok: true,
+      summary: "Source is unavailable (optional)",
+      details: { probeStatus: "unavailable" },
+    });
     await expect(readdir(sandbox, { recursive: true })).resolves.toEqual([]);
   });
 });

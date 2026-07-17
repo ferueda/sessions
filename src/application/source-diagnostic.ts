@@ -29,9 +29,15 @@ export function createSourceDiagnostic(selected: SelectedSessionSource): Runtime
           details: { probeStatus: "failed", failure: "invalid-probe" },
         };
       }
+      const ok = probe.status !== "unreadable";
       return {
-        ok: probe.status === "ready",
-        summary: probe.status === "ready" ? "Source is ready" : `Source is ${probe.status}`,
+        ok,
+        summary:
+          probe.status === "unavailable"
+            ? "Source is unavailable (optional)"
+            : probe.status === "ready"
+              ? "Source is ready"
+              : "Source is unreadable",
         details: { probeStatus: probe.status },
       };
     },

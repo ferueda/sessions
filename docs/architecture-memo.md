@@ -738,8 +738,9 @@ Canonical, foreign-key, FTS, reachability, reclamation, run, and lease failures
 retain their failed-health precedence. If capture inspection cannot be trusted,
 doctor reports `captureStatus: "inspection-failed"` with unknown capture counts.
 An active run requires a live indexing lease; interrupted history alone is
-informational. Doctor resolves and probes Codex paths but never reads rollout
-content, opens a writer, creates or migrates the library, or persists data.
+informational. Doctor treats unavailable registered sources as informational,
+fails unreadable or invalid probes, and never reads transcripts, opens a writer,
+or persists state.
 
 ## Agent Skill design
 

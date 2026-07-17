@@ -24,13 +24,14 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 10 and M11a are complete. M10 added honest capture scope,
-all-tracked reconciliation, bounded source-change retry, opt-in indexing
+Milestones 0 through 10, M11a, and M11b0 are complete. M10 added honest capture
+scope, all-tracked reconciliation, bounded source-change retry, opt-in indexing
 timings, and a recovery-safe proportional writer-open path. The pre-M11
 [Cursor source survey](../../docs/research/cursor-source-survey.md) found that
 current WAL-backed Cursor stores need the existing private capture workspace
-during changed reads. M11a completed that provider-neutral prerequisite; M11b
-adds Cursor parity next.
+during changed reads. M11a completed that capture prerequisite, and M11b0 made
+registered providers optional when they are not installed. M11b adds Cursor
+parity next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -1311,10 +1312,51 @@ Exit gate:
   bytes, and removes its temporary library. It is not part of routine CI.
 - `pnpm check` passes on all CI operating systems.
 
+### M11b0 — Make registered providers optional by default (complete)
+
+Outcome: Sessions may register several adapters without requiring every provider
+to be installed.
+
+Required behavior:
+
+- Registration means supported, not installed or configured. When `index`
+  omits `--source`, valid unavailable providers are reported and skipped; ready
+  providers are indexed. An all-unavailable implicit run exits successfully
+  without opening or creating the Sessions library.
+- `index --source <kind>` remains strict. An explicitly selected unavailable
+  provider is incomplete and exits `1`; an unknown source remains usage exit
+  `2`.
+- Unreadable, invalid, or throwing probes remain failures.
+- Index JSON and human output distinguish `skipped` from `completed` and
+  `incomplete`, name `source-unavailable` as the reason, and report skipped
+  sources outside `incompleteSources`.
+- Doctor treats valid unavailability as informational; paths reports actual
+  provider status.
+- Availability preflight is provider-neutral, does not read transcripts, and is
+  not capture evidence. Attempted sources retain their existing probe,
+  discovery, capture, freshness, and reconciliation behavior.
+
+Exit gate:
+
+- All-unavailable, mixed ready/unavailable, unreadable, invalid-probe,
+  ready-then-disappears, and explicit-unavailable fixtures prove exact
+  report/exit behavior.
+- All-unavailable implicit indexing and doctor/path checks create no Sessions
+  state and do not mutate provider files.
+- Current ready-Codex indexing remains byte-for-byte equivalent after excluding
+  the new skipped-source report shape.
+- Built and packed distribution smoke covers one mixed ready/unavailable run
+  through shipped modules. Spawned CLI smoke covers the skipped report and one
+  strict explicit failure.
+- `pnpm check` passes.
+
 ### M11b — Add Cursor and prove adapter equivalence
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
+
+Dependency: M11b uses the completed M11b0 policy; Cursor adds no
+adapter-specific selection or doctor behavior.
 
 Research authority: use the
 [Cursor source survey](../../docs/research/cursor-source-survey.md) for the
@@ -1402,9 +1444,9 @@ Exit gate:
   families, malformed/unsupported cohorts, and remote/cloud evidence outside
   coverage without exposing provider paths, IDs, titles, or content.
 - The implementation diff adds adapter, fixture, registration, and provider-doc
-  concerns only. Any required core or skill semantic edit stops this milestone
-  and sends the missing abstraction back to the owning earlier milestone for
-  general proof.
+  concerns only. Any further required core or skill semantic edit stops this
+  milestone and sends the missing abstraction back to its provider-neutral
+  owner.
 - A third synthetic adapter kind still passes index/query/export without core
   edits.
 - `pnpm check` passes on all CI operating systems.

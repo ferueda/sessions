@@ -1,7 +1,8 @@
 # Current architecture
 
-Status: M10 core evidence/routine-index hardening and the M11a changed-read
-capture workspace are complete. M11b Cursor parity is next.
+Status: M10 core evidence/routine-index hardening, the M11a changed-read capture
+workspace, and optional provider defaults are complete. M11b Cursor parity is
+next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -52,7 +53,9 @@ The composition root is the only production module that imports both a concrete
 adapter and infrastructure. It resolves Codex lazily: help, version, list,
 search, entries, show, export, forget, data repair-orphans, data compact, and data clear
 do not resolve provider configuration.
-Index, paths, and doctor intentionally resolve or probe the registered source.
+Index, paths, and doctor resolve registered sources. Implicit indexing skips
+only valid unavailable sources; explicit selection and all other probe failures
+remain strict.
 
 ## Ownership
 
@@ -123,7 +126,8 @@ gate.
 
 The source port is `probe` / `discover(workspace)` / `read(candidate, workspace)`.
 The exact writer-owned capture workspace reaches discovery and changed reads.
-The application engine selects sources, admits a complete discovery set,
+The application engine first applies the provider-neutral optional-source rule,
+then admits a complete discovery set for each attempted source,
 compares fingerprints, owns last-good behavior, and holds first-attempt
 `source-changed` outcomes until the primary pass finishes. It then performs at
 most one fresh rediscovery per source, retries only affected original identities,

@@ -191,6 +191,155 @@ describe("runIndex", () => {
     expect(ready.readNativeIds).toEqual(["session"]);
   });
 
+  test("skips unavailable implicit sources without opening the library", async () => {
+    const unavailable = createFakeIndexingSource({ kind: "alpha", instanceId: "one" });
+    unavailable.setProbe(probe(unavailable, "unavailable"));
+    const harness = createIndexHarness();
+
+    const report = await runIndex({
+      paths,
+      sources: [unavailable.selected],
+      sourceSelection: "optional",
+      lifecycle: harness.lifecycle,
+      clock: clock(),
+    });
+
+    expect(harness.openWriter).not.toHaveBeenCalled();
+    expect(unavailable.probeCount).toBe(1);
+    expect(harness.index.startedSources).toEqual([]);
+    expect(report).toEqual({
+      schemaVersion: 1,
+      command: "index",
+      startedAt: "2026-07-13T12:00:00.000Z",
+      finishedAt: "2026-07-13T12:00:03.000Z",
+      counts: emptyCounts(),
+      sources: [
+        {
+          schemaVersion: 1,
+          source: unavailable.instance,
+          status: "skipped",
+          reason: "source-unavailable",
+          startedAt: "2026-07-13T12:00:01.000Z",
+          finishedAt: "2026-07-13T12:00:02.000Z",
+          counts: emptyCounts(),
+          coverage: { status: "not-attempted" },
+          items: [],
+          omittedItemCount: 0,
+        },
+      ],
+      incompleteSources: 0,
+      skippedSources: 1,
+      omittedItemCount: 0,
+    });
+  });
+
+  test("indexes ready implicit sources while reporting unavailable sources as skipped", async () => {
+    const unavailable = createFakeIndexingSource({ kind: "alpha", instanceId: "one" });
+    unavailable.setProbe(probe(unavailable, "unavailable"));
+    const ready = createFakeIndexingSource({ kind: "zeta", instanceId: "one" });
+    ready.setDiscovery([ready.candidate("session")]);
+    const harness = createIndexHarness();
+
+    const report = await runIndex({
+      paths,
+      sources: [ready.selected, unavailable.selected],
+      sourceSelection: "optional",
+      lifecycle: harness.lifecycle,
+      clock: clock(),
+    });
+
+    expect(harness.openWriter).toHaveBeenCalledOnce();
+    expect(harness.index.startedSources).toEqual([ready.instance]);
+    expect(unavailable.probeCount).toBe(1);
+    expect(ready.probeCount).toBe(2);
+    expect(report.sources.map(({ source, status }) => ({ source, status }))).toEqual([
+      { source: unavailable.instance, status: "skipped" },
+      { source: ready.instance, status: "completed" },
+    ]);
+    expect(report).toMatchObject({
+      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, missing: 0, stale: 0 },
+      incompleteSources: 0,
+      skippedSources: 1,
+    });
+  });
+
+  test("does not skip unreadable or invalid implicit sources", async () => {
+    const unreadable = createFakeIndexingSource({ kind: "alpha", instanceId: "one" });
+    unreadable.setProbe(probe(unreadable, "unreadable"));
+    const invalid = createFakeIndexingSource({ kind: "beta", instanceId: "one" });
+    invalid.setProbe({} as SourceProbe);
+    const harness = createIndexHarness();
+
+    const report = await runIndex({
+      paths,
+      sources: [invalid.selected, unreadable.selected],
+      sourceSelection: "optional",
+      lifecycle: harness.lifecycle,
+      clock: clock(),
+    });
+
+    expect(harness.openWriter).toHaveBeenCalledOnce();
+    expect(harness.index.startedSources).toEqual([unreadable.instance, invalid.instance]);
+    expect(report.sources).toMatchObject([
+      { source: unreadable.instance, status: "incomplete", failure: "source-unreadable" },
+      { source: invalid.instance, status: "incomplete", failure: "probe-failed" },
+    ]);
+    expect(report.incompleteSources).toBe(2);
+    expect(report.skippedSources).toBe(0);
+  });
+
+  test("does not skip a thrown unavailable probe", async () => {
+    const throwing = createFakeIndexingSource({ kind: "alpha", instanceId: "one" });
+    throwing.failProbe(new SourceFailureError({ kind: "unavailable", source: throwing.instance }));
+    const harness = createIndexHarness();
+
+    const report = await runIndex({
+      paths,
+      sources: [throwing.selected],
+      sourceSelection: "optional",
+      lifecycle: harness.lifecycle,
+      clock: clock(),
+    });
+
+    expect(harness.openWriter).toHaveBeenCalledOnce();
+    expect(throwing.probeCount).toBe(2);
+    expect(report.sources).toMatchObject([
+      {
+        source: throwing.instance,
+        status: "incomplete",
+        failure: "source-unavailable",
+      },
+    ]);
+    expect(report.incompleteSources).toBe(1);
+    expect(report.skippedSources).toBe(0);
+  });
+
+  test("fails a source that becomes unavailable after optional preflight", async () => {
+    const changing = createFakeIndexingSource();
+    changing.queueProbes(probe(changing, "ready"), probe(changing, "unavailable"));
+    const harness = createIndexHarness();
+
+    const report = await runIndex({
+      paths,
+      sources: [changing.selected],
+      sourceSelection: "optional",
+      lifecycle: harness.lifecycle,
+      clock: clock(),
+    });
+
+    expect(harness.openWriter).toHaveBeenCalledOnce();
+    expect(changing.probeCount).toBe(2);
+    expect(report.sources).toMatchObject([
+      {
+        source: changing.instance,
+        status: "incomplete",
+        failure: "source-unavailable",
+      },
+    ]);
+    expect(report.incompleteSources).toBe(1);
+    expect(report.skippedSources).toBe(0);
+  });
+
   test.each(PROBE_FAILURE_CASES)(
     "finalizes $label without session mutation and continues",
     async ({ configure, failure }) => {

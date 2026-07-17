@@ -5,6 +5,7 @@ import { mapLibraryBusyError } from "./library-error.ts";
 import {
   createIndexReport,
   createIndexSourceReport,
+  createSkippedIndexSourceReport,
   type IndexReport,
   type IndexSourceReport,
 } from "./index-report.ts";
@@ -39,6 +40,7 @@ export interface IndexClock {
 export interface RunIndexInput {
   readonly paths: IndexPaths;
   readonly sources: readonly SelectedSessionSource[];
+  readonly sourceSelection?: "required" | "optional";
   readonly lifecycle: IndexLifecycle;
   readonly clock: IndexClock;
   readonly timing?: IndexTimingRecorder;
@@ -54,14 +56,29 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   let operationFailed = false;
 
   try {
-    writer = await timeIndexOperation(input.timing, "writerOpen", () =>
-      input.lifecycle.openWriter(input.paths),
+    const skipped = await preflightOptionalSources(
+      selections,
+      input.sourceSelection ?? "required",
+      input.clock,
+      input.timing,
     );
     const sourceReports: IndexSourceReport[] = [];
-    for (const selection of selections) {
-      sourceReports.push(
-        await runSource(writer.sessions, writer.workspace, selection, input.clock, input.timing),
+    const attempted = selections.filter((selection) => !skipped.has(selection));
+    if (attempted.length > 0) {
+      writer = await timeIndexOperation(input.timing, "writerOpen", () =>
+        input.lifecycle.openWriter(input.paths),
       );
+    }
+    for (const selection of selections) {
+      const skippedReport = skipped.get(selection);
+      if (skippedReport !== undefined) {
+        sourceReports.push(skippedReport);
+      } else {
+        if (writer === undefined) throw new Error("Attempted indexing requires a writer");
+        sourceReports.push(
+          await runSource(writer.sessions, writer.workspace, selection, input.clock, input.timing),
+        );
+      }
     }
     report = createIndexReport(startedAt, timestamp(input.clock), sourceReports);
   } catch (error) {
@@ -91,6 +108,45 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   if (closeFailed) throw closeError;
   if (report === undefined) throw new Error("Session indexing produced no report");
   return report;
+}
+
+async function preflightOptionalSources(
+  selections: readonly SelectedSessionSource[],
+  mode: "required" | "optional",
+  clock: IndexClock,
+  timing: IndexTimingRecorder | undefined,
+): Promise<ReadonlyMap<SelectedSessionSource, IndexSourceReport>> {
+  const skipped = new Map<SelectedSessionSource, IndexSourceReport>();
+  if (mode === "required") return skipped;
+
+  for (const selection of selections) {
+    const startedAt = timestamp(clock);
+    const unavailable = await timeIndexOperation(timing, "sourceProbe", () =>
+      isValidUnavailableSource(selection),
+    );
+    if (unavailable) {
+      skipped.set(
+        selection,
+        createSkippedIndexSourceReport(selection.instance, startedAt, timestamp(clock)),
+      );
+    }
+  }
+  return skipped;
+}
+
+async function isValidUnavailableSource(selection: SelectedSessionSource): Promise<boolean> {
+  let value: unknown;
+  try {
+    value = await selection.adapter.probe();
+  } catch {
+    return false;
+  }
+  const admitted = admitSourceProbe(value);
+  return (
+    admitted !== undefined &&
+    sameSource(admitted.source, selection.instance) &&
+    admitted.status === "unavailable"
+  );
 }
 
 async function runSource(

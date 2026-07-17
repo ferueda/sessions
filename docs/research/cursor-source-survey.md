@@ -408,6 +408,14 @@ These are format questions for the M11 plan, not reasons to weaken the boundary:
 The implementation must stop rather than infer answers from private text,
 directory order, timestamps, product labels, or undocumented opaque fields.
 
+## Accepted multi-provider policy
+
+Cursor uses the provider-neutral
+[optional-source policy](../reference/cli-contract.md): implicit indexing skips
+only valid unavailable sources; explicit selection and all other probe failures
+remain strict. This does not weaken Cursor format validation, source-change
+checks, or capture completeness.
+
 ## Official sources
 
 All links were accessed on 2026-07-16.

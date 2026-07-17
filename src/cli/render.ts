@@ -64,12 +64,13 @@ export function renderPaths(report: PathsReport, format: OperationalOutputFormat
 
 export function renderIndex(report: IndexReport, format: OperationalOutputFormat): string {
   if (format === "json") return renderJson(report);
-  const lines = report.sources.map(
-    (source) =>
-      `${renderScalar(source.source.kind)}: ${source.status}; ${String(source.counts.updated)} updated, ${String(source.counts.unchanged)} unchanged, ${String(source.counts.failed)} failed, ${String(source.counts.missing)} missing`,
+  const lines = report.sources.map((source) =>
+    source.status === "skipped"
+      ? `${renderScalar(source.source.kind)}: skipped; source unavailable`
+      : `${renderScalar(source.source.kind)}: ${source.status}; ${String(source.counts.updated)} updated, ${String(source.counts.unchanged)} unchanged, ${String(source.counts.failed)} failed, ${String(source.counts.missing)} missing`,
   );
   lines.push(
-    `Total: ${String(report.counts.discovered)} discovered; ${String(report.incompleteSources)} incomplete source(s)`,
+    `Total: ${String(report.counts.discovered)} discovered; ${String(report.incompleteSources)} incomplete source(s); ${String(report.skippedSources)} skipped source(s)`,
   );
   return `${lines.join("\n")}\n`;
 }

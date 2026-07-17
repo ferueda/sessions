@@ -9,7 +9,5 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-M10 capture truth, recovery, measurement, and recovery-safe writer-open
-optimization are complete. M11a extended the private capture workspace to
-changed reads. There is no active executor plan; M11b Cursor parity is next.
-Markdown presentation remains deferred beyond V1.
+There is no active executor plan. M11b Cursor parity is next. Markdown
+presentation remains deferred beyond V1.

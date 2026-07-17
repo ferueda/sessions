@@ -62,6 +62,7 @@ const indexSessions = async (source: string | undefined) => {
     return runIndex({
       paths: resolvePaths(),
       sources: await resolveIndexSources(source),
+      sourceSelection: source === undefined ? "optional" : "required",
       lifecycle: indexLifecycle,
       clock: { now: () => new Date() },
     });
@@ -77,6 +78,7 @@ const indexSessions = async (source: string | undefined) => {
       return runIndex({
         paths,
         sources,
+        sourceSelection: source === undefined ? "optional" : "required",
         lifecycle: indexLifecycle,
         clock: { now: () => new Date() },
         timing: collector.recorder,
