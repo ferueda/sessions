@@ -1,7 +1,7 @@
 # Current architecture
 
-Status: M10 core evidence and routine-index hardening are complete. Cursor parity
-is M11.
+Status: M10 core evidence and routine-index hardening are complete. M11a extends
+private capture staging to changed reads before M11b adds Cursor parity.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.

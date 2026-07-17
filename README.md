@@ -215,8 +215,9 @@ M9 packaged Agent Skill work and M10 capture/routine-index hardening are
 complete. The clean-open proof reduced a fixed synthetic 2,000-session run to
 2.767 ms writer open / 264.666 ms total, and an authorized read-only real Codex
 120-session run to 3.262 ms / 366.055 ms with zero changed reads and exact
-cohort equality. M11 Cursor parity is next. Markdown remains deferred beyond V1;
-`--format md` is not accepted today.
+cohort equality. M11 begins with a provider-neutral changed-read capture
+workspace, then adds Cursor parity through the same engine. Markdown remains
+deferred beyond V1; `--format md` is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 
@@ -235,6 +236,7 @@ See the [privacy contract](docs/privacy.md) for promises and limitations.
 - [Project intent](docs/project-intent.md)
 - [Accepted architecture memo](docs/architecture-memo.md)
 - [V1 implementation roadmap](dev/plans/260713-v1-implementation-roadmap.md)
+- [Cursor source survey](docs/research/cursor-source-survey.md)
 - [CLI contract](docs/reference/cli-contract.md)
 - [Structured output contract](docs/reference/structured-output.md)
 - [Agent Skill](docs/reference/agent-skill.md)

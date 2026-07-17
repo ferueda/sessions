@@ -38,5 +38,8 @@ Research baselines:
 
 - [Codex source survey](../research/codex-source-survey.md) — sanitized source,
   schema, compatibility, and Harness-reference findings before M5.
+- [Cursor source survey](../research/cursor-source-survey.md) — official product
+  semantics, sanitized local formats, capture-workspace prerequisite, and M11
+  boundaries.
 
 Active implementation work is indexed in [`dev/plans/README.md`](../../dev/plans/README.md).
