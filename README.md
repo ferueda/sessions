@@ -211,13 +211,14 @@ supported state and rollout shapes.
 sessions index --source cursor
 ```
 
-M9 packaged Agent Skill work and M10 capture/routine-index hardening are
-complete. The clean-open proof reduced a fixed synthetic 2,000-session run to
-2.767 ms writer open / 264.666 ms total, and an authorized read-only real Codex
-120-session run to 3.262 ms / 366.055 ms with zero changed reads and exact
-cohort equality. M11 begins with a provider-neutral changed-read capture
-workspace, then adds Cursor parity through the same engine. Markdown remains
-deferred beyond V1; `--format md` is not accepted today.
+M9 packaged Agent Skill work, M10 capture/routine-index hardening, and the M11a
+provider-neutral capture workspace are complete. The same opaque writer-owned
+workspace now reaches discovery and changed reads; unchanged candidates still
+skip reads and read-time staging. The M10 clean-open proof measured a fixed
+synthetic 2,000-session run at 2.767 ms writer open / 264.666 ms total and an
+authorized read-only real Codex 120-session stable run at 3.262 ms / 366.055 ms.
+M11b Cursor parity is next. Markdown remains deferred beyond V1; `--format md`
+is not accepted today.
 
 The public delivery target is `npm install --global @ferueda/sessions` or `npx @ferueda/sessions`, after package ownership, cross-platform parity, and trusted publishing are configured.
 

@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
 
-import type { SelectedSessionSource, SourceDiscoveryWorkspace } from "./ports/session-source.ts";
+import {
+  SourceCaptureWorkspaceError,
+  type SelectedSessionSource,
+  type SourceCaptureWorkspace,
+} from "./ports/session-source.ts";
 import { admitDiscoveredSession, type AdmittedDiscoveredSession } from "./validate-session.ts";
 
 export type DiscoveryPreflight =
@@ -16,7 +20,7 @@ export type DiscoveryPreflight =
 /** Exhaust discovery before returning candidates that may cause repository writes. */
 export async function discoverSessions(
   selection: SelectedSessionSource,
-  workspace: SourceDiscoveryWorkspace,
+  workspace: SourceCaptureWorkspace,
 ): Promise<DiscoveryPreflight> {
   const candidates = new Map<string, AdmittedDiscoveredSession>();
   let complete = true;
@@ -37,7 +41,8 @@ export async function discoverSessions(
         complete = false;
       }
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof SourceCaptureWorkspaceError) throw error;
     complete = false;
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 
-import type { SourceDiscoveryWorkspace } from "../../../src/application/ports/session-source.ts";
+import type { SourceCaptureWorkspace } from "../../../src/application/ports/session-source.ts";
 import type { CodexEnvironment } from "../../../src/adapters/codex/paths.ts";
 
 export interface CodexFixtureThread {
@@ -29,7 +29,7 @@ export interface CodexSourceFixture {
   readonly sessionsRoot: string;
   readonly archivedSessionsRoot: string;
   readonly environment: CodexEnvironment;
-  readonly workspace: SourceDiscoveryWorkspace;
+  readonly workspace: SourceCaptureWorkspace;
   writeState(threads: readonly CodexFixtureThread[], edges?: readonly CodexFixtureEdge[]): void;
   writeRollout(
     relativePath: string,
@@ -52,7 +52,7 @@ export async function createCodexSourceFixture(): Promise<CodexSourceFixture> {
     mkdir(privateRoot, { recursive: true }),
   ]);
 
-  const workspace: SourceDiscoveryWorkspace = Object.freeze({
+  const workspace: SourceCaptureWorkspace = Object.freeze({
     async withPrivateDirectory<T>(operation: (directory: string) => Promise<T>): Promise<T> {
       const directory = await mkdtemp(join(privateRoot, "attempt-"));
       try {

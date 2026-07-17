@@ -8,7 +8,7 @@ import { MAX_CODEX_ROLLOUT_RECORD_BYTES } from "../../../src/adapters/codex/roll
 import type {
   DiscoveredSession,
   SessionSource,
-  SourceDiscoveryWorkspace,
+  SourceCaptureWorkspace,
 } from "../../../src/application/ports/session-source.ts";
 import { sameSessionIdentity } from "../../../src/domain/session-identity.ts";
 import type { SessionIdentity } from "../../../src/domain/session.ts";
@@ -111,7 +111,7 @@ export async function createCodexSessionSourceContractFixture(
   const source: SessionSource = Object.freeze({
     kind: selected.adapter.kind,
     probe: () => selected.adapter.probe(),
-    async *discover(workspace: SourceDiscoveryWorkspace): AsyncIterable<DiscoveredSession> {
+    async *discover(workspace: SourceCaptureWorkspace): AsyncIterable<DiscoveredSession> {
       const candidates: DiscoveredSession[] = [];
       for await (const candidate of selected.adapter.discover(workspace)) {
         candidates.push(candidate);
@@ -119,11 +119,11 @@ export async function createCodexSessionSourceContractFixture(
       if (reverseDiscovery) candidates.reverse();
       yield* candidates;
     },
-    async read(candidate: DiscoveredSession) {
+    async read(candidate: DiscoveredSession, workspace: SourceCaptureWorkspace) {
       contentReads += 1;
       // Start the concrete read before the synchronous mutation so live guards
       // and frozen-generation behavior are exercised through the same seam.
-      const operation = selected.adapter.read(candidate);
+      const operation = selected.adapter.read(candidate, workspace);
       const scheduled = pendingMutation;
       pendingMutation = undefined;
       if (scheduled !== undefined) mutate(scheduled.identity, scheduled.inputIndex);
@@ -133,7 +133,7 @@ export async function createCodexSessionSourceContractFixture(
 
   return {
     source,
-    discoveryWorkspace: fixture.workspace,
+    captureWorkspace: fixture.workspace,
     sourceInstance: selected.instance,
     identities: [primaryIdentity, missingMetadataIdentity],
     primaryIdentity,

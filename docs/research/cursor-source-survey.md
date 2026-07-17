@@ -1,6 +1,6 @@
 # Cursor source survey
 
-- Status: pre-M11 research baseline
+- Status: historical pre-M11 research baseline; M11a prerequisite implemented
 - Date: 2026-07-16
 - Scope: passive local Cursor adapter and its provider-neutral prerequisite
 
@@ -24,13 +24,14 @@ adapter-owned, structurally detected local format readers. It should not call
 Cursor APIs, install hooks, fetch shared links, or infer missing evidence from
 product behavior.
 
-Current Cursor storage also proves that the internal source port needs one small
+Current Cursor storage also proved that the internal source port needed one small
 provider-neutral prerequisite before the adapter can be implemented safely and
 efficiently. Richer conversation evidence needed for faithful capture lives in
 WAL-active per-session SQLite stores, although the exact reconstruction and
-authority rules still require fixture-backed proof. The current port gives
-private staging to `discover(workspace)` but not to `read(candidate)`. A complete
-implementation would otherwise have to choose between:
+authority rules still require fixture-backed proof. At survey time, the port gave
+private staging to `discover(workspace)` but not to `read(candidate)`. M11a has
+since generalized that workspace to changed reads. Without it, a complete Cursor
+implementation would have had to choose between:
 
 - copying and materializing more than a thousand databases during every
   discovery, including stable runs;
@@ -276,16 +277,16 @@ Do not port:
 The standalone engine durably owns canonical snapshots. The adapter only
 discovers and normalizes source evidence.
 
-## Required provider-neutral prerequisite
+## Implemented provider-neutral prerequisite
 
-The current source port gives `SourceDiscoveryWorkspace` only to discovery.
+At survey time, the source port gave `SourceDiscoveryWorkspace` only to discovery.
 `discoverSessions` exhausts the entire generation before freshness checks and
 changed reads begin. Cursor therefore cannot retain a discovery callback's
 temporary database snapshot for a later read, and it should not secretly capture
 the workspace object outside the declared port contract.
 
-Rename/generalize that capability to `SourceCaptureWorkspace` and pass it to
-both operations:
+M11a renamed/generalized that capability to `SourceCaptureWorkspace` and now
+passes it to both operations:
 
 ```ts
 interface SessionSource {
@@ -300,7 +301,7 @@ removes attempts in `finally`, and removes the scratch root before writer
 release. The prerequisite should expose no path, lease identity, storage handle,
 or durable cache to the adapter.
 
-After it lands, the Cursor flow is:
+With that prerequisite in place, the planned Cursor flow is:
 
 1. Discover exact identities and fingerprint complete physical inputs without
    parsing every transcript or copying databases.

@@ -37,16 +37,24 @@ export interface DiscoveredSession {
   readonly adapterVersion: string;
 }
 
-/** Opaque, lease-scoped staging supplied only while source discovery runs. */
-export interface SourceDiscoveryWorkspace {
+/** Opaque, lease-scoped staging supplied while a source captures stable input. */
+export interface SourceCaptureWorkspace {
   withPrivateDirectory<T>(operation: (directory: string) => Promise<T>): Promise<T>;
+}
+
+/** Marks a failure owned by the capture workspace rather than provider input. */
+export class SourceCaptureWorkspaceError extends Error {
+  constructor(cause: unknown) {
+    super("Source capture workspace failed", { cause });
+    this.name = "SourceCaptureWorkspaceError";
+  }
 }
 
 export interface SessionSource {
   readonly kind: string;
   probe(): Promise<SourceProbe>;
-  discover(workspace: SourceDiscoveryWorkspace): AsyncIterable<DiscoveredSession>;
-  read(candidate: DiscoveredSession): Promise<SessionDocument>;
+  discover(workspace: SourceCaptureWorkspace): AsyncIterable<DiscoveredSession>;
+  read(candidate: DiscoveredSession, workspace: SourceCaptureWorkspace): Promise<SessionDocument>;
 }
 
 /** One explicit provider-neutral source selected for an indexing invocation. */

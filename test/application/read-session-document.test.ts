@@ -4,6 +4,7 @@ import type {
   DiscoveredSession,
   SessionSource,
 } from "../../src/application/ports/session-source.ts";
+import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
   readSessionDocument,
   readSessionReplacement,
@@ -12,6 +13,7 @@ import { SourceFailureError } from "../../src/application/source-failure.ts";
 import { createDiscoveredSession } from "../../src/application/source-input-fingerprint.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
+import { syntheticCaptureWorkspace } from "../fixtures/capture-workspace.ts";
 
 const identity = {
   source: { kind: "synthetic", instanceId: "default" },
@@ -22,7 +24,11 @@ describe("readSessionDocument", () => {
   test("returns only a fully validated canonical document", async () => {
     const candidate = discoveredSession();
 
-    const document = await readSessionDocument(sourceReturning(validDocument()), candidate);
+    const document = await readSessionDocument(
+      sourceReturning(validDocument()),
+      candidate,
+      syntheticCaptureWorkspace,
+    );
 
     expect(document).toEqual(validDocument());
   });
@@ -42,16 +48,18 @@ describe("readSessionDocument", () => {
       aggregateFingerprint: { ...discovered.aggregateFingerprint },
     };
     let readCandidate: DiscoveredSession | undefined;
+    let readWorkspace: unknown;
     const source = sourceReturning(validDocument(), {
-      onRead(value) {
+      onRead(value, workspace) {
         readCandidate = value;
+        readWorkspace = workspace;
         candidate.identity.nativeId = "mutated-session";
         candidate.aggregateFingerprint.digest = "0".repeat(64);
         candidate.adapterVersion = "mutated-adapter";
       },
     });
 
-    const replacement = await readSessionReplacement(source, candidate);
+    const replacement = await readSessionReplacement(source, candidate, syntheticCaptureWorkspace);
 
     expect(replacement.observation).toMatchObject({
       identity,
@@ -64,6 +72,7 @@ describe("readSessionDocument", () => {
     expect(readCandidate).toEqual(discovered);
     expect(readCandidate).not.toBe(candidate);
     expect(Object.isFrozen(readCandidate)).toBe(true);
+    expect(readWorkspace).toBe(syntheticCaptureWorkspace);
   });
 
   test("rejects a candidate owned by another adapter before reading", async () => {
@@ -75,7 +84,9 @@ describe("readSessionDocument", () => {
       },
     });
 
-    const error = await captureFailure(readSessionDocument(source, discoveredSession()));
+    const error = await captureFailure(
+      readSessionDocument(source, discoveredSession(), syntheticCaptureWorkspace),
+    );
 
     expect(error.failure).toMatchObject({
       kind: "malformed",
@@ -92,7 +103,7 @@ describe("readSessionDocument", () => {
     };
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(validDocument()), changed),
+      readSessionDocument(sourceReturning(validDocument()), changed, syntheticCaptureWorkspace),
     );
 
     expect(error.failure.kind).toBe("source-changed");
@@ -105,7 +116,11 @@ describe("readSessionDocument", () => {
     } as const;
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(validDocument(otherIdentity)), discoveredSession()),
+      readSessionDocument(
+        sourceReturning(validDocument(otherIdentity)),
+        discoveredSession(),
+        syntheticCaptureWorkspace,
+      ),
     );
 
     expect(error.failure).toMatchObject({
@@ -125,7 +140,7 @@ describe("readSessionDocument", () => {
     } as SessionDocument;
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(invalid), discoveredSession()),
+      readSessionDocument(sourceReturning(invalid), discoveredSession(), syntheticCaptureWorkspace),
     );
 
     expect(error.failure).toEqual({
@@ -153,7 +168,11 @@ describe("readSessionDocument", () => {
     });
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(document), discoveredSession()),
+      readSessionDocument(
+        sourceReturning(document),
+        discoveredSession(),
+        syntheticCaptureWorkspace,
+      ),
     );
 
     expect(error.failure).toMatchObject({
@@ -181,7 +200,7 @@ describe("readSessionDocument", () => {
     });
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(validDocument()), candidate),
+      readSessionDocument(sourceReturning(validDocument()), candidate, syntheticCaptureWorkspace),
     );
 
     expect(error.failure).toMatchObject({ kind: "malformed" });
@@ -197,7 +216,9 @@ describe("readSessionDocument", () => {
     });
     const source = sourceReturning(validDocument(), { error: expected });
 
-    const error = await captureFailure(readSessionDocument(source, discoveredSession()));
+    const error = await captureFailure(
+      readSessionDocument(source, discoveredSession(), syntheticCaptureWorkspace),
+    );
 
     expect(error).toBe(expected);
   });
@@ -209,7 +230,11 @@ describe("readSessionDocument", () => {
     });
 
     const error = await captureFailure(
-      readSessionDocument(sourceReturning(validDocument(), { error: cause }), discoveredSession()),
+      readSessionDocument(
+        sourceReturning(validDocument(), { error: cause }),
+        discoveredSession(),
+        syntheticCaptureWorkspace,
+      ),
     );
 
     expect(error).not.toBe(cause);
@@ -225,11 +250,23 @@ describe("readSessionDocument", () => {
     const cause = new Error("secret transcript fragment");
     const source = sourceReturning(validDocument(), { error: cause });
 
-    const error = await captureFailure(readSessionDocument(source, discoveredSession()));
+    const error = await captureFailure(
+      readSessionDocument(source, discoveredSession(), syntheticCaptureWorkspace),
+    );
 
     expect(error.failure).toMatchObject({ kind: "malformed", reason: "adapter-read-failed" });
     expect(error.cause).toBe(cause);
     expect(error.message).not.toContain(cause.message);
+  });
+
+  test("preserves a capture-workspace failure instead of classifying it as provider data", async () => {
+    const cause = new Error("private lease detail");
+    const expected = new SourceCaptureWorkspaceError(cause);
+    const source = sourceReturning(validDocument(), { error: expected });
+
+    await expect(
+      readSessionDocument(source, discoveredSession(), syntheticCaptureWorkspace),
+    ).rejects.toBe(expected);
   });
 });
 
@@ -280,7 +317,10 @@ function sourceReturning(
   options: {
     readonly kind?: string;
     readonly error?: Error;
-    readonly onRead?: (candidate: DiscoveredSession) => void;
+    readonly onRead?: (
+      candidate: DiscoveredSession,
+      workspace: Parameters<SessionSource["read"]>[1],
+    ) => void;
   } = {},
 ): SessionSource {
   return {
@@ -294,8 +334,8 @@ function sourceReturning(
     async *discover() {
       yield discoveredSession();
     },
-    async read(candidate) {
-      options.onRead?.(candidate);
+    async read(candidate, workspace) {
+      options.onRead?.(candidate, workspace);
       if (options.error !== undefined) throw options.error;
       return document;
     },

@@ -168,15 +168,19 @@ provider-read measurement. It is macOS/Linux-only and fails before provider
 resolution elsewhere. It uses the production Codex adapter, exhausts its full
 discovery generation, indexes only a fixed 120-candidate cohort into a mode-0700
 temporary Sessions library, and uses no credentials. The result is discarded
-unless the second run is fully unchanged with complete coverage, zero reads or
-other outcomes, the complete selected observations agree, and every selected
-rollout is byte-identical at seed discovery, stable discovery, and final
+unless every discovery and changed read receives the exact workspace reference
+owned by that run. Seed read-workspace calls must equal changed-read timing calls
+and cover at least the 120-session cohort; the stable run must be fully unchanged
+with zero reads. The complete selected observations must agree, and every selected
+rollout must be byte-identical at seed discovery, stable discovery, and final
 verification. State database/WAL safety comes from the production adapter's
 no-follow hash-copy-verify snapshot; unrelated Codex activity is allowed between
-runs. Output is aggregate-only. The exact temporary root is removed in `finally`
-and INT/TERM cleanup; an uncatchable process or machine failure can leave
-sensitive temporary Sessions data. Run it only with explicit live-data authority
-and outside routine gates.
+runs. Output contains aggregate counts, booleans, and timings only. The exact
+temporary root is removed in `finally` and INT/TERM cleanup; an uncatchable
+process or machine failure can leave sensitive temporary Sessions data. Run it
+only with explicit live-data authority and outside routine gates. It is the M11a
+operational exit gate after focused tests and `pnpm check`; deterministic tests
+remain authoritative for forced staging, cleanup, rollback, and lease failures.
 
 ## Verification
 
@@ -203,9 +207,9 @@ non-Markdown path runs `pnpm check:ci` (currently `pnpm check`) on all three.
 The main ruleset requires all three `Check (<os>)` contexts.
 
 Run a smoke directly only while changing its build/install/process boundary; the
-full gate already runs both. No current change requires live verification.
-Report focused checks, the final gate, and any skipped smoke/live check with its
-reason.
+full gate already runs both. Run a live check only when an accepted plan names it
+and grants the required authority. Report focused checks, the final gate, and any
+skipped smoke/live check with its reason.
 
 ## Maintenance
 

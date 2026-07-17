@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,8 +7,14 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
-import type { DiscoveredSession } from "../../src/application/ports/session-source.ts";
+import type {
+  DiscoveredSession,
+  SelectedSessionSource,
+  SessionSource,
+  SourceCaptureWorkspace,
+} from "../../src/application/ports/session-source.ts";
 import { runIndex } from "../../src/application/run-index.ts";
+import { SourceFailureError } from "../../src/application/source-failure.ts";
 import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createFakeIndexingSource } from "../fixtures/indexing-source.ts";
@@ -24,6 +30,68 @@ afterEach(async () => {
 });
 
 describe("runIndex with SQLite", () => {
+  test("cleans staged changed reads before commit and skips staging for unchanged sessions", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const identity = sessionIdentity(source.instance, "session");
+    const baseline = source.candidate("session", "revision-one");
+    source.setDocument("session", document(identity, "last good"));
+    source.setDiscovery([baseline]);
+    let stagedFailure: SourceFailureError | undefined;
+    let stagedReads = 0;
+    let cleanedBeforeReadSettled = 0;
+    const selected = withStagedReads(source.selected, async (workspace, read) => {
+      stagedReads += 1;
+      let attempt: string | undefined;
+      try {
+        const result = await workspace.withPrivateDirectory(async (directory) => {
+          attempt = directory;
+          await writeFile(path.join(directory, "capture.bin"), "generic staged input");
+          if (stagedFailure !== undefined) throw stagedFailure;
+          return read();
+        });
+        await requireMissing(attempt);
+        cleanedBeforeReadSettled += 1;
+        return result;
+      } catch (error) {
+        await requireMissing(attempt);
+        cleanedBeforeReadSettled += 1;
+        throw error;
+      }
+    });
+
+    const first = await index(lifecycle, paths, selected);
+    const unchanged = await index(lifecycle, paths, selected);
+
+    expect(first.counts).toMatchObject({ discovered: 1, updated: 1, failed: 0 });
+    expect(unchanged.counts).toMatchObject({ discovered: 1, unchanged: 1, failed: 0 });
+    expect(stagedReads).toBe(1);
+    expect(cleanedBeforeReadSettled).toBe(1);
+    expect(source.readNativeIds).toEqual(["session"]);
+    await requireMissing(paths.scratch);
+
+    source.setDiscovery([source.candidate("session", "revision-two")]);
+    source.setDocument("session", document(identity, "must not replace last good"));
+    stagedFailure = new SourceFailureError({ kind: "malformed", source: source.instance });
+
+    const failed = await index(lifecycle, paths, selected);
+
+    expect(failed.counts).toMatchObject({ discovered: 1, updated: 0, failed: 1, stale: 1 });
+    expect(stagedReads).toBe(2);
+    expect(cleanedBeforeReadSettled).toBe(2);
+    await requireMissing(paths.scratch);
+    const reader = await lifecycle.openReader(paths);
+    await expect(reader.sessions.getFreshness(identity)).resolves.toMatchObject({
+      status: "stale",
+      latest: { failure: "malformed" },
+    });
+    await expect(reader.sessions.getDocument(identity)).resolves.toMatchObject({
+      title: "last good",
+    });
+    await reader.close();
+  });
+
   test("indexes in binary order, collapses duplicates, and reindexes unchanged with zero reads", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
@@ -531,6 +599,38 @@ async function index(
   source: ReturnType<typeof createFakeIndexingSource>["selected"],
 ) {
   return runIndex({ paths, sources: [source], lifecycle, clock: clock() });
+}
+
+function withStagedReads(
+  selected: SelectedSessionSource,
+  stage: (
+    workspace: SourceCaptureWorkspace,
+    read: () => Promise<SessionDocument>,
+  ) => Promise<SessionDocument>,
+): SelectedSessionSource {
+  const adapter: SessionSource = {
+    kind: selected.adapter.kind,
+    probe: () => selected.adapter.probe(),
+    discover: (workspace) => selected.adapter.discover(workspace),
+    read: (candidate, workspace) =>
+      stage(workspace, () => selected.adapter.read(candidate, workspace)),
+  };
+  return { instance: selected.instance, adapter };
+}
+
+async function requireMissing(target: string | undefined): Promise<void> {
+  if (target === undefined) throw new Error("Expected a staged capture path");
+  try {
+    await lstat(target);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return;
+    throw error;
+  }
+  throw new Error("Staged capture residue remains");
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 async function fixturePaths(): Promise<IndexPaths> {

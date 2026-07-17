@@ -1,7 +1,7 @@
 # Current architecture
 
-Status: M10 core evidence and routine-index hardening are complete. M11a extends
-private capture staging to changed reads before M11b adds Cursor parity.
+Status: M10 core evidence/routine-index hardening and the M11a changed-read
+capture workspace are complete. M11b Cursor parity is next.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -25,7 +25,7 @@ doctor / paths
 index
   -> src/adapters/codex/source.ts
   -> src/application/run-index.ts
-  -> writer-leased SourceDiscoveryWorkspace
+  -> writer-leased SourceCaptureWorkspace for discovery and changed reads
   -> src/infrastructure/sqlite/sqlite-session-index.ts
   -> optional aggregate timing at existing application/port boundaries
 
@@ -71,7 +71,7 @@ Index, paths, and doctor intentionally resolve or probe the registered source.
 | `src/application/session-root-presentation.ts`                                         | Query-derived known/unknown root copying                                                            |
 | `src/application/*report.ts`                                                           | Versioned provider-neutral operational reports                                                      |
 | `src/adapters/codex/`                                                                  | Codex path/state/rollout discovery and canonical normalization                                      |
-| `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral discovery workspace                  |
+| `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral capture workspace                    |
 | `src/infrastructure/sqlite/`                                                           | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance     |
 | `src/infrastructure/runtime/index-timings.ts`                                          | In-memory allowlisted indexing timing aggregation                                                   |
 | `src/cli/structured-output.ts`                                                         | Closed schema-1 DTO construction, recursive validation, and freezing                                |
@@ -121,14 +121,20 @@ gate.
 
 ## Capture boundary
 
-The source port is `probe` / `discover(workspace)` / `read`. The application
-engine selects sources, admits a complete discovery set, compares fingerprints,
-owns last-good behavior, and holds first-attempt `source-changed` outcomes until
-the primary pass finishes. It then performs at most one fresh rediscovery per
-source, retries only affected original identities, records their terminal
-outcomes, and uses the primary discovery as the sole coverage and
-missing-reconciliation snapshot. Adapters only turn provider evidence into
-candidates and canonical documents; they do not own retry policy.
+The source port is `probe` / `discover(workspace)` / `read(candidate, workspace)`.
+The exact writer-owned capture workspace reaches discovery and changed reads.
+The application engine selects sources, admits a complete discovery set,
+compares fingerprints, owns last-good behavior, and holds first-attempt
+`source-changed` outcomes until the primary pass finishes. It then performs at
+most one fresh rediscovery per source, retries only affected original identities,
+records their terminal outcomes, and uses the primary discovery as the sole
+coverage and missing-reconciliation snapshot. Adapters only turn provider
+evidence into candidates and canonical documents; they do not own retry policy.
+
+Unchanged candidates receive no read call or read-time staging. Workspace-owned
+setup, cleanup, or lease failures abort the complete index operation instead of
+being recorded as provider failures; ordinary source failures keep their current
+typed admission and last-good behavior.
 
 Codex discovery snapshots `state_5.sqlite` and any active WAL bytes into a random
 private child of the Sessions `.scratch` workspace. The adapter never opens the

@@ -14,10 +14,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
+import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
   assertCanonicalScratchPath,
-  openSourceDiscoveryWorkspace,
-} from "../../src/infrastructure/state/source-discovery-workspace.ts";
+  openSourceCaptureWorkspace,
+} from "../../src/infrastructure/state/source-capture-workspace.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -29,13 +30,13 @@ afterEach(async () => {
   );
 });
 
-describe("source discovery workspace", () => {
+describe("source capture workspace", () => {
   test("sweeps stale state, creates private attempts, and removes all scratch on close", async () => {
     const paths = await fixturePaths();
     await mkdir(paths.scratch, { mode: 0o700 });
     await writeFile(path.join(paths.scratch, "stale"), "private");
     let leaseAssertions = 0;
-    const lifecycle = await openSourceDiscoveryWorkspace(paths, {
+    const lifecycle = await openSourceCaptureWorkspace(paths, {
       assertLease() {
         leaseAssertions += 1;
       },
@@ -61,7 +62,7 @@ describe("source discovery workspace", () => {
     "creates private attempts with private POSIX permissions",
     async () => {
       const paths = await fixturePaths();
-      const lifecycle = await openSourceDiscoveryWorkspace(paths, { assertLease() {} });
+      const lifecycle = await openSourceCaptureWorkspace(paths, { assertLease() {} });
       try {
         await lifecycle.workspace.withPrivateDirectory(async (directory) => {
           expect((await lstat(directory)).mode & 0o777).toBe(0o700);
@@ -76,7 +77,7 @@ describe("source discovery workspace", () => {
     const paths = await fixturePaths();
     const target = path.join(path.dirname(paths.directory), "outside.txt");
     await writeFile(target, "keep");
-    const lifecycle = await openSourceDiscoveryWorkspace(paths, { assertLease() {} });
+    const lifecycle = await openSourceCaptureWorkspace(paths, { assertLease() {} });
 
     await lifecycle.workspace.withPrivateDirectory(async (directory) => {
       await symlink(target, path.join(directory, "link"));
@@ -93,7 +94,7 @@ describe("source discovery workspace", () => {
     await writeFile(path.join(target, "keep"), "private");
     await symlink(target, paths.scratch, "dir");
 
-    await expect(openSourceDiscoveryWorkspace(paths, { assertLease() {} })).rejects.toMatchObject({
+    await expect(openSourceCaptureWorkspace(paths, { assertLease() {} })).rejects.toMatchObject({
       code: "unsafe-scratch-root",
     });
     await expect(readFile(path.join(target, "keep"), "utf8")).resolves.toBe("private");
@@ -102,7 +103,7 @@ describe("source discovery workspace", () => {
   test("aggregates operation, cleanup, and final lease failures", async () => {
     const paths = await fixturePaths();
     let leaseValid = true;
-    const lifecycle = await openSourceDiscoveryWorkspace(paths, {
+    const lifecycle = await openSourceCaptureWorkspace(paths, {
       assertLease() {
         if (!leaseValid) throw new Error("lease lost");
       },
@@ -121,13 +122,59 @@ describe("source discovery workspace", () => {
         (failure: unknown) => failure,
       );
 
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toHaveLength(3);
-    expect((error as AggregateError).errors[0]).toBe(operationError);
-    expect((error as AggregateError).errors[1]).toMatchObject({
+    expect(error).toBeInstanceOf(SourceCaptureWorkspaceError);
+    const aggregate = (error as SourceCaptureWorkspaceError).cause;
+    expect(aggregate).toBeInstanceOf(AggregateError);
+    expect((aggregate as AggregateError).errors).toHaveLength(3);
+    expect((aggregate as AggregateError).errors[0]).toBe(operationError);
+    expect((aggregate as AggregateError).errors[1]).toMatchObject({
       code: "unsafe-scratch-root",
     });
-    expect((error as AggregateError).errors[2]).toEqual(new Error("lease lost"));
+    expect((aggregate as AggregateError).errors[2]).toBeInstanceOf(SourceCaptureWorkspaceError);
+    expect(((aggregate as AggregateError).errors[2] as SourceCaptureWorkspaceError).cause).toEqual(
+      new Error("lease lost"),
+    );
+  });
+
+  test("returns callback-only failures unchanged", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = await openSourceCaptureWorkspace(paths, { assertLease() {} });
+    const operationError = new Error("source callback failed");
+
+    await expect(
+      lifecycle.workspace.withPrivateDirectory(async () => {
+        throw operationError;
+      }),
+    ).rejects.toBe(operationError);
+    await lifecycle.close();
+  });
+
+  test("marks lease failures and retains their cause", async () => {
+    const paths = await fixturePaths();
+    const leaseError = new Error("lease lost");
+    let leaseValid = true;
+    const lifecycle = await openSourceCaptureWorkspace(paths, {
+      assertLease() {
+        if (!leaseValid) throw leaseError;
+      },
+    });
+    let called = false;
+    leaseValid = false;
+
+    const error = await lifecycle.workspace
+      .withPrivateDirectory(async () => {
+        called = true;
+      })
+      .then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+
+    expect(called).toBe(false);
+    expect(error).toBeInstanceOf(SourceCaptureWorkspaceError);
+    expect((error as SourceCaptureWorkspaceError).cause).toBe(leaseError);
+    leaseValid = true;
+    await lifecycle.close();
   });
 
   test("refuses close while an operation is awaiting setup", async () => {
@@ -141,7 +188,7 @@ describe("source discovery workspace", () => {
       releaseSetup = resolve;
     });
     let blockSetup = false;
-    const lifecycle = await openSourceDiscoveryWorkspace(paths, {
+    const lifecycle = await openSourceCaptureWorkspace(paths, {
       async assertLease() {
         if (!blockSetup) return;
         setupStarted();
@@ -164,7 +211,7 @@ describe("source discovery workspace", () => {
       assertCanonicalScratchPath({ ...paths, scratch: path.join(paths.directory, "other") }),
     ).toThrow(expect.objectContaining({ code: "invalid-scratch-path" }));
 
-    const lifecycle = await openSourceDiscoveryWorkspace(paths, { assertLease() {} });
+    const lifecycle = await openSourceCaptureWorkspace(paths, { assertLease() {} });
     await lifecycle.close();
     await expect(lifecycle.close()).resolves.toBeUndefined();
     await expect(
@@ -178,7 +225,7 @@ describe("source discovery workspace", () => {
     await mkdir(paths.scratch, { mode: 0o700 });
     await chmod(paths.scratch, 0o755);
 
-    await expect(openSourceDiscoveryWorkspace(paths, { assertLease() {} })).rejects.toMatchObject({
+    await expect(openSourceCaptureWorkspace(paths, { assertLease() {} })).rejects.toMatchObject({
       code: "unsafe-scratch-root",
     });
   });

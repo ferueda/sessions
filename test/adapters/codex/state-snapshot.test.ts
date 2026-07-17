@@ -9,7 +9,7 @@ import { Worker } from "node:worker_threads";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { SourceDiscoveryWorkspace } from "../../../src/application/ports/session-source.ts";
+import type { SourceCaptureWorkspace } from "../../../src/application/ports/session-source.ts";
 import {
   CodexStateSnapshotError,
   materializeCodexStateSnapshot,
@@ -342,7 +342,7 @@ async function snapshotProviderFiles(
   return snapshot;
 }
 
-class TestWorkspace implements SourceDiscoveryWorkspace {
+class TestWorkspace implements SourceCaptureWorkspace {
   readonly root: string;
   readonly attemptDirectories: string[] = [];
   currentDirectory: string | undefined;

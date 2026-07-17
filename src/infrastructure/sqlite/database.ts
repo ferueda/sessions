@@ -73,9 +73,9 @@ import {
   removeWriterCleanProofTemporaryFiles,
 } from "./writer-clean-proof.ts";
 import {
-  openSourceDiscoveryWorkspace,
-  type SourceDiscoveryWorkspaceLifecycle,
-} from "../state/source-discovery-workspace.ts";
+  openSourceCaptureWorkspace,
+  type SourceCaptureWorkspaceLifecycle,
+} from "../state/source-capture-workspace.ts";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
@@ -209,7 +209,7 @@ export function createSqliteIndexLifecycle(
       const database = await openWriterWithFailureCleanup(paths, busyTimeoutMs, platform);
       let heartbeat: WriterLeaseHeartbeat | undefined;
       let lease: WriterLeaseIdentity | undefined;
-      let workspace: SourceDiscoveryWorkspaceLifecycle | undefined;
+      let workspace: SourceCaptureWorkspaceLifecycle | undefined;
       try {
         configureSqliteWriterDatabase(database, busyTimeoutMs, {
           initializePageReclamation: databaseCreated,
@@ -267,7 +267,7 @@ export function createSqliteIndexLifecycle(
           },
         });
         const libraryInstanceId = readLibraryInstanceId(database);
-        workspace = await openSourceDiscoveryWorkspace(paths, {
+        workspace = await openSourceCaptureWorkspace(paths, {
           assertLease: () => assertWriterLease(database, ownedLease, { now }),
           platform,
         });
@@ -504,7 +504,7 @@ function createWriter(
   fts5Security: Fts5SecurityCapability,
   fts5SecureDelete: boolean,
   sessions: SqliteIndexWriter["sessions"],
-  workspace: SourceDiscoveryWorkspaceLifecycle,
+  workspace: SourceCaptureWorkspaceLifecycle,
   lease: WriterLeaseIdentity,
   heartbeat: WriterLeaseHeartbeat,
   now: () => Date,
@@ -612,7 +612,7 @@ interface WriterSetupCleanupContext {
   readonly now: () => Date;
   readonly paths: IndexPaths;
   readonly platform: NodeJS.Platform;
-  readonly workspace: SourceDiscoveryWorkspaceLifecycle | undefined;
+  readonly workspace: SourceCaptureWorkspaceLifecycle | undefined;
 }
 
 async function throwAfterWriterSetupCleanup(

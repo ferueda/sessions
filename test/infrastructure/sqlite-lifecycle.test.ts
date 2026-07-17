@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
   createSqliteIndexLifecycle,
   SqliteIndexLifecycleError,
@@ -627,10 +628,17 @@ process.exit(0);`,
 
       const closeFailure = await writer.close().catch((error: unknown) => error);
       expect(closeFailure).toBeInstanceOf(AggregateError);
-      expect((closeFailure as AggregateError).errors).toMatchObject([
-        { code: "ERR_INVALID_STATE", message: "database is not open" },
-        { code: "ERR_INVALID_STATE", message: "database is not open" },
-      ]);
+      const errors = (closeFailure as AggregateError).errors;
+      expect(errors).toHaveLength(2);
+      expect(errors[0]).toBeInstanceOf(SourceCaptureWorkspaceError);
+      expect((errors[0] as SourceCaptureWorkspaceError).cause).toMatchObject({
+        code: "ERR_INVALID_STATE",
+        message: "database is not open",
+      });
+      expect(errors[1]).toMatchObject({
+        code: "ERR_INVALID_STATE",
+        message: "database is not open",
+      });
       expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
       await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
       await expect(writer.close()).resolves.toBeUndefined();
@@ -648,11 +656,18 @@ process.exit(0);`,
       (error: unknown) => error,
     );
     expect(cleanupFailure).toBeInstanceOf(AggregateError);
-    expect((cleanupFailure as AggregateError).errors).toMatchObject([
-      { code: "ERR_INVALID_STATE", message: "database is not open" },
-      { code: "ERR_INVALID_STATE", message: "database is not open" },
-      { code: "ENOENT" },
-    ]);
+    const errors = (cleanupFailure as AggregateError).errors;
+    expect(errors).toHaveLength(3);
+    expect(errors[0]).toBeInstanceOf(SourceCaptureWorkspaceError);
+    expect((errors[0] as SourceCaptureWorkspaceError).cause).toMatchObject({
+      code: "ERR_INVALID_STATE",
+      message: "database is not open",
+    });
+    expect(errors[1]).toMatchObject({
+      code: "ERR_INVALID_STATE",
+      message: "database is not open",
+    });
+    expect(errors[2]).toMatchObject({ code: "ENOENT" });
     await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
   });
 

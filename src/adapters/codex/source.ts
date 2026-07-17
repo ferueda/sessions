@@ -4,13 +4,14 @@ import { pathToFileURL } from "node:url";
 
 import { createDiscoveredSession } from "../../application/source-input-fingerprint.ts";
 import { SourceFailureError, type SourceFailure } from "../../application/source-failure.ts";
-import type {
-  DiscoveredSession,
-  SelectedSessionSource,
-  SessionSource,
-  SourceDiscoveryWorkspace,
-  SourceInputDescriptor,
-  SourceProbe,
+import {
+  SourceCaptureWorkspaceError,
+  type DiscoveredSession,
+  type SelectedSessionSource,
+  type SessionSource,
+  type SourceCaptureWorkspace,
+  type SourceInputDescriptor,
+  type SourceProbe,
 } from "../../application/ports/session-source.ts";
 import type { SessionDocument, SourceInstance } from "../../domain/session.ts";
 import { fingerprintCodexTuple } from "./fingerprint.ts";
@@ -54,7 +55,7 @@ export async function createCodexSource(
     async probe(): Promise<SourceProbe> {
       return probeCodexSource(paths, instance);
     },
-    async *discover(workspace: SourceDiscoveryWorkspace): AsyncIterable<DiscoveredSession> {
+    async *discover(workspace: SourceCaptureWorkspace): AsyncIterable<DiscoveredSession> {
       const sequence = ++discoverySequence;
       const probe = await probeCodexSource(paths, instance);
       if (probe.status !== "ready") throw sourceFailure(probe.status, instance);
@@ -73,6 +74,7 @@ export async function createCodexSource(
         }
         generation = new Map(sessions.map((session) => [session.thread.id, session]));
       } catch (error) {
+        if (error instanceof SourceCaptureWorkspaceError) throw error;
         throw mapAdapterError(error, instance, "unreadable");
       }
 
@@ -80,7 +82,10 @@ export async function createCodexSource(
       currentGeneration = generation;
       for (const session of generation.values()) yield session.candidate;
     },
-    async read(candidate: DiscoveredSession): Promise<SessionDocument> {
+    async read(
+      candidate: DiscoveredSession,
+      _workspace: SourceCaptureWorkspace,
+    ): Promise<SessionDocument> {
       const frozen = currentGeneration?.get(candidate.identity.nativeId);
       if (frozen === undefined || !sameCandidate(frozen.candidate, candidate)) {
         throw sourceFailure("source-changed", instance);

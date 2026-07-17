@@ -27,8 +27,10 @@ pnpm check
 `sessions index` is the only ordinary command that initializes user state.
 The library lives in platform application data, or the exact absolute
 `SESSIONS_DATA_DIR` override. Its
-`.scratch` child is an ephemeral writer-leased discovery workspace, not a second
-library or provider backup. Sessions never reuses or migrates the pre-public
+`.scratch` child is an ephemeral writer-leased capture workspace, not a second
+library or provider backup. The opaque capture workspace is available only while
+an adapter discovers or reads a changed candidate; unchanged candidates do not
+receive read-time staging. Sessions never reuses or migrates the pre-public
 cache. Paths, ownership, capture behavior, and deletion limits are governed by
 [privacy](../privacy.md).
 
