@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
@@ -51,7 +52,12 @@ describe("SQLite writer cleanup", () => {
     await rm(paths.scratch, { recursive: true });
     await writeFile(paths.scratch, "unsafe replacement");
 
-    await expect(writer.close()).rejects.toMatchObject({ code: "unsafe-scratch-root" });
+    const closeError = await writer.close().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(closeError).toBeInstanceOf(SourceCaptureWorkspaceError);
+    expect(closeError).toMatchObject({ code: "unsafe-scratch-root" });
     const database = new DatabaseSync(paths.database, { readOnly: true });
     try {
       expect(readWriterLeaseHealth(database, { now })).toEqual({ status: "free", generation: 1 });

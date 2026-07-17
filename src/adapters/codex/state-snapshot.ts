@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
-import type { SourceDiscoveryWorkspace } from "../../application/ports/session-source.ts";
+import type { SourceCaptureWorkspace } from "../../application/ports/session-source.ts";
 
 const MAX_SNAPSHOT_ATTEMPTS = 3;
 const COPY_BUFFER_BYTES = 64 * 1024;
@@ -34,7 +34,7 @@ export interface CodexStateSnapshotHooks {
 
 export interface CodexStateSnapshotOptions<T> {
   readonly databasePath: string;
-  readonly workspace: SourceDiscoveryWorkspace;
+  readonly workspace: SourceCaptureWorkspace;
   readonly materialize: (database: DatabaseSync) => T;
   readonly hooks?: CodexStateSnapshotHooks;
 }

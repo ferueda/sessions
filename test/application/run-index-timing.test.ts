@@ -27,7 +27,7 @@ import type {
   ValidatedSessionReplacement,
 } from "../../src/application/validate-session.ts";
 import type { SessionIdentity, SourceInstance } from "../../src/domain/session.ts";
-import { syntheticDiscoveryWorkspace } from "../fixtures/discovery-workspace.ts";
+import { syntheticCaptureWorkspace } from "../fixtures/capture-workspace.ts";
 import { createFakeIndexingSource } from "../fixtures/indexing-source.ts";
 
 const paths = {
@@ -157,7 +157,7 @@ function createIndexHarness(options: IndexHarnessOptions = {}): {
             supportedSchemaVersion: 3,
           },
           sessions: index,
-          workspace: syntheticDiscoveryWorkspace,
+          workspace: syntheticCaptureWorkspace,
           async close() {
             if (Object.hasOwn(options, "closeError")) throw options.closeError;
           },

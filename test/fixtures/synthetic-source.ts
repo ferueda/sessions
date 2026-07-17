@@ -17,7 +17,7 @@ import type {
   SessionSourceContractFixture,
   SessionSourceContractScenario,
 } from "../contracts/session-source.contract.ts";
-import { syntheticDiscoveryWorkspace } from "./discovery-workspace.ts";
+import { syntheticCaptureWorkspace } from "./capture-workspace.ts";
 
 const SENSITIVE_SOURCE_SENTINEL = "private source error sentinel";
 const SENSITIVE_METADATA_TITLE = "private metadata sentinel";
@@ -126,39 +126,41 @@ export function createSyntheticSourceFixture(
       const ordered = reversed ? [...sessions].reverse() : sessions;
       for (const session of ordered) yield candidateFor(session, readContent);
     },
-    async read(candidate: DiscoveredSession): Promise<SessionDocument> {
-      if (scenario === "malformed" || scenario === "unsupported-format") {
-        throw failure(scenario, SOURCE_INSTANCE);
-      }
+    async read(candidate: DiscoveredSession, workspace): Promise<SessionDocument> {
+      return workspace.withPrivateDirectory(async () => {
+        if (scenario === "malformed" || scenario === "unsupported-format") {
+          throw failure(scenario, SOURCE_INSTANCE);
+        }
 
-      const session = sessions.find((item) =>
-        sameSessionIdentity(item.identity, candidate.identity),
-      );
-      if (session === undefined || !candidateMatches(session, candidate, readContent)) {
-        throw failure("source-changed", SOURCE_INSTANCE);
-      }
+        const session = sessions.find((item) =>
+          sameSessionIdentity(item.identity, candidate.identity),
+        );
+        if (session === undefined || !candidateMatches(session, candidate, readContent)) {
+          throw failure("source-changed", SOURCE_INSTANCE);
+        }
 
-      const snapshot = cloneSession(session, readContent);
+        const snapshot = cloneSession(session, readContent);
 
-      if (
-        duringReadMutation !== null &&
-        sameSessionIdentity(duringReadMutation.identity, session.identity)
-      ) {
-        mutate(session, duringReadMutation.inputIndex);
-        duringReadMutation = null;
-      }
+        if (
+          duringReadMutation !== null &&
+          sameSessionIdentity(duringReadMutation.identity, session.identity)
+        ) {
+          mutate(session, duringReadMutation.inputIndex);
+          duringReadMutation = null;
+        }
 
-      const document = documentFor(snapshot);
-      if (!candidateMatches(session, candidate, readContent)) {
-        throw failure("source-changed", SOURCE_INSTANCE);
-      }
-      return document;
+        const document = documentFor(snapshot);
+        if (!candidateMatches(session, candidate, readContent)) {
+          throw failure("source-changed", SOURCE_INSTANCE);
+        }
+        return document;
+      });
     },
   };
 
   return {
     source,
-    discoveryWorkspace: syntheticDiscoveryWorkspace,
+    captureWorkspace: syntheticCaptureWorkspace,
     sourceInstance: SOURCE_INSTANCE,
     identities: [primaryIdentity, missingMetadataIdentity],
     primaryIdentity,

@@ -18,7 +18,7 @@ import type {
 } from "./ports/session-index.ts";
 import type {
   SelectedSessionSource,
-  SourceDiscoveryWorkspace,
+  SourceCaptureWorkspace,
   SourceProbeStatus,
 } from "./ports/session-source.ts";
 import { readSessionReplacement } from "./read-session-document.ts";
@@ -95,7 +95,7 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
 
 async function runSource(
   index: SessionIndexWriter,
-  workspace: SourceDiscoveryWorkspace,
+  workspace: SourceCaptureWorkspace,
   selection: SelectedSessionSource,
   clock: IndexClock,
   timing: IndexTimingRecorder | undefined,
@@ -141,7 +141,7 @@ async function runSource(
     for (const candidate of discovery.candidates) {
       const observation = candidate.observation;
       seen.add(observation.identity.nativeId);
-      const failure = await applyCandidate(index, run, selection, candidate, timing);
+      const failure = await applyCandidate(index, run, selection, candidate, workspace, timing);
       if (failure === "source-changed") {
         deferred.push(candidate);
       } else if (failure !== undefined) {
@@ -187,6 +187,7 @@ async function applyCandidate(
   run: SessionIndexRun,
   selection: SelectedSessionSource,
   candidate: AdmittedDiscoveredSession,
+  workspace: SourceCaptureWorkspace,
   timing: IndexTimingRecorder | undefined,
 ): Promise<RecordableSessionFailureCode | undefined> {
   const observation = candidate.observation;
@@ -203,7 +204,7 @@ async function applyCandidate(
   let replacement: ValidatedSessionReplacement;
   try {
     replacement = await timeIndexOperation(timing, "changedReadAndNormalize", () =>
-      readSessionReplacement(selection.adapter, candidate),
+      readSessionReplacement(selection.adapter, candidate, workspace),
     );
   } catch (error) {
     if (!isSourceFailureError(error)) throw error;
@@ -218,7 +219,7 @@ async function retrySourceChanged(
   index: SessionIndexWriter,
   run: SessionIndexRun,
   selection: SelectedSessionSource,
-  workspace: SourceDiscoveryWorkspace,
+  workspace: SourceCaptureWorkspace,
   deferred: readonly AdmittedDiscoveredSession[],
   timing: IndexTimingRecorder | undefined,
 ): Promise<void> {
@@ -246,7 +247,7 @@ async function retrySourceChanged(
       continue;
     }
 
-    const failure = await applyCandidate(index, run, selection, fresh, timing);
+    const failure = await applyCandidate(index, run, selection, fresh, workspace, timing);
     if (failure !== undefined) {
       await timeIndexOperation(timing, "runBookkeeping", () =>
         index.recordFailure(run, fresh.observation, failure),

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
   admittedReplacement,
   identity,
@@ -759,10 +760,10 @@ describe("SQLite writer coordination", () => {
 
     const closeFailure = await writer.close().catch((error: unknown) => error);
     expect(closeFailure).toBeInstanceOf(AggregateError);
-    expect((closeFailure as AggregateError).errors).toEqual([
-      expect.objectContaining({ code: "writer-lease-lost" }),
-      expect.objectContaining({ code: "writer-lease-lost" }),
-    ]);
+    const errors = (closeFailure as AggregateError).errors;
+    expect(errors).toHaveLength(2);
+    expectCaptureLeaseFailure(errors[0]);
+    expect(errors[1]).toMatchObject({ code: "writer-lease-lost" });
     const replacement = await lifecycle.openWriter(paths);
     await replacement.close();
   });
@@ -783,10 +784,10 @@ describe("SQLite writer coordination", () => {
     clock.set("2026-07-13T12:01:00.000Z");
     const closeFailure = await writer.close().catch((error: unknown) => error);
     expect(closeFailure).toBeInstanceOf(AggregateError);
-    expect((closeFailure as AggregateError).errors).toEqual([
-      expect.objectContaining({ code: "writer-lease-lost" }),
-      expect.objectContaining({ code: "writer-lease-lost" }),
-    ]);
+    const errors = (closeFailure as AggregateError).errors;
+    expect(errors).toHaveLength(2);
+    expectCaptureLeaseFailure(errors[0]);
+    expect(errors[1]).toMatchObject({ code: "writer-lease-lost" });
 
     const replacement = await lifecycle.openWriter(paths);
     await replacement.close();
@@ -831,6 +832,13 @@ describe("SQLite writer coordination", () => {
     }
   });
 });
+
+function expectCaptureLeaseFailure(error: unknown): void {
+  expect(error).toBeInstanceOf(SourceCaptureWorkspaceError);
+  expect((error as SourceCaptureWorkspaceError).cause).toMatchObject({
+    code: "writer-lease-lost",
+  });
+}
 
 function openDatabase(file = ":memory:"): DatabaseSync {
   const database = new DatabaseSync(file, {

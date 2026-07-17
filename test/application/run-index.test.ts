@@ -25,7 +25,7 @@ import { SourceFailureError } from "../../src/application/source-failure.ts";
 import { formatSessionIdentity } from "../../src/domain/session-identity.ts";
 import type { SessionDocument, SessionIdentity, SourceInstance } from "../../src/domain/session.ts";
 import { createFakeIndexingSource, type FakeIndexingSource } from "../fixtures/indexing-source.ts";
-import { syntheticDiscoveryWorkspace } from "../fixtures/discovery-workspace.ts";
+import { syntheticCaptureWorkspace } from "../fixtures/capture-workspace.ts";
 
 const paths = {
   directory: "/tmp/sessions-test",
@@ -103,14 +103,15 @@ function probe(source: FakeIndexingSource, status: SourceProbeStatus): SourcePro
 }
 
 describe("runIndex", () => {
-  test("passes the opened writer workspace into source discovery", async () => {
+  test("passes the opened writer workspace into discovery and changed reads", async () => {
     const source = createFakeIndexingSource();
-    source.setDiscovery([]);
+    source.setDiscovery([source.candidate("session")]);
     const harness = createIndexHarness();
 
     await execute(harness, [source.selected]);
 
-    expect(source.discoveryWorkspaces).toEqual([syntheticDiscoveryWorkspace]);
+    expect(source.discoveryWorkspaces).toEqual([syntheticCaptureWorkspace]);
+    expect(source.readWorkspaces).toEqual([syntheticCaptureWorkspace]);
   });
 
   test("rejects duplicate selections before opening the index", async () => {
@@ -233,6 +234,7 @@ describe("runIndex", () => {
     const third = await execute(harness, [source.selected]);
 
     expect(source.readNativeIds).toEqual(["session", "session"]);
+    expect(source.readWorkspaces).toEqual([syntheticCaptureWorkspace, syntheticCaptureWorkspace]);
     expect(first.counts).toMatchObject({ discovered: 1, updated: 1, unchanged: 0 });
     expect(second.counts).toMatchObject({ discovered: 1, updated: 0, unchanged: 1 });
     expect(third.counts).toMatchObject({ discovered: 1, updated: 1, unchanged: 0 });
@@ -285,7 +287,8 @@ describe("runIndex", () => {
       stale: 0,
     });
     expect(source.probeCount).toBe(1);
-    expect(source.discoveryWorkspaces).toEqual([syntheticDiscoveryWorkspace]);
+    expect(source.discoveryWorkspaces).toEqual([syntheticCaptureWorkspace]);
+    expect(source.readWorkspaces).toEqual([syntheticCaptureWorkspace]);
     expect(source.readNativeIds).toEqual(["session"]);
   });
 
@@ -317,10 +320,16 @@ describe("runIndex", () => {
     expect(report.sources[0]?.items).toEqual([]);
     expect(source.probeCount).toBe(1);
     expect(source.discoveryWorkspaces).toEqual([
-      syntheticDiscoveryWorkspace,
-      syntheticDiscoveryWorkspace,
+      syntheticCaptureWorkspace,
+      syntheticCaptureWorkspace,
     ]);
     expect(source.readNativeIds).toEqual(["a-session", "b-session", "a-session", "b-session"]);
+    expect(source.readWorkspaces).toEqual([
+      syntheticCaptureWorkspace,
+      syntheticCaptureWorkspace,
+      syntheticCaptureWorkspace,
+      syntheticCaptureWorkspace,
+    ]);
     await expect(harness.index.getFreshness(primaryA.identity)).resolves.toMatchObject({
       status: "current",
       latest: { revision: { aggregateFingerprint: freshA.aggregateFingerprint } },
@@ -605,7 +614,7 @@ function createIndexHarness(
       supportedSchemaVersion: 3,
     },
     sessions: index,
-    workspace: syntheticDiscoveryWorkspace,
+    workspace: syntheticCaptureWorkspace,
     async close() {
       if (Object.hasOwn(options, "closeError")) throw options.closeError;
     },

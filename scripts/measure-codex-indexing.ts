@@ -22,7 +22,7 @@ import type {
   DiscoveredSession,
   SelectedSessionSource,
   SessionSource,
-  SourceDiscoveryWorkspace,
+  SourceCaptureWorkspace,
 } from "../src/application/ports/session-source.ts";
 import { runIndex } from "../src/application/run-index.ts";
 import { createIndexTimingCollector } from "../src/infrastructure/runtime/index-timings.ts";
@@ -97,6 +97,18 @@ interface SelectedCohort {
   readonly rolloutSnapshots: readonly SelectedRolloutSnapshot[];
 }
 
+interface WorkspaceDeliverySnapshot {
+  readonly discoveryCalls: number;
+  readonly readCalls: number;
+  readonly exactWorkspaceReference: boolean;
+}
+
+interface WorkspaceDeliveryTracker {
+  recordDiscovery(workspace: SourceCaptureWorkspace): void;
+  recordRead(workspace: SourceCaptureWorkspace): void;
+  snapshot(): WorkspaceDeliverySnapshot;
+}
+
 let ownedTemporaryRoot: OwnedTemporaryRoot | undefined;
 let cleanupOperation: Promise<void> | undefined;
 let signalExitStarted = false;
@@ -152,6 +164,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
   const clock = Object.freeze({ now: () => new Date() });
 
   const seedTimings = createIndexTimingCollector();
+  const seedWorkspaceDelivery = createWorkspaceDeliveryTracker();
   let seedCohort: SelectedCohort | undefined;
   const seed = await runStage("seed-index", () =>
     timeIndexOperation(seedTimings.recorder, "total", async () => {
@@ -161,9 +174,14 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
       return runIndex({
         paths: indexPaths,
         sources: [
-          limitDiscovery(selected, codexPaths, (cohort) => {
-            seedCohort = cohort;
-          }),
+          limitDiscovery(
+            selected,
+            codexPaths,
+            (cohort) => {
+              seedCohort = cohort;
+            },
+            seedWorkspaceDelivery,
+          ),
         ],
         lifecycle,
         clock,
@@ -174,6 +192,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
   const seedClean = await writerCleanStateIsValid(indexPaths.database, platform);
 
   const timings = createIndexTimingCollector();
+  const stableWorkspaceDelivery = createWorkspaceDeliveryTracker();
   let stableCohort: SelectedCohort | undefined;
   const stable = await runStage("stable-index", () =>
     timeIndexOperation(timings.recorder, "total", async () => {
@@ -183,9 +202,14 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
       return runIndex({
         paths: indexPaths,
         sources: [
-          limitDiscovery(selected, codexPaths, (cohort) => {
-            stableCohort = cohort;
-          }),
+          limitDiscovery(
+            selected,
+            codexPaths,
+            (cohort) => {
+              stableCohort = cohort;
+            },
+            stableWorkspaceDelivery,
+          ),
         ],
         lifecycle,
         clock,
@@ -237,9 +261,19 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
 
   const seedTimingSnapshot = seedTimings.snapshot();
   const timingSnapshot = timings.snapshot();
+  const seedWorkspaceSnapshot = seedWorkspaceDelivery.snapshot();
+  const stableWorkspaceSnapshot = stableWorkspaceDelivery.snapshot();
   await runStage("timing-admission", async () =>
     requireCondition(
-      timingSnapshot.phases.changedReadAndNormalize.calls === 0 &&
+      seedWorkspaceSnapshot.exactWorkspaceReference &&
+        seedWorkspaceSnapshot.discoveryCalls >= 1 &&
+        seedWorkspaceSnapshot.readCalls >= COHORT_SESSIONS &&
+        seedWorkspaceSnapshot.readCalls ===
+          seedTimingSnapshot.phases.changedReadAndNormalize.calls &&
+        stableWorkspaceSnapshot.exactWorkspaceReference &&
+        stableWorkspaceSnapshot.discoveryCalls >= 1 &&
+        stableWorkspaceSnapshot.readCalls === 0 &&
+        timingSnapshot.phases.changedReadAndNormalize.calls === 0 &&
         timingSnapshot.phases.writerOpen.calls === 1 &&
         timingSnapshot.phases.writerOpen.elapsedMs <= CLEAN_WRITER_OPEN_BUDGET_MS &&
         timingSnapshot.phases.total.calls === 1 &&
@@ -262,6 +296,10 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     stableCounts: stable.counts,
     libraryHealthy: true,
     writerIntegrityState: true,
+    workspaceDelivery: {
+      seed: seedWorkspaceSnapshot,
+      stable: stableWorkspaceSnapshot,
+    },
     seedTimings: seedTimingSnapshot.phases,
     timings: timingSnapshot.phases,
   });
@@ -321,11 +359,13 @@ function limitDiscovery(
   selected: SelectedSessionSource,
   paths: ResolvedCodexPaths,
   capture: (cohort: SelectedCohort) => void,
+  workspaceDelivery: WorkspaceDeliveryTracker,
 ): SelectedSessionSource {
   const adapter: SessionSource = Object.freeze({
     kind: selected.adapter.kind,
     probe: () => selected.adapter.probe(),
-    async *discover(workspace: SourceDiscoveryWorkspace): AsyncIterable<DiscoveredSession> {
+    async *discover(workspace: SourceCaptureWorkspace): AsyncIterable<DiscoveredSession> {
+      workspaceDelivery.recordDiscovery(workspace);
       const completeGeneration: DiscoveredSession[] = [];
       for await (const candidate of selected.adapter.discover(workspace)) {
         completeGeneration.push(candidate);
@@ -337,9 +377,49 @@ function limitDiscovery(
       capture(await captureSelectedCohort(cohort, paths));
       yield* cohort;
     },
-    read: (candidate: DiscoveredSession) => selected.adapter.read(candidate),
+    read: (candidate: DiscoveredSession, workspace: SourceCaptureWorkspace) => {
+      workspaceDelivery.recordRead(workspace);
+      return selected.adapter.read(candidate, workspace);
+    },
   });
   return Object.freeze({ instance: selected.instance, adapter });
+}
+
+function createWorkspaceDeliveryTracker(): WorkspaceDeliveryTracker {
+  let expectedWorkspace: SourceCaptureWorkspace | undefined;
+  let discoveryCalls = 0;
+  let readCalls = 0;
+  let exactWorkspaceReference = true;
+
+  const recordWorkspace = (workspace: SourceCaptureWorkspace): void => {
+    if (expectedWorkspace === undefined) {
+      expectedWorkspace = workspace;
+      return;
+    }
+    exactWorkspaceReference &&= workspace === expectedWorkspace;
+  };
+
+  return Object.freeze({
+    recordDiscovery(workspace: SourceCaptureWorkspace): void {
+      discoveryCalls += 1;
+      recordWorkspace(workspace);
+    },
+    recordRead(workspace: SourceCaptureWorkspace): void {
+      readCalls += 1;
+      if (expectedWorkspace === undefined) {
+        exactWorkspaceReference = false;
+        return;
+      }
+      recordWorkspace(workspace);
+    },
+    snapshot(): WorkspaceDeliverySnapshot {
+      return Object.freeze({
+        discoveryCalls,
+        readCalls,
+        exactWorkspaceReference: expectedWorkspace !== undefined && exactWorkspaceReference,
+      });
+    },
+  });
 }
 
 async function captureSelectedCohort(

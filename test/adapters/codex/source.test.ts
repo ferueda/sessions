@@ -5,10 +5,11 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { isSourceFailureError } from "../../../src/application/source-failure.ts";
 import { verifySourceInputFingerprint } from "../../../src/application/source-input-fingerprint.ts";
-import type {
-  DiscoveredSession,
-  SessionSource,
-  SourceDiscoveryWorkspace,
+import {
+  SourceCaptureWorkspaceError,
+  type DiscoveredSession,
+  type SourceCaptureWorkspace,
+  type SessionSource,
 } from "../../../src/application/ports/session-source.ts";
 import { CODEX_ADAPTER_VERSION, createCodexSource } from "../../../src/adapters/codex/source.ts";
 import {
@@ -75,7 +76,7 @@ describe("Codex session source", () => {
       expect(verifySourceInputFingerprint(candidate)).toBe(true);
       expect(Object.isFrozen(candidate)).toBe(true);
     }
-    await expect(selected.adapter.read(candidates[0]!)).rejects.toMatchObject({
+    await expect(selected.adapter.read(candidates[0]!, fixture.workspace)).rejects.toMatchObject({
       failure: { kind: "malformed", source: selected.instance },
       message: "Session source data is malformed",
     });
@@ -104,7 +105,7 @@ describe("Codex session source", () => {
     const selected = await createCodexSource(fixture.environment);
     const [candidate] = await discover(selected.adapter, fixture.workspace);
 
-    const document = await selected.adapter.read(candidate!);
+    const document = await selected.adapter.read(candidate!, fixture.workspace);
 
     expect(document).toMatchObject({
       identity: candidate!.identity,
@@ -147,7 +148,7 @@ describe("Codex session source", () => {
     const selected = await createCodexSource(fixture.environment);
     const [candidate] = await discover(selected.adapter, fixture.workspace);
 
-    const document = await selected.adapter.read(candidate!);
+    const document = await selected.adapter.read(candidate!, fixture.workspace);
 
     expect(document).toMatchObject({
       lineageCoverage: "unknown",
@@ -164,7 +165,7 @@ describe("Codex session source", () => {
     const [firstCandidate] = await discover(selected.adapter, fixture.workspace);
     fixture.writeState([{ ...thread("thread-one", rolloutPath), title: "Second title" }]);
 
-    await expect(selected.adapter.read(firstCandidate!)).resolves.toMatchObject({
+    await expect(selected.adapter.read(firstCandidate!, fixture.workspace)).resolves.toMatchObject({
       title: "First title",
     });
 
@@ -172,10 +173,12 @@ describe("Codex session source", () => {
     expect(secondCandidate?.inputs[0]?.fingerprint).not.toBe(
       firstCandidate?.inputs[0]?.fingerprint,
     );
-    await expect(selected.adapter.read(secondCandidate!)).resolves.toMatchObject({
-      title: "Second title",
-    });
-    await expect(selected.adapter.read(firstCandidate!)).rejects.toMatchObject({
+    await expect(selected.adapter.read(secondCandidate!, fixture.workspace)).resolves.toMatchObject(
+      {
+        title: "Second title",
+      },
+    );
+    await expect(selected.adapter.read(firstCandidate!, fixture.workspace)).rejects.toMatchObject({
       failure: { kind: "source-changed" },
     });
   });
@@ -191,10 +194,10 @@ describe("Codex session source", () => {
 
     const missing = candidates.find(({ identity }) => identity.nativeId === "missing-thread")!;
     const invalid = candidates.find(({ identity }) => identity.nativeId === "invalid-thread")!;
-    await expect(selected.adapter.read(missing)).rejects.toMatchObject({
+    await expect(selected.adapter.read(missing, fixture.workspace)).rejects.toMatchObject({
       failure: { kind: "unavailable" },
     });
-    await expect(selected.adapter.read(invalid)).rejects.toMatchObject({
+    await expect(selected.adapter.read(invalid, fixture.workspace)).rejects.toMatchObject({
       failure: { kind: "malformed" },
     });
   });
@@ -212,7 +215,7 @@ describe("Codex session source", () => {
     await fixture.writeRollout(compressedPath, codexRolloutRecords("zstd-thread"), "plain");
 
     for (const candidate of candidates) {
-      const error = await captureFailure(() => selected.adapter.read(candidate));
+      const error = await captureFailure(() => selected.adapter.read(candidate, fixture.workspace));
       expect(error.failure.kind).toBe("source-changed");
       expect(error.message).not.toContain(fixture.codexHome);
       expect(JSON.stringify(error.failure)).not.toContain(fixture.codexHome);
@@ -234,6 +237,20 @@ describe("Codex session source", () => {
     });
     expect(error.message).not.toContain(fixture.stateDatabase);
   });
+
+  test("preserves capture-workspace failures without remapping them as provider data", async () => {
+    const fixture = await createFixture();
+    fixture.writeState([thread("thread-one", "sessions/rollout-2026-thread-one.jsonl")]);
+    const selected = await createCodexSource(fixture.environment);
+    const expected = new SourceCaptureWorkspaceError(new Error("private lease detail"));
+    const workspace: SourceCaptureWorkspace = {
+      withPrivateDirectory: async () => {
+        throw expected;
+      },
+    };
+
+    await expect(discover(selected.adapter, workspace)).rejects.toBe(expected);
+  });
 });
 
 async function createFixture(): Promise<CodexSourceFixture> {
@@ -248,7 +265,7 @@ function thread(id: string, rolloutPath: string) {
 
 async function discover(
   source: SessionSource,
-  workspace: SourceDiscoveryWorkspace,
+  workspace: SourceCaptureWorkspace,
 ): Promise<readonly DiscoveredSession[]> {
   const candidates: DiscoveredSession[] = [];
   for await (const candidate of source.discover(workspace)) candidates.push(candidate);

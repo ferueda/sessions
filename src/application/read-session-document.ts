@@ -1,4 +1,9 @@
-import type { DiscoveredSession, SessionSource } from "./ports/session-source.ts";
+import {
+  SourceCaptureWorkspaceError,
+  type DiscoveredSession,
+  type SessionSource,
+  type SourceCaptureWorkspace,
+} from "./ports/session-source.ts";
 import { isSourceFailureError, SourceFailureError } from "./source-failure.ts";
 import {
   admitDiscoveredSession,
@@ -14,13 +19,15 @@ import type { SessionDocument, SourceInstance } from "../domain/session.ts";
 export async function readSessionDocument(
   source: SessionSource,
   candidate: DiscoveredSession | AdmittedDiscoveredSession,
+  workspace: SourceCaptureWorkspace,
 ): Promise<SessionDocument> {
-  return (await readSessionReplacement(source, candidate)).document;
+  return (await readSessionReplacement(source, candidate, workspace)).document;
 }
 
 export async function readSessionReplacement(
   source: SessionSource,
   candidate: DiscoveredSession | AdmittedDiscoveredSession,
+  workspace: SourceCaptureWorkspace,
 ): Promise<ValidatedSessionReplacement> {
   const admission = isAdmittedDiscoveredSession(candidate)
     ? { ok: true as const, admitted: candidate }
@@ -52,8 +59,9 @@ export async function readSessionReplacement(
 
   let value: unknown;
   try {
-    value = await source.read(admitted.candidate);
+    value = await source.read(admitted.candidate, workspace);
   } catch (error) {
+    if (error instanceof SourceCaptureWorkspaceError) throw error;
     if (isSourceFailureError(error)) {
       if (sameSource(error.failure.source, observation.identity.source)) throw error;
     }

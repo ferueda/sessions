@@ -2,7 +2,7 @@ import type {
   DiscoveredSession,
   SelectedSessionSource,
   SessionSource,
-  SourceDiscoveryWorkspace,
+  SourceCaptureWorkspace,
   SourceProbe,
 } from "../../src/application/ports/session-source.ts";
 import { SourceFailureError, type SourceFailure } from "../../src/application/source-failure.ts";
@@ -17,7 +17,8 @@ export interface FakeIndexingSource {
   readonly probeCount: number;
   readonly readNativeIds: readonly string[];
   readonly readCandidates: readonly DiscoveredSession[];
-  readonly discoveryWorkspaces: readonly SourceDiscoveryWorkspace[];
+  readonly discoveryWorkspaces: readonly SourceCaptureWorkspace[];
+  readonly readWorkspaces: readonly SourceCaptureWorkspace[];
   candidate(nativeId: string, revision?: string, adapterVersion?: string): DiscoveredSession;
   setDiscovery(candidates: readonly DiscoveredSession[]): void;
   queueDiscoveries(...generations: readonly FakeDiscoveryGeneration[]): void;
@@ -56,7 +57,8 @@ export function createFakeIndexingSource(
   const queuedReadFailures = new Map<string, SourceFailure["kind"][]>();
   const readNativeIds: string[] = [];
   const readCandidates: DiscoveredSession[] = [];
-  const discoveryWorkspaces: SourceDiscoveryWorkspace[] = [];
+  const discoveryWorkspaces: SourceCaptureWorkspace[] = [];
+  const readWorkspaces: SourceCaptureWorkspace[] = [];
 
   const adapter: SessionSource = {
     kind: instance.kind,
@@ -83,9 +85,10 @@ export function createFakeIndexingSource(
         throw generationFailure.error;
       }
     },
-    async read(candidate) {
+    async read(candidate, workspace) {
       readNativeIds.push(candidate.identity.nativeId);
       readCandidates.push(candidate);
+      readWorkspaces.push(workspace);
       const queuedFailures = queuedReadFailures.get(candidate.identity.nativeId);
       const queuedFailure = queuedFailures?.shift();
       if (queuedFailures?.length === 0) queuedReadFailures.delete(candidate.identity.nativeId);
@@ -108,6 +111,7 @@ export function createFakeIndexingSource(
     readNativeIds,
     readCandidates,
     discoveryWorkspaces,
+    readWorkspaces,
     candidate(nativeId, revision = "revision-1", adapterVersion = "synthetic-v1") {
       return createDiscoveredSession({
         identity: { source: instance, nativeId },
