@@ -95,8 +95,10 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have release automation or pinned Harness integration. M12 is
-next.
+M12 release configuration, qualification, onboarding, and disabled-by-default
+automation are now implemented in the repository. Its account-owned npm/GitHub
+bootstrap and first supported `0.1.0` release remain rollout gates. Pinned
+Harness integration remains M13.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -1506,7 +1508,7 @@ Exit gate:
   provider bytes, and cleans temporary Sessions state.
 - `pnpm check` passes on all CI operating systems.
 
-### M12 — Qualify and automate public releases
+### M12 — Qualify and automate public releases (repository work complete; rollout pending)
 
 Outcome: a clean public pre-release can be installed without a source checkout,
 and subsequent releases use auditable versioning and short-lived publish
@@ -1545,10 +1547,12 @@ Required behavior:
 - Document paired CLI/skill upgrades, the external installer's network boundary,
   global npm permission recovery without `sudo`, and that uninstalling either
   package does not delete retained Sessions data.
-- Bootstrap the first npm package release with maintainer-controlled 2FA because
+- Bootstrap the npm package with a qualified, unsupported `0.0.0` tarball under
+  the non-default `bootstrap` tag and maintainer-controlled 2FA because
   npm trusted-publisher configuration requires an existing package. Then bind the
   exact repository, workflow filename, and protected environment as the trusted
-  publisher.
+  publisher. Do not create `v0.0.0` or assign `latest`; `0.1.0` is the first
+  supported, provenance-bearing, compatibility-bearing release.
 - Grant `id-token: write` only to the publish job. Publish without a long-lived
   registry token, verify registry version and provenance, then remove obsolete
   automation tokens after OIDC succeeds.

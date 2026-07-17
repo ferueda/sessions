@@ -9,6 +9,7 @@
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
+pnpm hooks:install
 pnpm check
 ```
 
@@ -16,13 +17,13 @@ pnpm check
 
 ## Generated repository state
 
-| Path                                | Owner                         | Mutability                            |
-| ----------------------------------- | ----------------------------- | ------------------------------------- |
-| `node_modules/`                     | pnpm                          | Recreated by install; ignored         |
-| `dist/`                             | TypeScript build              | Recreated by build; ignored           |
-| `.git/hooks/`                       | simple-git-hooks              | Prepared on install; local Git state  |
-| `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored |
-| Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                |
+| Path                                | Owner                         | Mutability                                  |
+| ----------------------------------- | ----------------------------- | ------------------------------------------- |
+| `node_modules/`                     | pnpm                          | Recreated by install; ignored               |
+| `dist/`                             | TypeScript build              | Recreated by build; ignored                 |
+| `.git/hooks/`                       | `pnpm hooks:install`          | Explicit contributor setup; local Git state |
+| `.harness/`                         | Optional local review tooling | Rebuildable review artifacts; ignored       |
+| Temporary package-smoke directories | `scripts/smoke-package.ts`    | Removed after each run                      |
 
 `sessions index` is the only ordinary command that initializes user state.
 The library lives in platform application data, or the exact absolute
@@ -37,7 +38,8 @@ cache. Paths, ownership, capture behavior, and deletion limits are governed by
 Pre-alpha builds recognize only the current storage baseline. When that baseline
 changes, use a fresh `SESSIONS_DATA_DIR` or manually remove the old Sessions-owned
 directory and index again; provider data is never part of that cleanup. Ordered,
-data-preserving forward migrations become supported after the first release.
+data-preserving forward migrations become supported with `0.1.0`. The
+unsupported `0.0.0` package seed has no migration promise.
 
 The Cursor and Codex adapters resolve their default local installations. Tests
 use only generated stores, state databases, and plain/Zstandard rollouts under
@@ -45,7 +47,9 @@ temporary roots; no developer provider history is a test dependency.
 
 ## Hooks
 
-The pre-commit hook formats/lints staged files and runs the full typecheck. Bypass only when diagnosing hook behavior; always run `pnpm check` before handoff.
+`pnpm hooks:install` configures the contributor-only pre-commit hook. It
+formats/lints staged files and runs the full typecheck. Bypass only when
+diagnosing hook behavior; always run `pnpm check` before handoff.
 
 ## Troubleshooting
 

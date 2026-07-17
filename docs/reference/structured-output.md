@@ -1,7 +1,7 @@
 # Structured output contract
 
 - Status: current schema 1 behavior
-- Last updated: 2026-07-16
+- Last updated: 2026-07-17
 
 This reference owns the machine-readable output of `sessions list`,
 `sessions search`, `sessions entries`, `sessions show`, and `sessions export`. JSON is one bundle.
@@ -10,8 +10,9 @@ record. Embedded newlines are JSON escapes, so they never split a JSONL record.
 For a command result, JSON and JSONL encode the same eligible evidence, selection,
 persisted document digest, and page-level capture scope.
 
-Pre-alpha schemas may reset before publication. Compatibility starts with the
-first published contract. Removing a field, changing a field's meaning, or
+Development schemas may reset before supported `0.1.0`. The unsupported `0.0.0`
+bootstrap seed establishes no structured-output contract. Compatibility starts
+with schema 1 in `0.1.0`. Removing a field, changing a field's meaning, or
 changing the record inventory requires a later schema version.
 
 ## Commands and trust boundary

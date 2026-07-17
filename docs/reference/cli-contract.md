@@ -1,13 +1,14 @@
 # CLI contract
 
 - Status: current behavior plus accepted later-V1 semantics
-- Last updated: 2026-07-16
+- Last updated: 2026-07-17
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
 
-Pre-alpha structured schemas may reset before publication. Compatibility begins
-with the first published contract; no earlier development contract is supported.
+Development schemas may reset before supported `0.1.0`. The unsupported `0.0.0`
+bootstrap seed establishes no CLI contract. Compatibility begins with the
+`0.1.0` CLI; no earlier development contract is supported.
 
 ## Current commands
 

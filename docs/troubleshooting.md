@@ -18,6 +18,19 @@ make the `sessions` command available in the agent process and restart that host
 if it caches environment variables. Verify with `sessions --help` from the same
 environment.
 
+For a supported public release, verify that the global CLI version and
+immutable-tag Agent Skill version match. Do not combine a released CLI with the
+skill from `main`.
+
+## Global npm install reports a permission error
+
+Use a Node version manager or configure a user-local npm prefix, then retry.
+Do not use `sudo npm install`: it can leave mixed-ownership files and widens the
+install's authority.
+
+Removing the npm package or Agent Skill does not remove the Sessions library.
+Use an explicit Sessions data command only when deletion is intended.
+
 ## The library is uninitialized
 
 `list`, cursor-free `search`, and cursor-free `entries` return empty success and
@@ -31,9 +44,9 @@ sessions index --source '<authorized-source>'
 
 ## The library is incompatible
 
-Pre-alpha builds recognize one current SQLite baseline and do not upgrade or
-delete older development databases. `data clear` also refuses an incompatible
-file because it cannot safely claim it.
+Development builds before supported `0.1.0` recognize one current SQLite
+baseline and do not upgrade or delete older development databases. `data clear`
+also refuses an incompatible file because it cannot safely claim it.
 
 Use one of these reset paths:
 

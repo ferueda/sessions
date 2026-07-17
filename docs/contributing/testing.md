@@ -49,6 +49,7 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Agent Skill contract  | `test/skill-contracts.test.ts`, evaluator-owned forward cases                   | Exact layout/metadata/routes, shared evidence rules, shipped CLI use, safety limits, and seven prompt rubrics    |
 | Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                | Compiled binary plus synthetic indexing/query/entries/show/export, orphan repair, compaction, deletion           |
 | Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | Offline-installed CLI journey plus the exact independent ten-file skill tree and resolvable references           |
+| Release qualification | One hashed tarball plus Linux/macOS/Windows release smokes                      | Normal global npm install, shim, pinned `npx`, skill, metadata, and the shared synthetic workflow                |
 | Agent forward eval    | Fresh agents over an isolated generic retained corpus                           | Route choice, facts-first evidence, provenance, privacy, bounded output, honest unknowns, and no auto-mutation   |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
@@ -71,6 +72,7 @@ export, and the packaged Agent Skill are current coverage.
 | Import boundary                           | Dependency checker; self-test if checker behavior changes                  | `pnpm deps:check`                                              | `pnpm check`                                              |
 | Markdown, links, contributor routes       | Docs formatting and structural contract                                    | `pnpm check:docs`                                              | `pnpm check` locally; docs-only CI uses `pnpm check:docs` |
 | Build, entrypoint, tarball, install       | Existing dist/package smoke; focused tests own branches                    | `pnpm build`, then `pnpm smoke:dist` or `pnpm smoke:package`   | `pnpm check`                                              |
+| Release workflow or public artifact       | Parsed workflow/config contracts plus release-package smoke                | Focused release contract tests and one local qualified tarball | `pnpm check`, then protected release jobs                 |
 
 Do not repeat one acceptance criterion at every layer.
 
@@ -152,6 +154,13 @@ temporary roots in `finally` and capture command/assertion context on failure.
 The package smoke also checks that only the ten intended Agent Skill files ship,
 that the installed copy is independent of the checkout, and that its metadata
 and direct references are valid.
+
+Release qualification is separate from routine offline package smoke. It runs
+the full gate at the exact release revision, builds and hashes one tarball, then
+tests those same bytes on Linux, macOS, and Windows through ordinary global npm
+installation and pinned `npx`. Only after all three pass may the protected
+OIDC job publish that artifact. Registry and provenance checks are release
+operations, not deterministic `pnpm check` dependencies.
 
 Add or broaden a smoke only for a critical journey that faster layers cannot
 credibly prove. Keep edge-case matrices focused. Use production-supported seams

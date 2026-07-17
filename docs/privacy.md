@@ -36,6 +36,12 @@ Portable JSON/JSONL export and transcript-bearing JSON/JSONL
 list/search/entries/show are current. Library import/restore and automatic
 analysis are not current commands; Markdown presentation is deferred beyond V1.
 
+Installing or upgrading the public CLI uses npm. Installing the release-matched
+Agent Skill also contacts npm and GitHub through the external `skills` installer;
+the documented command disables that installer's anonymous telemetry. These are
+explicit distribution steps, not Sessions runtime behavior. Uninstalling the
+CLI or skill leaves retained Sessions data in place.
+
 ## Owned local state
 
 Sessions resolves its durable application-data directory as follows:
@@ -52,11 +58,13 @@ proof, recognized bounded proof residue, and the exact ephemeral `.scratch`
 workspace. Sessions does not read, migrate, or delete the pre-public cache
 database or legacy Harness JSONL cache.
 
-Pre-alpha builds recognize one current Sessions-owned database baseline. Earlier
-development databases are neither upgraded nor deleted automatically. A user may
-select a fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete
-Sessions-owned directory and index again; provider histories remain untouched.
-Data-preserving migration support begins with the first published release.
+Development builds before supported `0.1.0` recognize one current
+Sessions-owned database baseline. Earlier development databases are neither
+upgraded nor deleted automatically. A user may select a fresh
+`SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
+directory and index again; provider histories remain untouched. The unsupported
+`0.0.0` npm bootstrap seed changes none of this. Data-preserving migration
+support begins with the first supported `0.1.0` release.
 
 `sessions paths` reports these owned paths without creating them. It also reports
 sanitized registered-source roots; it does not enumerate transcript files or

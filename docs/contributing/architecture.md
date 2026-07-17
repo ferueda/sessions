@@ -338,3 +338,10 @@ emits source maps. The package exposes no library API; published consumers execu
 `dist/bin/sessions.js`. The package also ships the exact ten-file
 `skills/sessions/` tree for copying into an agent host; it adds no runtime
 dependency to the CLI.
+
+Release Please owns the root version, changelog, and `vX.Y.Z` tags. The release
+workflow qualifies one exact tarball with the full gate and Linux/macOS/Windows
+install smokes before a protected OIDC publish job can receive
+`id-token: write`. The checked-in workflow is inert for publication until
+maintainers configure the GitHub App, protected environment, npm package, and
+trusted publisher. See [releasing](releasing.md).

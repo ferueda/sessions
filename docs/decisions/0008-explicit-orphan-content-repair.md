@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-15
 - Extends: [ADR 0007](0007-retain-a-durable-canonical-library.md)
+- First-release consequence narrowed by:
+  [ADR 0009](0009-establish-the-supported-release-baseline.md)
 
 ## Context
 
@@ -57,7 +59,8 @@ access.
 - Logical deletion can make SQLite pages reusable but does not promise physical
   file shrink or forensic erasure; users invoke data compact separately when
   physical reclamation is useful.
-- Before the first published release, the repository still recognizes one
+- Before the first supported `0.1.0` release, the repository still recognizes one
   current schema baseline. Earlier development databases receive no compatibility
   migration or automatic reset and may require a fresh Sessions data directory
-  and reindex.
+  and reindex. The unsupported `0.0.0` bootstrap seed does not change that
+  boundary.
