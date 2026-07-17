@@ -1364,6 +1364,12 @@ official product semantics, sanitized local format inventory, source authority,
 Harness reuse boundary, compatibility limits, and rejected alternatives. The
 adapter contract remains authoritative when the provider format is ambiguous.
 
+First-release format scope is locked to `chat-store-v1` and
+`agent-checkpoint-store-v1`. JSONL-only history, legacy Composer/App Support
+state, cloud-only evidence, and inferred relations remain deferred. The survey
+and its linked local-format evidence own the exact identity, authority,
+traversal, normalization, and platform decisions.
+
 Primary change areas:
 
 - `src/adapters/cursor/source.ts`, `paths.ts`, catalog/store/transcript readers,
@@ -1440,9 +1446,12 @@ Exit gate:
 - Windows, macOS, and Linux path/layout fixtures prove only supported local
   roots are traversed and provider-owned files remain read-only on each CI
   operating system.
-- Structured reports and format-support docs distinguish supported local
-  families, malformed/unsupported cohorts, and remote/cloud evidence outside
-  coverage without exposing provider paths, IDs, titles, or content.
+- Format-support docs distinguish supported local families and deferred
+  local/remote evidence without exposing provider paths, IDs, titles, or content.
+  With the current source port, a recognized installed layout with no supported
+  family returns adapter `unsupported-format` and produces incomplete discovery;
+  mixed unsupported-cohort counts require a separate provider-neutral contract
+  and are not part of M11b.
 - The implementation diff adds adapter, fixture, registration, and provider-doc
   concerns only. Any further required core or skill semantic edit stops this
   milestone and sends the missing abstraction back to its provider-neutral

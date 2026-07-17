@@ -41,5 +41,7 @@ Research baselines:
 - [Cursor source survey](../research/cursor-source-survey.md) — official product
   semantics, sanitized local formats, capture-workspace prerequisite, and M11
   boundaries.
+- [Cursor local format v1 evidence](../research/cursor-format-v1.md) — exact
+  M11b field, authority, ordering, normalization, and failure matrix.
 
 Active implementation work is indexed in [`dev/plans/README.md`](../../dev/plans/README.md).

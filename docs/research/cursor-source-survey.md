@@ -1,6 +1,6 @@
 # Cursor source survey
 
-- Status: historical pre-M11 research baseline; M11a prerequisite implemented
+- Status: M11b decision baseline; M11a and M11b0 prerequisites implemented
 - Date: 2026-07-16
 - Scope: passive local Cursor adapter and its provider-neutral prerequisite
 
@@ -27,11 +27,11 @@ product behavior.
 Current Cursor storage also proved that the internal source port needed one small
 provider-neutral prerequisite before the adapter can be implemented safely and
 efficiently. Richer conversation evidence needed for faithful capture lives in
-WAL-active per-session SQLite stores, although the exact reconstruction and
-authority rules still require fixture-backed proof. At survey time, the port gave
-private staging to `discover(workspace)` but not to `read(candidate)`. M11a has
-since generalized that workspace to changed reads. Without it, a complete Cursor
-implementation would have had to choose between:
+WAL-active per-session SQLite stores. M11b supports only the two store families
+whose identity, authority, and ordering rules are defined below. At survey time,
+the port gave private staging to `discover(workspace)` but not to
+`read(candidate)`. M11a has since generalized that workspace to changed reads.
+Without it, a complete Cursor implementation would have had to choose between:
 
 - copying and materializing more than a thousand databases during every
   discovery, including stable runs;
@@ -207,14 +207,14 @@ representation is eligible.
 
 ## Source authority and coverage
 
-One `cursor` adapter should hide a small, documented set of internal reader
-branches. Suggested internal labels are descriptive only, not public source
-kinds:
+One `cursor` adapter should hide two first-release reader branches. Their labels
+are internal format names, not public source kinds:
 
-- `chat-store-v1`;
-- `agent-jsonl-v1`;
-- `agent-blob-store-v1`; and
-- `composer-state-v1` for a narrowly proven legacy supplement.
+- `chat-store-v1`; and
+- `agent-checkpoint-store-v1`.
+
+JSONL-only history, legacy Composer/App Support state, and cloud-only records
+remain outside first-release coverage.
 
 Each branch needs:
 
@@ -388,25 +388,50 @@ capture to that baseline. Required proof should show:
 - a third synthetic adapter still passes without provider branches in domain,
   storage, query, export, CLI rendering, or Agent Skills.
 
-## Remaining implementation questions
+## M11b first-release decisions
 
-These are format questions for the M11 plan, not reasons to weaken the boundary:
+The exact supported fields and normalization rules are frozen in
+[Cursor local format v1 evidence](cursor-format-v1.md).
 
-1. Which exact catalog field supplies globally stable identity for every agent
-   JSONL whose filename is not globally unique?
-2. What is the complete deterministic blob-root traversal and message ordering
-   contract for each supported current store?
-3. When JSONL and a blob store describe one agent, which representation is
-   transcript authority and which is redundant or supplemental evidence?
-4. Where, if anywhere, does current local state serialize side-chat, subagent,
-   fork, duplicate, or local/cloud-handoff relations?
-5. Which current formats are required for the first supported Cursor matrix, and
-   which historical variants have enough sanitized evidence to justify support?
-6. What are the supported Windows and Linux storage roots, layouts, and path
-   resolution rules, and how will their provider-read-only behavior be proved?
+- Resolve one default Cursor home at `$HOME/.cursor` or
+  `%USERPROFILE%\.cursor`. Hash its canonical path as the private source-instance
+  identity; test injection does not create a public `CURSOR_HOME` contract.
+- Admit `chat-store-v1` only from schema-1 chat metadata plus its structurally
+  valid store. The raw chat directory ID is native identity and must equal the
+  store `agentId`. Chat metadata owns timestamps, workspace, and explicit title;
+  store metadata supplies only a title fallback; the store root owns transcript
+  order.
+- Admit `agent-checkpoint-store-v1` only from an exact project-catalog
+  `agents.agent_id`, a `local-agent-store` checkpoint with a non-empty root blob
+  ID, and its SHA-256-derived store. The catalog owns identity, lifecycle
+  metadata, title, timestamps, and root selection. The store must confirm
+  `agentId` and owns transcript content.
+- Fingerprint only the normalized candidate catalog row, not the whole shared
+  catalog. JSONL and run-event views are redundant for this branch and do not
+  affect freshness.
+- Decode the selected root with one fixed version-1 wire reader. Validate the
+  documented field/wire matrix, consume repeated field `1` values as 32-byte blob
+  IDs, and preserve root and content-array order without recursive blob traversal
+  or deduplication. An empty reference sequence is a valid empty session.
+- Expand structured tool calls and results into separate contiguous canonical
+  entries. Keep exact observed IDs, names, and linkage; no namespace is inferred.
+  Only the documented redacted-reasoning and image shapes become omissions.
+  Unknown structures remain unsupported.
+- Side chats and subagents enter only when they satisfy one supported store
+  branch. They are independent sessions. Relations remain empty and lineage
+  coverage remains unknown unless an exact persisted target ID proves otherwise.
+- Resolve POSIX and Windows home paths in fixtures. Current live-format evidence
+  is macOS-only; M11b does not claim vendor-guaranteed Windows or Linux storage
+  parity.
+- Deferred families do not become partial inferred evidence. When no supported
+  family exists but a recognized Cursor history layout does, the adapter returns
+  `unsupported-format` and indexing records incomplete discovery instead of a
+  complete empty scan. Mixed-cohort counts would require a later
+  provider-neutral source-coverage contract.
 
-The implementation must stop rather than infer answers from private text,
-directory order, timestamps, product labels, or undocumented opaque fields.
+Implementation must stop if fixtures or live structural proof contradict these
+decisions. It must not choose identity or authority from private text, directory
+order, timestamps, product labels, or undocumented opaque fields.
 
 ## Accepted multi-provider policy
 
