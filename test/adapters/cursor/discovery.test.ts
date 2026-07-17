@@ -373,6 +373,32 @@ describe("Cursor structural discovery", () => {
     });
   });
 
+  test("lets null-checkpoint catalog ownership suppress unique and duplicate JSONL fallback", async () => {
+    const root = await temporaryCursorRoot();
+    await Promise.all([
+      writeCatalog(root, "project", "scope"),
+      writeAgentTranscript(root, "a", UNIQUE_JSONL_ID),
+      writeAgentTranscript(root, "a", DUPLICATE_JSONL_ID),
+      writeAgentTranscript(root, "z", DUPLICATE_JSONL_ID),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+    const inventory = await inventoryCursorSource(paths);
+    const catalog = inventory.catalogs[0]!;
+
+    const mapping = mapCursorDiscovery(inventory, [
+      materializedCatalog(catalog, [
+        { ...agent(UNIQUE_JSONL_ID), checkpoint: null },
+        { ...agent(DUPLICATE_JSONL_ID), checkpoint: null },
+      ]),
+    ]);
+
+    expect(mapping).toMatchObject({
+      outcome: "complete-empty",
+      candidates: [],
+      issues: [],
+    });
+  });
+
   test("marks unknown and wrong-type transcript grammar entries incomplete", async () => {
     const root = await temporaryCursorRoot();
     await writeAgentTranscript(root, "project", UNIQUE_JSONL_ID);

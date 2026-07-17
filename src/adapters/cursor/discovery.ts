@@ -176,7 +176,10 @@ export function mapCursorDiscovery(
     }
     materializedKeys.add(key);
     for (const agent of materialized.agents) {
-      if (agent.checkpoint === null) continue;
+      if (agent.checkpoint === null) {
+        noncandidateOwners.add(agent.agentId);
+        continue;
+      }
       const directoryName = cursorAgentStoreDirectory(agent.agentId);
       const store = catalog.stores.find((value) => value.directoryName === directoryName);
       if (
