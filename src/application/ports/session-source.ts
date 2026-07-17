@@ -52,6 +52,7 @@ export class SourceCaptureWorkspaceError extends Error {
 
 export interface SessionSource {
   readonly kind: string;
+  canReplace?(previousAdapterVersion: string, nextAdapterVersion: string): boolean;
   probe(): Promise<SourceProbe>;
   discover(workspace: SourceCaptureWorkspace): AsyncIterable<DiscoveredSession>;
   read(candidate: DiscoveredSession, workspace: SourceCaptureWorkspace): Promise<SessionDocument>;

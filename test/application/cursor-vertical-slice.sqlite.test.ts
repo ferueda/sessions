@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -20,7 +20,11 @@ import type {
 import { runIndex } from "../../src/application/run-index.ts";
 import { searchSessions } from "../../src/application/search-sessions.ts";
 import { showSession } from "../../src/application/show-session.ts";
-import { createCursorSource, CURSOR_ADAPTER_VERSION } from "../../src/adapters/cursor/source.ts";
+import {
+  createCursorSource,
+  CURSOR_ADAPTER_VERSION,
+  CURSOR_JSONL_ADAPTER_VERSION,
+} from "../../src/adapters/cursor/source.ts";
 import type { SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
@@ -29,6 +33,7 @@ import {
   CURSOR_AGENT_NATIVE_ID,
   CURSOR_CHAT_NATIVE_ID,
   CURSOR_CHAT_TITLE,
+  CURSOR_JSONL_TEXT,
   CURSOR_SHARED_TEXT,
   snapshotCursorProviderTree,
   type CursorSourceFixture,
@@ -376,6 +381,90 @@ describe("Cursor durable vertical slice", () => {
     expect(chat.entries[0]).toMatchObject({
       content: [{ kind: "text", text: { text: "Captured after bounded fresh discovery" } }],
     });
+  });
+
+  test("promotes reduced JSONL evidence without allowing a later rich downgrade", async () => {
+    fixture = await createCursorSourceFixture({ ready: false });
+    await fixture.writeJsonlTranscript({ nativeId: CURSOR_CHAT_NATIVE_ID });
+    const paths = indexPaths(fixture.root);
+    const leaseNow = monotonicNow("2026-07-16T16:00:00.000Z", 100);
+    const lifecycle = createSqliteIndexLifecycle({
+      now: leaseNow,
+      writerToken: tokenFactory("jsonl-index"),
+    });
+    const maintenance = createSqliteIndexMaintenance({
+      now: leaseNow,
+      token: tokenFactory("jsonl-maintenance"),
+    });
+    const selected = await createCursorSource(fixture.environment);
+    const sessionIdentity = identity(selected.instance, CURSOR_CHAT_NATIVE_ID);
+    const indexClock = { now: monotonicNow("2026-07-16T17:00:00.000Z", 1_000) };
+    const index = () =>
+      withoutProviderMutation(fixture!.cursorHome, () =>
+        runIndex({
+          paths,
+          sources: [selected],
+          lifecycle,
+          clock: indexClock,
+        }),
+      );
+
+    expect(await index()).toMatchObject({
+      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, stale: 0 },
+    });
+    expect(storedAdapterVersions(paths.database)).toEqual([CURSOR_JSONL_ADAPTER_VERSION]);
+    expect((await index()).counts).toMatchObject({ unchanged: 1, updated: 0, failed: 0 });
+    const search = await searchSessions({
+      paths,
+      lifecycle,
+      text: CURSOR_JSONL_TEXT,
+      filter: { source: "cursor", nativeId: CURSOR_CHAT_NATIVE_ID },
+    });
+    expect(search.hits).toHaveLength(1);
+    const exported = await exportSession({
+      paths,
+      lifecycle,
+      identity: sessionIdentity,
+      full: true,
+    });
+    expect(exported.entries.map(({ kind }) => kind)).toEqual([
+      "message",
+      "message",
+      "tool-call",
+      "turn-completed",
+    ]);
+
+    await fixture.writeChatMetadata();
+    fixture.writeChatStore();
+    expect(await index()).toMatchObject({
+      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, stale: 0 },
+    });
+    expect(storedAdapterVersions(paths.database)).toEqual([CURSOR_ADAPTER_VERSION]);
+    const rich = await showSession({ paths, lifecycle, identity: sessionIdentity });
+    expect(JSON.stringify(rich.entries)).toContain(CURSOR_SHARED_TEXT);
+
+    await rm(join(fixture.cursorHome, "chats"), { recursive: true });
+    expect(await index()).toMatchObject({
+      counts: { discovered: 1, unchanged: 0, updated: 0, failed: 1, stale: 1 },
+      sources: [
+        {
+          status: "completed",
+          items: [{ outcome: "failed", failure: "unsupported-format" }],
+        },
+      ],
+    });
+    expect(await showSession({ paths, lifecycle, identity: sessionIdentity })).toMatchObject({
+      snapshot: { freshness: "stale", sourceState: "present" },
+      entries: rich.entries,
+    });
+
+    await expect(forgetSession(paths, maintenance, sessionIdentity)).resolves.toMatchObject({
+      outcome: "forgotten",
+    });
+    expect(await index()).toMatchObject({
+      counts: { discovered: 1, unchanged: 0, updated: 1, failed: 0, stale: 0 },
+    });
+    expect(storedAdapterVersions(paths.database)).toEqual([CURSOR_JSONL_ADAPTER_VERSION]);
   });
 });
 

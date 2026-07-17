@@ -152,6 +152,93 @@ export async function captureCursorFile(
   }
 }
 
+/**
+ * Consume one frozen regular file without following a final-component symlink.
+ * Verification runs even after a parser failure so source mutation wins.
+ */
+export async function consumeStableCursorFile<T>(
+  root: string,
+  components: readonly string[],
+  expected: CursorEntryDescriptor,
+  operation: (source: AsyncIterable<Uint8Array>) => Promise<T>,
+  hooks: CursorFilesystemHooks = {},
+): Promise<T> {
+  const before = await describeCursorEntry(root, components);
+  if (!sameCursorDescriptor(expected, before) || before.kind !== "regular-file") {
+    throw new CursorInventoryChangedError();
+  }
+
+  await hooks.beforeFileOpen?.(components);
+  let handle: FileHandle;
+  try {
+    handle = await openReadOnlyNoFollow(cursorPath(root, components));
+  } catch (error) {
+    if (isRaceError(error)) throw new CursorInventoryChangedError();
+    throw error;
+  }
+  let value: T | undefined;
+  let primaryError: unknown;
+  try {
+    const openedBefore = fileStat(await handle.stat({ bigint: true }));
+    if (!sameStat(before.stat, openedBefore)) throw new CursorInventoryChangedError();
+
+    let operationError: unknown;
+    try {
+      value = await operation(readFileChunks(handle));
+    } catch (error) {
+      operationError = error;
+    }
+
+    let verificationError: unknown;
+    try {
+      const openedAfter = fileStat(await handle.stat({ bigint: true }));
+      const after = await describeCursorEntry(root, components);
+      if (
+        after.kind !== "regular-file" ||
+        !sameStat(openedBefore, openedAfter) ||
+        !sameStat(openedAfter, after.stat)
+      ) {
+        throw new CursorInventoryChangedError();
+      }
+    } catch (error) {
+      verificationError = error;
+    }
+
+    if (verificationError !== undefined) throw verificationError;
+    if (operationError !== undefined) throw operationError;
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let closeError: unknown;
+  try {
+    await handle.close();
+  } catch (error) {
+    closeError = error;
+  }
+  if (primaryError !== undefined && closeError !== undefined) {
+    throw new AggregateError(
+      [primaryError, closeError],
+      "Cursor file consumption and close both failed",
+      { cause: primaryError },
+    );
+  }
+  if (primaryError !== undefined) throw primaryError;
+  if (closeError !== undefined) throw closeError;
+  return value as T;
+}
+
+async function* readFileChunks(handle: FileHandle): AsyncIterable<Uint8Array> {
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, position);
+    if (bytesRead === 0) return;
+    position += bytesRead;
+    yield Uint8Array.from(buffer.subarray(0, bytesRead));
+  }
+}
+
 export function cursorDescriptorFingerprint(descriptor: CursorEntryDescriptor): string {
   return `sha256:${createHash("sha256")
     .update(JSON.stringify(cursorDescriptorTuple(descriptor)), "utf8")

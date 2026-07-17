@@ -256,6 +256,9 @@ async function applyCandidate(
     );
     return undefined;
   }
+  if (!allowsReplacement(selection, freshness, observation.revision)) {
+    return "unsupported-format";
+  }
 
   let replacement: ValidatedSessionReplacement;
   try {
@@ -269,6 +272,27 @@ async function applyCandidate(
   // Repository replacement failures are already durably recorded once by the port.
   await timeIndexOperation(timing, "replacement", () => index.replaceSession(run, replacement));
   return undefined;
+}
+
+function allowsReplacement(
+  selection: SelectedSessionSource,
+  freshness: SessionFreshness,
+  revision: SessionRevision,
+): boolean {
+  if (freshness.status !== "current" && freshness.status !== "stale") return true;
+  try {
+    const guard = selection.adapter.canReplace;
+    if (guard === undefined) return true;
+    if (typeof guard !== "function") return false;
+    const allowed: unknown = guard.call(
+      selection.adapter,
+      freshness.lastGood.adapterVersion,
+      revision.adapterVersion,
+    );
+    return allowed === true;
+  } catch {
+    return false;
+  }
 }
 
 async function retrySourceChanged(

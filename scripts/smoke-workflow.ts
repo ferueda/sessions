@@ -16,6 +16,7 @@ import type { createSqliteIndexLifecycle as createSqliteIndexLifecycleType } fro
 import { codexRolloutRecords, createCodexSourceFixture } from "../test/fixtures/codex/source.ts";
 import {
   CURSOR_AGENT_NATIVE_ID,
+  CURSOR_JSONL_NATIVE_ID,
   createCursorSourceFixture,
 } from "../test/fixtures/cursor/source.ts";
 
@@ -781,6 +782,7 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
 
     const cursorFixture = await createCursorSourceFixture();
     try {
+      await cursorFixture.writeJsonlTranscript();
       await mkdir(fixture.environment.home, { recursive: true });
       await cp(cursorFixture.cursorHome, cursorHome, { recursive: true, errorOnExist: true });
       await assertCursorDistributionJourney({
@@ -842,7 +844,7 @@ async function assertCursorDistributionJourney(input: {
     "json",
   ]);
   assertCompleteIndex(explicitIndex, {
-    updated: 2,
+    updated: 3,
     unchanged: 0,
     missing: 0,
     sourceKind: "cursor",
@@ -856,8 +858,8 @@ async function assertCursorDistributionJourney(input: {
   assertCommand(mixedIndex, 0, "implicit mixed-provider index");
   const mixedReport = parseJson(mixedIndex.stdout);
   assert.deepEqual(readObject(mixedReport.counts), {
-    discovered: 3,
-    unchanged: 2,
+    discovered: 4,
+    unchanged: 3,
     updated: 1,
     failed: 0,
     missing: 0,
@@ -885,7 +887,7 @@ async function assertCursorDistributionJourney(input: {
     "--source",
     "cursor",
     "--native-id",
-    CURSOR_AGENT_NATIVE_ID,
+    CURSOR_JSONL_NATIVE_ID,
     "--format",
     "json",
   ]);
@@ -895,7 +897,7 @@ async function assertCursorDistributionJourney(input: {
   assert.equal(nativeSessions.length, 1);
   const cursorSession = readObject(nativeSessions[0]!.session);
   assert.equal(readObject(cursorSession.source).kind, "cursor");
-  assert.equal(cursorSession.nativeId, CURSOR_AGENT_NATIVE_ID);
+  assert.equal(cursorSession.nativeId, CURSOR_JSONL_NATIVE_ID);
   const canonicalId = String(cursorSession.canonicalId);
 
   const linkedSearch = await stableProviderTreesCommand(options, providerRoots, environment, [
@@ -936,7 +938,7 @@ async function assertCursorDistributionJourney(input: {
   assertStructuredHeader(showReport, "show", "snapshot");
   assert.equal(
     readObject(readObject(showReport.snapshot).session).nativeId,
-    CURSOR_AGENT_NATIVE_ID,
+    CURSOR_JSONL_NATIVE_ID,
   );
   assert.ok(readArray(showReport, "entries").length > 0, "Cursor show returned no entries");
 

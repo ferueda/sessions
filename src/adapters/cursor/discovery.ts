@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 
 import type { SourceCaptureWorkspace } from "../../application/ports/session-source.ts";
-import { cursorDescriptorFingerprint } from "./filesystem.ts";
+import { compareCursorComponents, cursorDescriptorFingerprint } from "./filesystem.ts";
 import {
   captureStableCursorInventory,
   type CursorCatalogInventory,
+  type CursorAgentTranscriptInventory,
   type CursorChatInventory,
   type CursorSqliteInventory,
   type CursorStructuralInventory,
@@ -76,10 +77,22 @@ export type CursorCandidateSeed =
       readonly agent: MaterializedCursorAgent;
       readonly store: CursorSqliteInventory;
       readonly inputs: readonly CursorCandidateInput[];
+    }
+  | {
+      readonly family: "agent-transcript-jsonl-v1";
+      readonly nativeId: string;
+      readonly transcript: CursorAgentTranscriptInventory;
+      readonly inputs: readonly CursorCandidateInput[];
+    }
+  | {
+      readonly family: "agent-transcript-conflict-v1";
+      readonly nativeId: string;
+      readonly transcripts: readonly CursorAgentTranscriptInventory[];
+      readonly inputs: readonly CursorCandidateInput[];
     };
 
 export interface CursorCandidateInput {
-  readonly role: "metadata" | "catalog-row" | "store-main" | "store-wal";
+  readonly role: "metadata" | "catalog-row" | "store-main" | "store-wal" | "transcript";
   readonly fingerprint: string;
 }
 
@@ -91,7 +104,8 @@ export type CursorDiscoveryIssueKind =
   | "missing-catalog-materialization"
   | "missing-agent-store"
   | "claimed-agent-store"
-  | "duplicate-native-id";
+  | "duplicate-native-id"
+  | "invalid-agent-transcript";
 
 export interface CursorDiscoveryIssue {
   readonly kind: CursorDiscoveryIssueKind;
@@ -135,11 +149,17 @@ export function mapCursorDiscovery(
 ): CursorDiscoveryMapping {
   const candidates: CursorCandidateSeed[] = [];
   const issues: CursorDiscoveryIssue[] = [];
+  const richOwners = new Set<string>();
+  const noncandidateOwners = new Set<string>();
 
   for (const chat of inventory.chats) {
     const mapped = mapChat(chat);
-    if (mapped.kind === "candidate") candidates.push(mapped.candidate);
-    else if (mapped.kind === "issue") issues.push(Object.freeze({ kind: mapped.issue }));
+    if (mapped.kind === "candidate") {
+      candidates.push(mapped.candidate);
+      richOwners.add(mapped.candidate.nativeId);
+    } else if (mapped.kind === "noncandidate") {
+      noncandidateOwners.add(mapped.nativeId);
+    } else if (mapped.kind === "issue") issues.push(Object.freeze({ kind: mapped.issue }));
   }
 
   const catalogsByKey = new Map(
@@ -183,6 +203,7 @@ export function mapCursorDiscovery(
           inputs: candidateInputs(agent.rowFingerprint, store.store, "catalog-row"),
         }),
       );
+      richOwners.add(agent.agentId);
     }
   }
 
@@ -193,6 +214,38 @@ export function mapCursorDiscovery(
     ) {
       issues.push(Object.freeze({ kind: "missing-catalog-materialization" }));
     }
+  }
+
+  if (inventory.invalidAgentTranscriptEntries.length > 0) {
+    issues.push(Object.freeze({ kind: "invalid-agent-transcript" }));
+  }
+  const transcriptGroups = groupAgentTranscripts(inventory.agentTranscripts);
+  for (const [nativeId, grouped] of transcriptGroups) {
+    if (richOwners.has(nativeId) || noncandidateOwners.has(nativeId)) continue;
+    if (grouped.some(({ file }) => file.kind !== "regular-file")) {
+      issues.push(Object.freeze({ kind: "invalid-agent-transcript" }));
+      continue;
+    }
+    if (grouped.length === 1) {
+      const transcript = grouped[0]!;
+      candidates.push(
+        Object.freeze({
+          family: "agent-transcript-jsonl-v1",
+          nativeId,
+          transcript,
+          inputs: transcriptInputs(grouped),
+        }),
+      );
+      continue;
+    }
+    candidates.push(
+      Object.freeze({
+        family: "agent-transcript-conflict-v1",
+        nativeId,
+        transcripts: Object.freeze(grouped),
+        inputs: transcriptInputs(grouped),
+      }),
+    );
   }
 
   const seenIds = new Set<string>();
@@ -211,7 +264,7 @@ export function mapCursorDiscovery(
         : "incomplete"
       : candidates.length > 0
         ? "supported"
-        : inventory.deferredAgentTranscripts.length > 0
+        : inventory.agentTranscriptRoots.length > 0 && transcriptGroups.size === 0
           ? "unsupported-format"
           : "complete-empty";
   return Object.freeze({
@@ -228,7 +281,7 @@ export function cursorAgentStoreDirectory(agentId: string): string {
 
 type ChatMapping =
   | { readonly kind: "candidate"; readonly candidate: CursorCandidateSeed }
-  | { readonly kind: "noncandidate" }
+  | { readonly kind: "noncandidate"; readonly nativeId: string }
   | { readonly kind: "ignore" }
   | { readonly kind: "issue"; readonly issue: CursorDiscoveryIssueKind };
 
@@ -248,7 +301,7 @@ function mapChat(chat: CursorChatInventory): ChatMapping {
     }
     return { kind: "issue", issue: "malformed-chat-metadata" };
   }
-  if (!metadata.hasConversation) return { kind: "noncandidate" };
+  if (!metadata.hasConversation) return { kind: "noncandidate", nativeId: chat.nativeId };
   if (
     chat.store.main.kind !== "regular-file" ||
     (chat.store.wal.kind !== "regular-file" && chat.store.wal.kind !== "missing")
@@ -270,6 +323,48 @@ function mapChat(chat: CursorChatInventory): ChatMapping {
       ),
     }),
   };
+}
+
+function groupAgentTranscripts(
+  transcripts: readonly CursorAgentTranscriptInventory[],
+): ReadonlyMap<string, readonly CursorAgentTranscriptInventory[]> {
+  const grouped = new Map<string, CursorAgentTranscriptInventory[]>();
+  for (const transcript of transcripts) {
+    const values = grouped.get(transcript.nativeId) ?? [];
+    values.push(transcript);
+    grouped.set(transcript.nativeId, values);
+  }
+  return new Map(
+    [...grouped].map(([nativeId, values]) => [
+      nativeId,
+      Object.freeze(
+        values.toSorted((left, right) =>
+          compareComponentArrays(left.file.components, right.file.components),
+        ),
+      ),
+    ]),
+  );
+}
+
+function transcriptInputs(
+  transcripts: readonly CursorAgentTranscriptInventory[],
+): readonly CursorCandidateInput[] {
+  return Object.freeze(
+    transcripts.map(({ file }) =>
+      Object.freeze({
+        role: "transcript" as const,
+        fingerprint: cursorDescriptorFingerprint(file),
+      }),
+    ),
+  );
+}
+
+function compareComponentArrays(left: readonly string[], right: readonly string[]): number {
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    const compared = compareCursorComponents(left[index]!, right[index]!);
+    if (compared !== 0) return compared;
+  }
+  return left.length - right.length;
 }
 
 function parseChatMetadata(bytes: Uint8Array): CursorChatMetadata {
