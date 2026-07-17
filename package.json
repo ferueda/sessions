@@ -20,7 +20,7 @@
     "url": "git+https://github.com/ferueda/sessions.git"
   },
   "bin": {
-    "sessions": "./dist/bin/sessions.js"
+    "sessions": "dist/bin/sessions.js"
   },
   "files": [
     "dist",
@@ -41,8 +41,8 @@
     "check:docs": "pnpm format:docs:check && pnpm test:docs",
     "clean": "node scripts/clean.ts",
     "deps:check": "node scripts/check-dependencies.ts",
-    "format": "oxfmt --write src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
-    "format:check": "oxfmt --check src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md package.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format": "oxfmt --write src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md CHANGELOG.md package.json release-please-config.json .release-please-manifest.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format:check": "oxfmt --check src scripts test skills docs dev .github AGENTS.md README.md CONTRIBUTING.md SECURITY.md CHANGELOG.md package.json release-please-config.json .release-please-manifest.json pnpm-workspace.yaml tsconfig.json tsconfig.build.json vitest.config.ts .oxlintrc.json .oxfmtrc.json",
     "format:docs:check": "oxfmt --check \"**/*.md\"",
     "lint": "oxlint -c .oxlintrc.json src scripts test vitest.config.ts",
     "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
@@ -52,10 +52,11 @@
     "measure:indexing:codex": "node scripts/measure-codex-indexing.ts",
     "measure:query-lineage": "node scripts/measure-query-lineage.ts",
     "measure:search-query": "node scripts/measure-search-query.ts",
+    "hooks:install": "simple-git-hooks",
     "prepack": "pnpm build",
-    "prepare": "simple-git-hooks",
     "smoke:dist": "node scripts/smoke-dist.ts",
     "smoke:package": "node scripts/smoke-package.ts",
+    "smoke:release-package": "node scripts/smoke-release-package.ts",
     "test": "vitest run",
     "test:docs": "vitest run test/docs-contracts.test.ts test/skill-contracts.test.ts",
     "test:watch": "vitest",
