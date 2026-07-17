@@ -9,8 +9,6 @@ export interface CursorEnvironment {
 
 export interface ResolvedCursorPaths {
   readonly cursorHome: string;
-  readonly chatsRoot: string;
-  readonly projectsRoot: string;
 }
 
 export async function resolveCursorPaths(
@@ -27,11 +25,7 @@ export async function resolveCursorPaths(
       : resolve(environment.cursorHome),
   );
 
-  return Object.freeze({
-    cursorHome,
-    chatsRoot: join(cursorHome, "chats"),
-    projectsRoot: join(cursorHome, "projects"),
-  });
+  return Object.freeze({ cursorHome });
 }
 
 export function captureCursorEnvironment(): CursorEnvironment {

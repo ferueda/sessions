@@ -232,7 +232,39 @@ describe("Cursor structural discovery", () => {
     const emptyPaths = await resolveCursorPaths({ home: emptyRoot, cursorHome: emptyRoot });
     expect(mapCursorDiscovery(await inventoryCursorSource(emptyPaths), [])).toMatchObject({
       outcome: "complete-empty",
-      recognizedNonCandidates: 1,
+      candidates: [],
+    });
+  });
+
+  test.each([
+    ["an added metadata field", { extra: true }],
+    ["a changed metadata schema version", { schemaVersion: 2 }],
+  ])("classifies %s as unsupported format drift", async (_name, metadataOverride) => {
+    const root = await temporaryCursorRoot();
+    await writeChat(root, "scope", "chat-one", metadataOverride);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const mapping = mapCursorDiscovery(await inventoryCursorSource(paths), []);
+
+    expect(mapping).toMatchObject({
+      outcome: "unsupported-format",
+      issues: [{ kind: "unsupported-chat-metadata" }],
+    });
+  });
+
+  test("rejects invalid UTF-8 chat metadata as malformed", async () => {
+    const root = await temporaryCursorRoot();
+    const directory = join(root, "chats", "scope", "chat-one");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "meta.json"), new Uint8Array([0x7b, 0x80, 0x7d]));
+    await writeFile(join(directory, "store.db"), "store");
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const mapping = mapCursorDiscovery(await inventoryCursorSource(paths), []);
+
+    expect(mapping).toMatchObject({
+      outcome: "incomplete",
+      issues: [{ kind: "malformed-chat-metadata" }],
     });
   });
 
@@ -267,7 +299,12 @@ async function writeChat(
   root: string,
   scope: string,
   nativeId: string,
-  overrides: { readonly hasConversation?: boolean; readonly title?: string } = {},
+  overrides: {
+    readonly schemaVersion?: number;
+    readonly hasConversation?: boolean;
+    readonly title?: string;
+    readonly extra?: boolean;
+  } = {},
   withStore = true,
 ): Promise<void> {
   const directory = join(root, "chats", scope, nativeId);
@@ -275,11 +312,12 @@ async function writeChat(
   await writeFile(
     join(directory, "meta.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: overrides.schemaVersion ?? 1,
       createdAtMs: CREATED_MS,
       updatedAtMs: UPDATED_MS,
       hasConversation: overrides.hasConversation ?? true,
       ...(overrides.title === undefined ? {} : { title: overrides.title }),
+      ...(overrides.extra === undefined ? {} : { extra: overrides.extra }),
     }),
   );
   if (withStore) await writeFile(join(directory, "store.db"), "store");

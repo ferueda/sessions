@@ -19,8 +19,6 @@ describe("Cursor path resolution", () => {
 
     await expect(resolveCursorPaths({ home })).resolves.toEqual({
       cursorHome: join(resolve(home), ".cursor"),
-      chatsRoot: join(resolve(home), ".cursor", "chats"),
-      projectsRoot: join(resolve(home), ".cursor", "projects"),
     });
   });
 
@@ -34,8 +32,6 @@ describe("Cursor path resolution", () => {
     const paths = await resolveCursorPaths({ home: join(root, "home"), cursorHome: alias });
 
     expect(paths.cursorHome).toBe(await realpath(actual));
-    expect(paths.chatsRoot).toBe(join(await realpath(actual), "chats"));
-    expect(paths.projectsRoot).toBe(join(await realpath(actual), "projects"));
   });
 
   test.each(["", "\ud800"])("rejects an invalid injected root %j", async (cursorHome) => {

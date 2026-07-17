@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -117,6 +117,43 @@ describe("Cursor source adapter", () => {
     expect(malformed.failure.kind).toBe("malformed");
     expectSafe(malformed, conflictFixture);
     expect(malformed.message).not.toContain("conflicting-private-identity");
+  });
+
+  test.each([
+    [
+      "chat metadata drift",
+      async (fixture: CursorSourceFixture) => {
+        await writeFile(
+          fixture.chatMetadata,
+          JSON.stringify({
+            schemaVersion: 2,
+            createdAtMs: Date.parse("2026-07-16T10:00:00.000Z"),
+            updatedAtMs: Date.parse("2026-07-16T10:05:00.000Z"),
+            hasConversation: true,
+          }),
+        );
+      },
+    ],
+    [
+      "catalog checkpoint drift",
+      async (fixture: CursorSourceFixture) => {
+        fixture.writeAgentCatalog({
+          checkpoint: {
+            blobId: "20".repeat(32),
+            storeKind: "future-agent-store",
+          },
+        });
+      },
+    ],
+  ])("maps %s to a typed unsupported-format source failure", async (_name, mutate) => {
+    const fixture = await createFixture();
+    await mutate(fixture);
+    const selected = await createCursorSource(fixture.environment);
+
+    const unsupported = await captureFailure(() => discover(selected.adapter, fixture));
+
+    expect(unsupported.failure.kind).toBe("unsupported-format");
+    expectSafe(unsupported, fixture);
   });
 });
 

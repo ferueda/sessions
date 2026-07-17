@@ -20,7 +20,6 @@ export interface CursorChatInventory {
   readonly scope: string;
   readonly nativeId: string;
   readonly metadata?: CapturedCursorFile;
-  readonly metadataEntry: CursorEntryDescriptor;
   readonly store: CursorSqliteInventory;
 }
 
@@ -31,24 +30,16 @@ export interface CursorAgentStoreInventory {
 }
 
 export interface CursorCatalogInventory {
-  readonly project: string;
   readonly scope: string;
   readonly catalog: CursorSqliteInventory;
-  readonly agentsDirectory: CursorEntryDescriptor;
   readonly stores: readonly CursorAgentStoreInventory[];
 }
 
 export interface CursorStructuralInventory {
-  readonly entries: readonly CursorEntryDescriptor[];
   readonly chats: readonly CursorChatInventory[];
   readonly catalogs: readonly CursorCatalogInventory[];
   readonly deferredAgentTranscripts: readonly CursorEntryDescriptor[];
   readonly fingerprint: string;
-}
-
-export interface StableCursorInventoryResult<T> {
-  readonly inventory: CursorStructuralInventory;
-  readonly value: T;
 }
 
 export async function inventoryCursorSource(
@@ -66,7 +57,6 @@ export async function inventoryCursorSource(
     .update(JSON.stringify(entries.map(cursorDescriptorTuple)), "utf8")
     .digest("hex");
   return Object.freeze({
-    entries: Object.freeze(entries),
     chats: Object.freeze(chats),
     catalogs: Object.freeze(catalogs),
     deferredAgentTranscripts: Object.freeze(deferredAgentTranscripts),
@@ -77,12 +67,12 @@ export async function inventoryCursorSource(
 export async function captureStableCursorInventory<T>(
   paths: ResolvedCursorPaths,
   operation: (inventory: CursorStructuralInventory) => Promise<T>,
-): Promise<StableCursorInventoryResult<T>> {
+): Promise<T> {
   const first = await inventoryCursorSource(paths);
   const value = await operation(first);
   const second = await inventoryCursorSource(paths);
   if (first.fingerprint !== second.fingerprint) throw new CursorInventoryChangedError();
-  return Object.freeze({ inventory: second, value });
+  return value;
 }
 
 async function inventoryChats(
@@ -125,7 +115,6 @@ async function inventoryChats(
           scope,
           nativeId,
           ...(metadata === undefined ? {} : { metadata }),
-          metadataEntry: metadata?.descriptor ?? metadataEntry,
           store: Object.freeze({ main, wal }),
         }),
       );
@@ -194,10 +183,8 @@ async function inventoryProjects(
       }
       catalogs.push(
         Object.freeze({
-          project,
           scope,
           catalog: Object.freeze({ main: catalogMain, wal: catalogWal }),
-          agentsDirectory,
           stores: Object.freeze(stores),
         }),
       );

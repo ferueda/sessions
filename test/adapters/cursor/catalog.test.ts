@@ -95,6 +95,75 @@ describe("Cursor agent catalog materialization", () => {
       database.close();
     }
   });
+
+  test.each([
+    [
+      "extra checkpoint fields",
+      JSON.stringify({
+        blobId: "a".repeat(64),
+        storeKind: "local-agent-store",
+        extra: true,
+      }),
+    ],
+    [
+      "a different checkpoint store kind",
+      JSON.stringify({
+        blobId: "a".repeat(64),
+        storeKind: "remote-agent-store",
+      }),
+    ],
+  ])("classifies %s as unsupported format drift", (_name, checkpoint) => {
+    const database = catalogDatabase();
+    try {
+      insertAgent(database, "agent-one", null, { checkpoint });
+
+      expect(() => materializeCursorCatalog(database)).toThrowError(
+        expect.objectContaining<Partial<CursorCatalogError>>({
+          name: "CursorCatalogError",
+          kind: "unsupported-format",
+        }),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  test.each(["agent_id", "name"])(
+    "rejects invalid UTF-8 in the %s catalog field without replacement decoding",
+    (field) => {
+      const database = catalogDatabase();
+      try {
+        insertAgent(database, "agent-one", null);
+        database.exec(`UPDATE agents SET ${field} = CAST(X'80' AS TEXT)`);
+
+        expect(() => materializeCursorCatalog(database)).toThrowError(
+          expect.objectContaining<Partial<CursorCatalogError>>({
+            name: "CursorCatalogError",
+            kind: "malformed",
+          }),
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  test("rejects a non-TEXT storage class in a consumed catalog field", () => {
+    const database = catalogDatabase();
+    try {
+      insertAgent(database, "agent-one", null);
+      database.prepare("UPDATE agents SET workspace_ref = ?").run(new Uint8Array([0x61]));
+
+      expect(() => materializeCursorCatalog(database)).toThrowError(
+        expect.objectContaining<Partial<CursorCatalogError>>({
+          name: "CursorCatalogError",
+          kind: "malformed",
+        }),
+      );
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function catalogDatabase(extraColumn?: string): DatabaseSync {

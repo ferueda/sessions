@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { TextDecoder } from "node:util";
 
 import type {
   CursorCheckpoint,
@@ -9,6 +10,7 @@ import type {
 import type { CursorCatalogInventory } from "./inventory.ts";
 
 const CHECKPOINT_KEYS = new Set(["blobId", "storeKind"]);
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export class CursorCatalogError extends Error {
   readonly kind: "malformed" | "unsupported-format";
@@ -33,17 +35,26 @@ export function materializeCursorCatalog(
     rows = database
       .prepare(
         `SELECT
-           agent_id,
-           workspace_ref,
-           status,
-           active_run_id,
-           latest_checkpoint_ref_json,
-           name,
-           metadata_json,
-           created_at,
-           updated_at
+           typeof(agent_id) AS agent_id_type,
+           CAST(agent_id AS BLOB) AS agent_id_bytes,
+           typeof(workspace_ref) AS workspace_ref_type,
+           CAST(workspace_ref AS BLOB) AS workspace_ref_bytes,
+           typeof(status) AS status_type,
+           CAST(status AS BLOB) AS status_bytes,
+           typeof(active_run_id) AS active_run_id_type,
+           CAST(active_run_id AS BLOB) AS active_run_id_bytes,
+           typeof(latest_checkpoint_ref_json) AS latest_checkpoint_ref_json_type,
+           CAST(latest_checkpoint_ref_json AS BLOB) AS latest_checkpoint_ref_json_bytes,
+           typeof(name) AS name_type,
+           CAST(name AS BLOB) AS name_bytes,
+           typeof(metadata_json) AS metadata_json_type,
+           CAST(metadata_json AS BLOB) AS metadata_json_bytes,
+           typeof(created_at) AS created_at_type,
+           CAST(created_at AS BLOB) AS created_at_bytes,
+           typeof(updated_at) AS updated_at_type,
+           CAST(updated_at AS BLOB) AS updated_at_bytes
          FROM agents
-         ORDER BY agent_id COLLATE BINARY`,
+         ORDER BY CAST(agent_id AS BLOB)`,
       )
       .all() as readonly Record<string, unknown>[];
   } catch {
@@ -101,16 +112,16 @@ function validateAgentsSchema(database: DatabaseSync): void {
 }
 
 function materializeAgent(row: Record<string, unknown>): MaterializedCursorAgent {
-  const agentId = requiredNonemptyString(row.agent_id);
-  const workspaceRef = requiredString(row.workspace_ref);
-  const status = requiredString(row.status);
-  const activeRunId = optionalString(row.active_run_id);
-  const checkpoint = parseCheckpoint(row.latest_checkpoint_ref_json);
-  const title = optionalString(row.name);
-  const metadataJson = requiredString(row.metadata_json);
+  const agentId = requiredNonemptyString(readText(row, "agent_id"));
+  const workspaceRef = readText(row, "workspace_ref");
+  const status = readText(row, "status");
+  const activeRunId = readOptionalText(row, "active_run_id");
+  const checkpoint = parseCheckpoint(readOptionalText(row, "latest_checkpoint_ref_json") ?? null);
+  const title = readOptionalText(row, "name");
+  const metadataJson = readText(row, "metadata_json");
   parseMetadata(metadataJson);
-  const createdAt = canonicalTimestamp(row.created_at);
-  const updatedAt = canonicalTimestamp(row.updated_at);
+  const createdAt = canonicalTimestamp(readText(row, "created_at"));
+  const updatedAt = canonicalTimestamp(readText(row, "updated_at"));
   if (Date.parse(updatedAt) < Date.parse(createdAt)) throw new CursorCatalogError("malformed");
 
   const rowFingerprint = `sha256:${createHash("sha256")
@@ -151,15 +162,25 @@ function parseCheckpoint(value: unknown): CursorCheckpoint | null {
   } catch {
     throw new CursorCatalogError("malformed");
   }
+  if (!isRecord(parsed)) {
+    throw new CursorCatalogError("malformed");
+  }
+  if (!Object.hasOwn(parsed, "blobId") || !Object.hasOwn(parsed, "storeKind")) {
+    throw new CursorCatalogError("malformed");
+  }
   if (
-    !isRecord(parsed) ||
-    Object.keys(parsed).length !== CHECKPOINT_KEYS.size ||
-    Object.keys(parsed).some((key) => !CHECKPOINT_KEYS.has(key)) ||
-    parsed.storeKind !== "local-agent-store" ||
     typeof parsed.blobId !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(parsed.blobId)
+    !/^[a-f0-9]{64}$/u.test(parsed.blobId) ||
+    typeof parsed.storeKind !== "string"
   ) {
     throw new CursorCatalogError("malformed");
+  }
+  if (
+    Object.keys(parsed).length !== CHECKPOINT_KEYS.size ||
+    Object.keys(parsed).some((key) => !CHECKPOINT_KEYS.has(key)) ||
+    parsed.storeKind !== "local-agent-store"
+  ) {
+    throw new CursorCatalogError("unsupported-format");
   }
   return Object.freeze({ blobId: parsed.blobId, storeKind: "local-agent-store" });
 }
@@ -172,8 +193,7 @@ function parseMetadata(value: string): void {
   }
 }
 
-function canonicalTimestamp(value: unknown): string {
-  const timestamp = requiredString(value);
+function canonicalTimestamp(timestamp: string): string {
   const parsed = Date.parse(timestamp);
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== timestamp) {
     throw new CursorCatalogError("malformed");
@@ -181,22 +201,36 @@ function canonicalTimestamp(value: unknown): string {
   return timestamp;
 }
 
-function requiredNonemptyString(value: unknown): string {
-  const result = requiredString(value);
-  if (result.length === 0) throw new CursorCatalogError("malformed");
-  return result;
-}
-
-function requiredString(value: unknown): string {
-  if (typeof value !== "string" || !value.isWellFormed()) {
-    throw new CursorCatalogError("malformed");
-  }
+function requiredNonemptyString(value: string): string {
+  if (value.length === 0) throw new CursorCatalogError("malformed");
   return value;
 }
 
-function optionalString(value: unknown): string | undefined {
-  if (value === null) return undefined;
-  return requiredString(value);
+function readText(row: Record<string, unknown>, field: string): string {
+  if (row[`${field}_type`] !== "text") {
+    throw new CursorCatalogError("malformed");
+  }
+  const bytes = row[`${field}_bytes`];
+  if (!(bytes instanceof Uint8Array)) throw new CursorCatalogError("malformed");
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    throw new CursorCatalogError("malformed");
+  }
+}
+
+function readOptionalText(row: Record<string, unknown>, field: string): string | undefined {
+  const type = row[`${field}_type`];
+  const bytes = row[`${field}_bytes`];
+  if (type === "null" && bytes === null) return undefined;
+  if (type !== "text" || !(bytes instanceof Uint8Array)) {
+    throw new CursorCatalogError("malformed");
+  }
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    throw new CursorCatalogError("malformed");
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
