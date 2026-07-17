@@ -17,6 +17,7 @@ import {
   inspectPackageArtifact,
   PACKAGED_SKILL_FILES,
   parsePackageManifest,
+  runCommand,
 } from "../scripts/package-artifact.ts";
 
 const VERSION = "0.1.0";
@@ -221,6 +222,24 @@ describe("package release artifact contract", () => {
     expect(smoke).toContain('runCommand(shim, ["--version"]');
     expect(smoke).toMatch(/runCommand\(\s*process\.execPath,\s*\[installedBinary, \.\.\.args\]/u);
     expect(smoke).not.toContain("runCommand(shim, args");
+  });
+
+  test("passes multi-word workflow arguments unchanged through Node", async () => {
+    const temporaryRoot = await createTemporaryRoot();
+    const capture = path.join(temporaryRoot, "capture-arguments.mjs");
+    await writeFile(capture, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
+
+    const result = runCommand(
+      process.execPath,
+      [capture, "distribution smoke", "--limit", "1"],
+      temporaryRoot,
+    );
+
+    expect(result).toEqual({
+      status: 0,
+      stdout: '["distribution smoke","--limit","1"]',
+      stderr: "",
+    });
   });
 
   test("reads and validates the normalized manifest and exact skill from a tarball", async () => {
