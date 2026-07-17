@@ -24,13 +24,13 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 10 are complete. M10 added honest capture scope,
+Milestones 0 through 10 and M11a are complete. M10 added honest capture scope,
 all-tracked reconciliation, bounded source-change retry, opt-in indexing
 timings, and a recovery-safe proportional writer-open path. The pre-M11
 [Cursor source survey](../../docs/research/cursor-source-survey.md) found that
 current WAL-backed Cursor stores need the existing private capture workspace
-during changed reads. M11a is the provider-neutral prerequisite; M11b then adds
-Cursor parity.
+during changed reads. M11a completed that provider-neutral prerequisite; M11b
+adds Cursor parity next.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -90,10 +90,9 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the changed-read capture-workspace capability, Cursor
-adapter, release automation, or pinned Harness integration. M11a corrects that
-internal source-port boundary, and M11b proves the complete provider-neutral
-surface through a second passive adapter.
+It does not yet have the Cursor adapter, release automation, or pinned Harness
+integration. M11b now proves the complete provider-neutral surface through a
+second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -1243,7 +1242,7 @@ Codex 120-session exact-cohort proof measured 3.262 ms writer open and 366.055
 ms total, performed zero changed reads, and passed the 800 ms / 1.25 second local
 budgets without changing canonical, query, failure, lease, or provider evidence.
 
-### M11a — Extend private capture staging to changed reads
+### M11a — Extend private capture staging to changed reads (complete)
 
 Outcome: every adapter may use the existing writer-leased private workspace
 during a changed candidate read, without exposing paths, leases, storage, or
@@ -1305,6 +1304,11 @@ Exit gate:
   and vertical command proofs remain exact.
 - A third synthetic adapter still passes without storage, query, CLI, or
   provider-specific branches.
+- With explicit provider-read authority, the sole live Codex measurement indexes
+  its fixed temporary 120-session cohort, proves the same run-owned workspace
+  reaches discovery and every changed read, then proves a complete stable pass
+  with zero reads. It emits aggregate evidence only, preserves selected rollout
+  bytes, and removes its temporary library. It is not part of routine CI.
 - `pnpm check` passes on all CI operating systems.
 
 ### M11b — Add Cursor and prove adapter equivalence

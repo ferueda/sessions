@@ -295,10 +295,11 @@ Contract rules:
   an immutable row/edge generation, and removes staging before yielding. Reads
   use frozen state and verify only the live rollout. Provider SQLite/SHM is never
   opened by Sessions.
-- The internal `IndexWriter` owns that capability. The current implementation
-  passes it only to discovery after writer acquisition; M11a generalizes the
-  contract and passes it explicitly to both discovery and changed reads. The
-  callback asserts lease ownership before allocation and after `finally`
+- The internal `IndexWriter` owns that capability and passes the exact same
+  run-owned object to discovery and changed reads after writer acquisition. The
+  application performs freshness admission first, so unchanged candidates never
+  call `read` or allocate read-time staging. The callback asserts lease ownership
+  before allocation and after `finally`
   cleanup, returns results only while still owned, aggregates
   operation/cleanup/lease errors, and exposes neither the scratch root nor
   `IndexPaths` to an adapter.
@@ -958,9 +959,9 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 6 are implemented; M11a
-changed-read capture staging and M11b Cursor parity are next. Codex is the first
-vertical slice because
+The phase scopes below remain accepted. Phases 0 through 6 and the M11a
+changed-read capture prerequisite are implemented; M11b Cursor parity is next.
+Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex; M10 settles capture truth, bounded recovery, and

@@ -14,8 +14,10 @@ Adapters translate provider histories into canonical documents. They do not defi
 - `discover(workspace)`: yield candidates with identity, at least one ordered
   input descriptor, a complete aggregate fingerprint, and adapter format version.
   The provider-neutral workspace offers only
-  `withPrivateDirectory(operation)` after writer open; probe/read receive none.
-- `read(candidate)`: deterministically normalize one complete candidate into a canonical `SessionDocument`.
+  `withPrivateDirectory(operation)` after writer open.
+- `read(candidate, workspace)`: deterministically normalize one changed candidate
+  into a canonical `SessionDocument`, with the exact same writer-owned workspace
+  available for private staging. Unchanged candidates never call `read`.
 
 The port and values live under `src/application/ports/`; canonical transcript values live under `src/domain/`.
 
@@ -39,6 +41,10 @@ The port and values live under `src/application/ports/`; canonical transcript va
   only while ownership remains valid, and aggregates applicable
   operation/cleanup/lease failures. The adapter never sees its root, lease
   identity, or cleanup policy.
+- Workspace setup, cleanup, and lease failures abort the indexing operation; they
+  are not provider evidence. An adapter that catches around workspace use must
+  rethrow the shared workspace marker unchanged before mapping ordinary source
+  errors.
 - Missing optional metadata maps to absent/unknown values. Every document declares
   immediate rootward lineage coverage as `complete` or `unknown`; an empty
   relation list proves a root only when provider evidence supports complete
@@ -111,7 +117,8 @@ unavailable execution evidence without embedding skill policy in adapters.
 roots, snapshots active SQLite/WAL state into the leased private workspace,
 feature-detects supported thread/edge columns, and discovers ordered candidates.
 Reads verify live rollout identity before and after streaming plain JSONL or
-Zstandard data and normalize only declared record variants. `codex-v3` preserves
+Zstandard data and normalize only declared record variants. Codex accepts the
+required read workspace but does not need read-time staging. `codex-v3` preserves
 the V2 spawn-edge coverage contract: table absence remains unknown while row
 absence in a supported table can be complete. V3 also accepts independently
 validated, non-empty `session_meta.session_id` group identity that may differ
