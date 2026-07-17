@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: current behavior plus explicit later-V1 boundaries
-- Last updated: 2026-07-16
+- Last updated: 2026-07-17
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -130,12 +130,17 @@ last-good canonical document with partial content.
 
 Cursor uses its default local root. During explicit indexing, Sessions traverses
 only the supported local store grammar and stages required SQLite main/WAL bytes
-in the same private capture workspace. It never opens or copies provider SHM.
-Deferred JSONL files are not read. See the
-[Cursor format support boundary](reference/cursor-format-support.md).
+in the same private capture workspace. It never opens or copies provider SHM. A
+recognized reduced fallback streams one JSONL file read-only with bounded,
+fatal decoding and repeated descriptor checks.
 
-Changing, malformed, or conflicting Cursor evidence fails closed. Unsupported
-JSONL-only, legacy, and cloud-only history is not captured or inferred.
+Rich evidence takes precedence over same-ID JSONL. A reduced source may later
+promote to rich, but it cannot replace a retained rich snapshot. Duplicate
+unowned JSONL basenames, changing input, and malformed evidence fail closed.
+JSONL file times are fingerprint evidence only; Sessions does not turn them into
+conversation timestamps or infer title, workspace, linkage, or lineage. Legacy
+and cloud-only history is not captured. See the
+[Cursor format support boundary](reference/cursor-format-support.md).
 
 ## Stored content
 

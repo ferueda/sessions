@@ -1,25 +1,29 @@
 # Cursor local format v1 evidence
 
-- Status: implemented M11b format contract
-- Date: 2026-07-16
+- Status: implemented M11b/M11c format contract
+- Date: 2026-07-17
 - Evidence: sanitized structural scan of the local Cursor source
 
-This page freezes the two local Cursor formats supported by M11b. It records
+This page freezes the three local Cursor formats supported through M11c. It records
 field names, types, ownership, ordering, and failure rules without private paths,
 IDs, titles, content, hashes, or blob values.
 
 The exhaustive scan covered 330 chat metadata files, 41 project catalogs, 903
 catalog agent rows, 1,195 immutable selected roots, and 54,727 root-selected
-messages. The implementation must stop if fixtures or later structural evidence
-contradict this matrix.
+messages. A follow-up scan covered 1,717 agent-transcript JSONL files: 1,198
+overlapped rich candidates, 500 otherwise-unowned files contained conversation
+records, 19 contained lifecycle records only, and seven bare basename groups
+contained two byte-different files each. The implementation must stop if
+fixtures or later structural evidence contradict this matrix.
 
 ## Supported families
 
 - `chat-store-v1`
 - `agent-checkpoint-store-v1`
+- `agent-transcript-jsonl-v1`
 
-JSONL-only history, legacy Composer/App Support state, cloud-only evidence, and
-inferred relations are not supported.
+Legacy Composer/App Support state, cloud-only evidence, and inferred relations
+are not supported.
 
 ## Root-relative discovery grammar
 
@@ -31,6 +35,9 @@ chats/<scope>/<native-id>/store.db
 
 projects/<project>/sdk-agent-store/<scope>/index.db
 projects/<project>/sdk-agent-store/<scope>/agents/agent-<sha256(agent_id)>/store.db
+
+projects/<project>/agent-transcripts/<id>/<same-id>.jsonl
+projects/<project>/agent-transcripts/<parent>/subagents/<child>.jsonl
 ```
 
 Traverse chat scopes, project directories, and SDK-agent scopes in binary
@@ -43,6 +50,11 @@ to the `agents` directory beside that exact catalog. All 892 observed agent
 stores had exactly one such catalog ancestor. The raw chat directory ID or
 catalog `agent_id` is native identity; the agent directory suffix must equal the
 lowercase SHA-256 of the exact UTF-8 `agent_id`.
+
+For JSONL, `<id>` and `<parent>` are lowercase UUIDs with an optional `agent-`
+prefix; `<child>` is a lowercase UUID. The filename must equal the owning
+top-level ID or the child ID. Project and parent directories are traversal only,
+not public identity, workspace, or lineage evidence.
 
 A valid conversation metadata record or nonnull valid checkpoint with a missing,
 nonregular, or already-claimed derived store makes discovery incomplete; it is
@@ -61,6 +73,7 @@ order:
   identity/stat descriptors;
 - every traversed chat, project, SDK-agent scope, catalog, and derived store
   entry;
+- every recognized agent-transcript directory and JSONL entry;
 - main and optional WAL descriptors for each selected SQLite file; and
 - each admitted chat metadata file captured read-only/no-follow where supported,
   with matching pre/post descriptors and a bytes digest.
@@ -70,28 +83,56 @@ replacement, type change, descriptor change, or metadata-bytes change is
 `source-changed`; discovery is incomplete and retained Cursor sessions are not
 reconciled as missing. Provider SHM is never inventoried or opened.
 
-### Deferred-layout detection
+### JSONL ownership and precedence
 
-The only deferred signature inspected by M11b is a non-symlink directory at:
+Discovery stats recognized JSONL paths but does not parse their content.
+Precedence is fixed per native ID:
+
+- an exact rich store candidate wins; every same-ID JSONL file is excluded from
+  its fingerprint;
+- explicit `hasConversation: false` chat metadata suppresses same-ID JSONL;
+- one otherwise-unowned basename yields one JSONL candidate; and
+- several otherwise-unowned files with one basename yield one ordered conflict
+  candidate whose read is `unsupported-format`.
+
+Sessions never chooses or merges conflicting files and never derives public
+identity from project or parent directories. A later generation with one
+unambiguous file can use the same bare identity.
+
+## Agent transcript JSONL
+
+Open the frozen file read-only without following symlinks. Verify its full
+descriptor before open, after open, after streaming, and against the path
+afterward. Decode UTF-8 fatally, accept one plain JSON object per nonempty
+physical line, and reject records above 32 MiB.
+
+Message records are exact:
 
 ```text
-projects/<project>/agent-transcripts
+{ role: "user"|"assistant", message: { content: [...] } }
 ```
 
-Inspect it only as an immediate child while traversing each project. Do not walk
-or read its JSONL files. Legacy/App Support and cloud-only state are outside the
-Cursor root and are not inspected.
+User content contains only `{ type: "text", text }`. Assistant content contains
+text items or `{ type: "tool_use", name, input }`, where `input` is a plain
+object or a raw string. Preserve file and array order. Text becomes a human or
+model message. Tool use becomes a model tool call with exact name and canonical
+object JSON or exact raw-string input. Namespace, call ID, result, and result
+linkage remain absent.
 
-Precedence is fixed:
+Lifecycle records are exact:
 
-- supported candidates present: return the complete supported generation and
-  ignore deferred evidence;
-- no candidates, but only recognized `hasConversation: false` or null-checkpoint
-  records: return a complete empty generation;
-- no candidates and at least one deferred signature: `unsupported-format`, so
-  discovery is incomplete;
-- no supported, noncandidate, or deferred evidence: return a complete empty
-  generation.
+```text
+{ type: "turn_ended", status: "success" }
+{ type: "turn_ended", status: "error"|"aborted", error: string }
+```
+
+They become ordered system entries `turn-completed`, `turn-error`, or
+`turn-aborted`; success has empty content and error/aborted preserve the exact
+error text. Lifecycle-only files are eligible unless explicit
+`hasConversation: false` metadata owns that ID.
+
+JSONL supplies no title, workspace, created/updated or entry timestamps,
+relations, or lineage proof. File times are source-change evidence only.
 
 ## Chat metadata
 
@@ -267,3 +308,7 @@ empty and `lineageCoverage` remains `unknown`.
 - Mutation around capture is `source-changed`.
 - Unknown keys, roles, discriminators, schema changes, and root field/wire pairs
   are never inferred.
+- `agent-transcript-jsonl-v1` may be replaced by either rich family. A rich
+  `cursor-v1` last-good snapshot is never replaced by `cursor-jsonl-v1`; the
+  reduced candidate fails `unsupported-format` and the rich snapshot stays
+  stale and queryable.

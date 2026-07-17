@@ -2,7 +2,7 @@
 
 - Status: active program roadmap
 - Date: 2026-07-13
-- Last updated: 2026-07-16
+- Last updated: 2026-07-17
 - Foundation baseline: PR #1, merged as `601f924`
 
 ## Goal
@@ -24,14 +24,15 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 10, M11a, M11b0, and M11b are complete. M10 added honest
+Milestones 0 through 10, M11a, M11b0, M11b, and M11c are complete. M10 added honest
 capture scope, all-tracked reconciliation, bounded source-change retry, opt-in
 indexing timings, and a recovery-safe proportional writer-open path. The pre-M11
 [Cursor source survey](../../docs/research/cursor-source-survey.md) found that
 current WAL-backed Cursor stores need the existing private capture workspace
 during changed reads. M11a completed that capture prerequisite, and M11b0 made
 registered providers optional when they are not installed. M11b added Cursor
-through the same provider-neutral engine and query surface.
+through the same provider-neutral engine and query surface. M11c added a reduced
+Cursor JSONL fallback without allowing it to replace richer retained evidence.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -65,9 +66,9 @@ The repository now includes:
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
-- a passive Cursor adapter that admits the proven chat and agent-checkpoint
-  stores, snapshots only required main/WAL files, and preserves exact local
-  format authority without reading deferred JSONL history;
+- a passive Cursor adapter that admits proven chat and agent-checkpoint stores
+  plus exact reduced agent-transcript JSONL, while keeping rich authority and
+  missing-evidence limits explicit;
 - public `index`, `list`, `search`, `entries`, `show`, `export`, `forget`,
   `data repair-orphans`, `data compact`, and `data clear` workflows
   backed only by the provider-neutral application and storage layers;
@@ -226,7 +227,8 @@ flowchart TD
   M9 --> M10["M10 Capture truth and routine-index hardening — complete"]
   M10 --> M11A["M11a Changed-read capture workspace"]
   M11A --> M11B["M11b Cursor parity"]
-  M11B --> M12["M12 Release qualification"]
+  M11B --> M11C["M11c Cursor JSONL fallback"]
+  M11C --> M12["M12 Release qualification"]
   M12 --> M13["M13 Parity, Harness cutover, V1"]
 ```
 
@@ -239,7 +241,9 @@ and routine indexing cost. The second real adapter then proves one missing
 provider-neutral capture capability: changed reads need the same leased private
 workspace already used by discovery. M11a makes that capability explicit before
 M11b adds Cursor without provider-specific changes to domain, storage, query,
-export, CLI semantics, or skill playbooks.
+export, CLI semantics, or skill playbooks. M11c admits reduced JSONL-only
+history while preserving rich-store authority through a provider-neutral
+adapter-version replacement guard.
 
 ## Milestones
 
@@ -1462,6 +1466,46 @@ Exit gate:
   edits.
 - `pnpm check` passes on all CI operating systems.
 
+### M11c — Add Cursor JSONL fallback without evidence downgrade (complete)
+
+Outcome: recognized local Cursor `agent-transcripts` JSONL can enter the same
+durable library when no richer same-ID store owns that history.
+
+Required behavior:
+
+- Support only the exact top-level and `subagents` JSONL grammar frozen in
+  [Cursor local format v1 evidence](../../docs/research/cursor-format-v1.md).
+  Use one otherwise-unowned basename as native identity; do not infer project or
+  parent identity.
+- Apply rich and explicit noncandidate ownership first. Rich candidates exclude
+  same-ID JSONL from their fingerprint. Duplicate unowned basenames become one
+  deterministic `unsupported-format` candidate; never choose or merge files.
+- Stream one frozen file read-only with fatal UTF-8, one bounded exact record per
+  line, and descriptor checks around the read.
+- Preserve ordered user/model text, assistant tool calls, and turn-end lifecycle
+  evidence. Leave title, workspace, timestamps, tool results, call IDs, linkage,
+  relations, and lineage absent or unknown.
+- Add one optional provider-neutral adapter-version replacement guard. Cursor
+  allows JSONL-to-rich promotion and rejects rich-to-JSONL replacement. A false,
+  thrown, or invalid guard result fails only that candidate and preserves its
+  last-good snapshot.
+- Keep storage, query, structured output, maintenance, CLI grammar, Agent Skill,
+  and provider-read-only boundaries unchanged.
+
+Exit gate:
+
+- Focused parser/discovery/source tests cover exact grammar, precedence,
+  duplicate conflicts, bounds, malformed input, and all source-change windows.
+- Application and SQLite tests cover stable unchanged indexing, promotion,
+  no-downgrade last-good retention, forget/reindex, and durable fallback query
+  and export.
+- The shared compiled/package workflow proves one representative fallback
+  capture and retrieval without duplicating every command contract.
+- Privacy-safe live acceptance reconciles only aggregate rich/fallback/conflict
+  cohorts, proves stable rerun behavior and one retained lookup/export, preserves
+  provider bytes, and cleans temporary Sessions state.
+- `pnpm check` passes on all CI operating systems.
+
 ### M12 — Qualify and automate public releases
 
 Outcome: a clean public pre-release can be installed without a source checkout,
@@ -1582,7 +1626,7 @@ These are evidence checkpoints, not date commitments:
 | Feature-complete alpha | M6-M8; Codex evidence/export plus agent-efficient retrieval           |
 | Agent-ready alpha      | M9; packaged skill, onboarding, and forward-tested playbooks          |
 | Core-hardened alpha    | M10; honest capture scope, bounded retry, and measured routine index  |
-| Beta                   | M11a-M11b; capture boundary plus Cursor/third-adapter equivalence     |
+| Beta                   | M11a-M11c; capture boundary plus rich/reduced Cursor equivalence      |
 | Release candidate      | M12; install and publish qualification                                |
 | V1                     | M13; parity, released package, and pinned one-way Harness integration |
 
