@@ -26,8 +26,11 @@ plan and independently reviewable pull request before work starts. The accepted
 
 Milestones 0 through 10 are complete. M10 added honest capture scope,
 all-tracked reconciliation, bounded source-change retry, opt-in indexing
-timings, and a recovery-safe proportional writer-open path. M11 Cursor parity is
-next.
+timings, and a recovery-safe proportional writer-open path. The pre-M11
+[Cursor source survey](../../docs/research/cursor-source-survey.md) found that
+current WAL-backed Cursor stores need the existing private capture workspace
+during changed reads. M11a is the provider-neutral prerequisite; M11b then adds
+Cursor parity.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -87,9 +90,10 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the Cursor adapter, release automation, or pinned Harness
-integration. M11 now proves the complete provider-neutral surface through a
-second passive adapter.
+It does not yet have the changed-read capture-workspace capability, Cursor
+adapter, release automation, or pinned Harness integration. M11a corrects that
+internal source-port boundary, and M11b proves the complete provider-neutral
+surface through a second passive adapter.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -218,8 +222,9 @@ flowchart TD
   M7 --> M8["M8 Agent analysis retrieval — complete"]
   M8 --> M9["M9 Packaged Agent Skill — complete"]
   M9 --> M10["M10 Capture truth and routine-index hardening — complete"]
-  M10 --> M11["M11 Cursor parity"]
-  M11 --> M12["M12 Release qualification"]
+  M10 --> M11A["M11a Changed-read capture workspace"]
+  M11A --> M11B["M11b Cursor parity"]
+  M11B --> M12["M12 Release qualification"]
   M12 --> M13["M13 Parity, Harness cutover, V1"]
 ```
 
@@ -228,10 +233,11 @@ non-text records, and structural lineage force the generic model to prove its
 assumptions before the query/export and Agent Skill contracts stabilize. M8 and
 M9 complete that provider-neutral evidence workflow over Codex. M10 uses real
 dogfood evidence to settle capture-scope truth, bounded source-change recovery,
-and routine indexing cost. Cursor then becomes the second-adapter architecture
-proof: it must enter through the settled source port without provider-specific
-changes to domain, storage, indexing, query, export, CLI semantics, or skill
-playbooks.
+and routine indexing cost. The second real adapter then proves one missing
+provider-neutral capture capability: changed reads need the same leased private
+workspace already used by discovery. M11a makes that capability explicit before
+M11b adds Cursor without provider-specific changes to domain, storage, query,
+export, CLI semantics, or skill playbooks.
 
 ## Milestones
 
@@ -316,7 +322,8 @@ Required decisions and behavior:
   use. Never reuse or auto-migrate the legacy Harness JSONL cache.
 - `sessions paths [--format human|json]` initially reports only Sessions-owned
   index/state locations plus initialized state without creating directories or
-  files. Registered adapters extend it with their own source roots in M5 and M11.
+  files. Registered adapters extend it with their own source roots in M5 and
+  M11b.
 - Only explicit `sessions index` opens a writer that creates state or applies
   migrations. Read commands report missing or incompatible state with a concise
   remediation path; they do not silently initialize or rebuild it.
@@ -1236,15 +1243,85 @@ Codex 120-session exact-cohort proof measured 3.262 ms writer open and 366.055
 ms total, performed zero changed reads, and passed the 800 ms / 1.25 second local
 budgets without changing canonical, query, failure, lease, or provider evidence.
 
-### M11 — Add Cursor and prove adapter equivalence
+### M11a — Extend private capture staging to changed reads
+
+Outcome: every adapter may use the existing writer-leased private workspace
+during a changed candidate read, without exposing paths, leases, storage, or
+durable adapter state.
+
+Research basis:
+
+- the [Cursor source survey](../../docs/research/cursor-source-survey.md) found
+  1,204 current per-chat/per-agent SQLite stores, with WAL activity common;
+- some main files were empty or could not resolve their current root without WAL;
+- richer blob stores contained tool results and linkage absent from the observed
+  reduced JSONL transcript family; and
+- the application exhausts discovery before repository freshness decides which
+  candidates need `read`, so discovery-only staging cannot remain both complete
+  and proportional.
+
+Primary change areas:
+
+- `src/application/ports/session-source.ts` and source admission/read helpers;
+- `src/application/run-index.ts` changed-read composition;
+- the infrastructure implementation currently named for source discovery;
+- shared source conformance, synthetic adapter fixtures, and Codex regression
+  coverage; and
+- source-adapter/current-architecture documentation.
+
+Required behavior:
+
+- Generalize `SourceDiscoveryWorkspace` to an opaque capture workspace and pass
+  it explicitly to both `discover` and `read`. Do not let adapters retain it
+  secretly outside the declared call or learn its root, writer lease, or cleanup
+  policy.
+- Keep allocation after writer acquisition. Every private attempt remains
+  random, permission-hardened, fenced by exact lease ownership, removed in
+  `finally`, and covered by the writer's scratch-root cleanup before release.
+- Preserve the current freshness order. Unchanged candidates never call `read`
+  and therefore never allocate changed-read scratch. The capability is staging,
+  not an adapter cache or second source of truth.
+- Keep the port provider-neutral. It knows nothing about Cursor, SQLite, WAL,
+  transcripts, or provider paths. Codex may ignore the read workspace and retain
+  byte-for-byte equivalent behavior.
+- Keep probe without staging. Probe remains a cheap, non-mutating source-root
+  readiness check that does not read transcript content.
+- Do not change domain values, canonical storage, indexing policy, query/export,
+  CLI/JSON/JSONL, Agent Skill behavior, provider mutation rules, or public
+  package surface.
+
+Exit gate:
+
+- A synthetic adapter uses staging only inside one changed `read`; the admitted
+  document cannot escape before operation, cleanup, and lease validation
+  succeed.
+- Unchanged candidates prove zero read calls and zero changed-read capture
+  allocation. Bounded discovery staging remains allowed; a mixed run allocates
+  per-candidate transcript/blob capture only for changed candidates.
+- Operation, cleanup, lease-loss, and applicable combined failures admit no
+  document, leave no attempt/scratch residue, and preserve last-good state.
+- Discovery and read share the same bounded capability without retaining it.
+- Existing Codex conformance, source-change retry, provider-tree immutability,
+  and vertical command proofs remain exact.
+- A third synthetic adapter still passes without storage, query, CLI, or
+  provider-specific branches.
+- `pnpm check` passes on all CI operating systems.
+
+### M11b — Add Cursor and prove adapter equivalence
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.
 
+Research authority: use the
+[Cursor source survey](../../docs/research/cursor-source-survey.md) for the
+official product semantics, sanitized local format inventory, source authority,
+Harness reuse boundary, compatibility limits, and rejected alternatives. The
+adapter contract remains authoritative when the provider format is ambiguous.
+
 Primary change areas:
 
-- `src/adapters/cursor/source.ts`, `paths.ts`, `meta.ts`, `transcript.ts`,
-  `normalize.ts`, and `fingerprint.ts`;
+- `src/adapters/cursor/source.ts`, `paths.ts`, catalog/store/transcript readers,
+  `normalize.ts`, snapshot handling, and `fingerprint.ts`;
 - Cursor synthetic fixtures, golden parser tests, and shared conformance;
 - composition registration, provider path reporting, and a Cursor format-support
   matrix.
@@ -1255,15 +1332,45 @@ Required behavior:
   behavior from the approved Harness baseline. Do not port its provider factory,
   JSONL cache, source-reopening queries, classifications, analysis, or automation
   filters.
-- Open provider databases read-only and transcript files without write access.
-  Every metadata or transcript input consumed by normalization participates in
-  the complete candidate fingerprint and mutation checks.
+- Keep one public `cursor` source kind. Hide only a small declared set of
+  structurally detected, fixture-backed local format readers behind it; do not
+  add public editor/CLI/side-chat variants or a generic Cursor schema
+  interpreter.
+- Discover exact identities and complete physical input descriptors without
+  parsing every transcript or copying every database. A bare transcript
+  filename, title, workspace, branch, worktree, timestamp, digest, or directory
+  order is not identity.
+- Use one documented field-by-field authority rule when JSONL, blob stores,
+  catalogs, and metadata describe one session. Unresolved competing transcript
+  authorities or native identities make discovery incomplete; never choose by
+  newest, longest, first, or text similarity.
+- Open plain transcript/metadata files without write access and verify their
+  identity around reads. For a changed WAL-backed candidate, copy and verify
+  only its required main/WAL inputs inside the M11a workspace, open only the
+  private copy, and let SQLite create private SHM. Never open provider SHM or
+  treat `immutable=1` main-file state as complete when WAL is required.
+- Every metadata, catalog, transcript, database, or WAL input consumed by
+  canonical normalization participates in the complete candidate fingerprint
+  and source-change checks.
 - Preserve injected blocks such as user information, instructions, and user
   query as classified content rather than deleting them. Do not make automation
   or subagent exclusions a default.
 - Map only exact message, tool, non-text, and lineage evidence Cursor exposes.
   Missing names, namespaces, call linkage, origins, or relations remain absent or
   unknown rather than being inferred for parity.
+- Admit only physically present local formats that prove exact identity and
+  complete content. Target Editor/Agents Window chats, side chats, subagents,
+  worktree/multi-root sessions, and passive CLI history, but leave any family
+  outside confirmed coverage until its representation meets that proof bar.
+  Admitted side chats and subagents are independent sessions; hidden parent
+  context is not copied. Parent/fork/continuation edges require exact local IDs,
+  and lineage coverage stays unknown unless the schema proves it complete.
+- Exclude cloud-only, mobile/web-only, shared-link, automation-triggered remote,
+  and remote-machine-only histories. Do not call Cursor APIs, install hooks,
+  fetch links, or claim complete Cursor-account coverage.
+- Present-but-malformed required evidence fails safely. A recognizable but
+  unsupported installed layout is `unsupported-format` or incomplete discovery,
+  never a complete empty scan that marks retained sessions missing.
 - Register Cursor in composition. No Cursor branch belongs in domain, repository,
   indexing, query, export, CLI renderers, or skill playbooks.
 
@@ -1275,6 +1382,21 @@ Exit gate:
   calls/results where present, absent execution evidence, durable retention after
   complete-scan disappearance, unknown state after incomplete discovery,
   reappearance, forget, and data clear.
+- Current format fixtures prove full deterministic blob-root ordering, exact
+  native identity despite duplicate transcript filenames, declared
+  JSONL/blob/catalog authority, WAL-only state, tool call/result linkage,
+  redacted/unknown non-text content, conservative missing lineage, and—if side
+  chats enter the supported format matrix—hidden-context omission.
+- Stable indexing proves unchanged candidates parse no transcript and perform no
+  per-candidate blob-store capture. Bounded discovery catalog snapshots remain
+  allowed. Changed reads copy only their own main/WAL inputs, clean every
+  attempt, and leave provider main/WAL/SHM bytes and metadata unchanged.
+- Windows, macOS, and Linux path/layout fixtures prove only supported local
+  roots are traversed and provider-owned files remain read-only on each CI
+  operating system.
+- Structured reports and format-support docs distinguish supported local
+  families, malformed/unsupported cohorts, and remote/cloud evidence outside
+  coverage without exposing provider paths, IDs, titles, or content.
 - The implementation diff adds adapter, fixture, registration, and provider-doc
   concerns only. Any required core or skill semantic edit stops this milestone
   and sends the missing abstraction back to the owning earlier milestone for
@@ -1403,7 +1525,7 @@ These are evidence checkpoints, not date commitments:
 | Feature-complete alpha | M6-M8; Codex evidence/export plus agent-efficient retrieval           |
 | Agent-ready alpha      | M9; packaged skill, onboarding, and forward-tested playbooks          |
 | Core-hardened alpha    | M10; honest capture scope, bounded retry, and measured routine index  |
-| Beta                   | M11; Cursor equivalence and third-adapter architecture proof          |
+| Beta                   | M11a-M11b; capture boundary plus Cursor/third-adapter equivalence     |
 | Release candidate      | M12; install and publish qualification                                |
 | V1                     | M13; parity, released package, and pinned one-way Harness integration |
 

@@ -270,10 +270,13 @@ Each adapter implements three responsibilities:
 1. `probe()` — return `ready`, `unavailable`, or `unreadable` plus sanitized
    adapter-owned source roots, without reading transcript content or mutating the
    source.
-2. `discover()` — enumerate session candidates with identity, ordered input
-   descriptors, an aggregate fingerprint covering every input needed by `read()`,
-   and an adapter format version.
-3. `read(candidate)` — parse and normalize one candidate into a complete canonical session document.
+2. `discover(workspace)` — enumerate session candidates with identity, ordered
+   input descriptors, an aggregate fingerprint covering every input needed by
+   `read()`, and an adapter format version. The workspace is opaque and bounded
+   to the call.
+3. `read(candidate, workspace)` — parse and normalize one changed candidate into
+   a complete canonical session document, using the same opaque capture
+   capability only when private staging is required.
 
 Contract rules:
 
@@ -292,11 +295,13 @@ Contract rules:
   an immutable row/edge generation, and removes staging before yielding. Reads
   use frozen state and verify only the live rollout. Provider SQLite/SHM is never
   opened by Sessions.
-- The internal `IndexWriter` owns that capability and `runIndex` passes it only
-  to discovery after writer acquisition. The callback asserts lease ownership
-  before allocation and after `finally` cleanup, returns results only while still
-  owned, aggregates operation/cleanup/lease errors, and exposes
-  neither the scratch root nor `IndexPaths` to an adapter.
+- The internal `IndexWriter` owns that capability. The current implementation
+  passes it only to discovery after writer acquisition; M11a generalizes the
+  contract and passes it explicitly to both discovery and changed reads. The
+  callback asserts lease ownership before allocation and after `finally`
+  cleanup, returns results only while still owned, aggregates
+  operation/cleanup/lease errors, and exposes neither the scratch root nor
+  `IndexPaths` to an adapter.
 - Missing optional metadata degrades to absent/unknown values.
 - Source-observed tool calls/results map to generic canonical entry kinds, exact
   tool names and namespaces when available, linked entries, and faithful
@@ -953,8 +958,9 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 6 are implemented; M11
-Cursor parity is next. Codex is the first vertical slice because
+The phase scopes below remain accepted. Phases 0 through 6 are implemented; M11a
+changed-read capture staging and M11b Cursor parity are next. Codex is the first
+vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow complete over Codex; M10 settles capture truth, bounded recovery, and
