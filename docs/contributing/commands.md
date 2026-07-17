@@ -21,7 +21,7 @@
 | `pnpm test:docs`                                       | Run documentation contract tests                                        | No                                 | No                                  |
 | `pnpm clean`                                           | Remove compiled output                                                  | `dist/`                            | No                                  |
 | `pnpm build`                                           | Clean and compile distributable JS                                      | `dist/`                            | No                                  |
-| `pnpm smoke:dist`                                      | Exercise compiled capture/query/JSONL export/repair/compact/delete      | Temporary directory, removed       | No                                  |
+| `pnpm smoke:dist`                                      | Exercise compiled Cursor/Codex capture, query, export, and maintenance  | Temporary directory, removed       | No                                  |
 | `pnpm smoke:package`                                   | Offline-install tarball and exercise the same shared workflow           | Temporary directory, removed       | No after dependencies are installed |
 | `pnpm check` / `pnpm check:ci`                         | Complete definition-of-done gate                                        | Build/temp state                   | No after dependencies are installed |
 | `pnpm check:docs`                                      | Run the documentation-only CI gate                                      | No                                 | No                                  |
@@ -72,8 +72,8 @@ measurement reads no credentials and never opens the ordinary Sessions library.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
-but create no directories, files, migrations, or rollout reads. Index explicitly
-creates/updates the durable library from read-only provider inputs;
+but create no directories, files, migrations, or transcript reads. Index
+explicitly creates/updates the durable library from read-only Cursor or Codex inputs;
 list/search/entries/show/export are library-only reads, and export never writes a
 destination or resolves a provider;
 forget/data-repair-orphans/data-clear delete only Sessions-owned state.

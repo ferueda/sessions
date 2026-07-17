@@ -24,14 +24,14 @@ plan and independently reviewable pull request before work starts. The accepted
 
 ## Current state
 
-Milestones 0 through 10, M11a, and M11b0 are complete. M10 added honest capture
-scope, all-tracked reconciliation, bounded source-change retry, opt-in indexing
-timings, and a recovery-safe proportional writer-open path. The pre-M11
+Milestones 0 through 10, M11a, M11b0, and M11b are complete. M10 added honest
+capture scope, all-tracked reconciliation, bounded source-change retry, opt-in
+indexing timings, and a recovery-safe proportional writer-open path. The pre-M11
 [Cursor source survey](../../docs/research/cursor-source-survey.md) found that
 current WAL-backed Cursor stores need the existing private capture workspace
 during changed reads. M11a completed that capture prerequisite, and M11b0 made
-registered providers optional when they are not installed. M11b adds Cursor
-parity next.
+registered providers optional when they are not installed. M11b added Cursor
+through the same provider-neutral engine and query surface.
 The repository now includes:
 
 - compiled TypeScript/ESM package delivery with a `sessions` binary;
@@ -65,6 +65,9 @@ The repository now includes:
 - a passive Codex adapter that snapshots the required state database/WAL into a
   leased private workspace, streams plain or Zstandard rollouts, and normalizes
   source evidence without writing provider-owned files;
+- a passive Cursor adapter that admits the proven chat and agent-checkpoint
+  stores, snapshots only required main/WAL files, and preserves exact local
+  format authority without reading deferred JSONL history;
 - public `index`, `list`, `search`, `entries`, `show`, `export`, `forget`,
   `data repair-orphans`, `data compact`, and `data clear` workflows
   backed only by the provider-neutral application and storage layers;
@@ -91,9 +94,8 @@ The repository now includes:
   reconciliation, scoped deletion, and source-aware paths/doctor reports;
 - accepted architecture, privacy, CLI, adapter, and contributor contracts.
 
-It does not yet have the Cursor adapter, release automation, or pinned Harness
-integration. M11b now proves the complete provider-neutral surface through a
-second passive adapter.
+It does not yet have release automation or pinned Harness integration. M12 is
+next.
 Markdown presentation is deferred beyond V1; JSON and JSONL are the portable
 machine formats for V1.
 
@@ -1350,7 +1352,7 @@ Exit gate:
   strict explicit failure.
 - `pnpm check` passes.
 
-### M11b — Add Cursor and prove adapter equivalence
+### M11b — Add Cursor and prove adapter equivalence (complete)
 
 Outcome: Cursor reaches the complete existing CLI through only a new passive
 adapter and composition registration.

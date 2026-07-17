@@ -589,7 +589,7 @@ Current surface:
 sessions
 sessions doctor [--format human|json]
 sessions paths [--format human|json]
-sessions index [--source codex] [--format human|json]
+sessions index [--source codex|cursor] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
 sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
                        [--cursor TOKEN] [--format human|json|jsonl]
@@ -728,8 +728,8 @@ Check order is stable. Every check runs even when an earlier check fails. A thro
 
 The complete human or JSON report is requested data and goes to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. An unexpected failure outside aggregation writes a concise diagnostic to stderr, emits no fabricated report, and exits `1`. Invalid format or other usage exits `2` through normal CLI error handling.
 
-The current checks are `node-runtime`, `sqlite-fts5`, `library-state`, and
-`source-codex`. The SQLite capability probe uses `:memory:`. An uninitialized
+The current checks are `node-runtime`, `sqlite-fts5`, `library-state`,
+`source-codex`, and `source-cursor`. The SQLite capability probe uses `:memory:`. An uninitialized
 library passes with guidance. A ready library distinguishes canonical integrity
 from rebuildable FTS health and reports run/lease state plus the global capture
 aggregate. Stale, unindexed, or unknown-coverage evidence yields an
@@ -960,13 +960,12 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 6 and the M11a
-changed-read capture prerequisite are implemented; M11b Cursor parity is next.
+The phase scopes below remain accepted. Phases 0 through 7 are implemented.
 Codex is the first vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
-workflow complete over Codex; M10 settles capture truth, bounded recovery, and
-routine indexing cost before Cursor becomes the second-adapter proof. The
+workflow completed over Codex first; M10 settled capture truth, bounded recovery,
+and routine indexing cost before Cursor became the second-adapter proof. The
 [V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
 supersedes the earlier phase ordering and refines it into dependency-ordered,
 independently reviewable milestones with explicit exit gates.
@@ -1071,11 +1070,10 @@ ms writer open / 264.666 ms total. The authorized read-only real Codex
 reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
 correctness remains their only gate.
 
-### Phase 7 — Equivalent second adapter
+### Phase 7 — Equivalent second adapter (complete)
 
-Port Cursor discovery and transcript normalization through the same port. Prove
-no changes are required in domain, storage, indexing, query, export, or CLI
-behavior.
+Cursor discovery and transcript normalization use the same port, with no changes
+to domain, storage, indexing, query, export, or CLI behavior.
 
 ### Phase 8 — Public release and parity
 

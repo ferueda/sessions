@@ -1,6 +1,6 @@
 # Cursor local format v1 evidence
 
-- Status: binding M11b implementation input
+- Status: implemented M11b format contract
 - Date: 2026-07-16
 - Evidence: sanitized structural scan of the local Cursor source
 

@@ -30,6 +30,7 @@ Contracts:
 - [CLI](../reference/cli-contract.md)
 - [Agent Skill](../reference/agent-skill.md)
 - [Codex format support](../reference/codex-format-support.md)
+- [Cursor format support](../reference/cursor-format-support.md)
 - [Source adapters](adapter-contract.md)
 - [Repository commands](commands.md)
 - [Architecture decisions](../decisions/README.md)

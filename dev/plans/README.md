@@ -9,8 +9,6 @@ This directory holds the repository's active implementation plans.
 
 Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
 
-Active executor plan:
-
-- [M11b Cursor adapter parity](260716-m11b-cursor-adapter.md)
+There are no active executor plans. Resume M12 as the next roadmap work.
 
 Markdown presentation remains deferred beyond V1.

@@ -26,9 +26,9 @@ Both copy the same ten-file skill to the universal
 same layout. Remote repository shorthand is a post-merge verification and
 documentation step.
 
-Codex and Cursor are agent hosts in the examples above. They are not equivalent
-index sources: the current Sessions CLI indexes Codex only, and Cursor source
-support is planned for M11 after M10 core evidence hardening.
+Codex and Cursor are agent hosts in the examples above and registered local
+Sessions index sources. The same skill works over either retained source through
+the provider-neutral CLI.
 
 ## Routes
 

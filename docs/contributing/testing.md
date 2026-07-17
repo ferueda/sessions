@@ -41,7 +41,7 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | --------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds                   |
 | Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/entries/show/export/forget/repair, selection, failures |
-| Adapter/conformance   | `test/adapters/codex/**`, source contracts/fixtures                             | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation                   |
+| Adapter/conformance   | `test/adapters/{cursor,codex}/**`, source contracts/fixtures                    | `probe`/`discover`/`read`, fingerprints, normalization, safe failures, provider non-mutation                   |
 | SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows             |
 | Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, textless entries, filters, rank/ties, cursors, context, lineage, support units                    |
 | CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects                       |
@@ -52,9 +52,8 @@ All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 | Agent forward eval    | Fresh agents over an isolated generic retained corpus                           | Route choice, facts-first evidence, provenance, privacy, bounded output, honest unknowns, and no auto-mutation |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
-or authenticated live command today. JSON/JSONL delivery and export are current
-coverage; the packaged Agent Skill is current and Cursor indexing remains
-planned.
+or authenticated live command today. JSON/JSONL delivery, Cursor/Codex indexing,
+export, and the packaged Agent Skill are current coverage.
 
 ## Choosing proof
 
@@ -63,6 +62,7 @@ planned.
 | Domain value, validator, projection/hash  | Focused module test                                                        | `pnpm test test/domain/<file>.test.ts`                         | `pnpm check`                                              |
 | Discovery, index, list/show, retention    | Application workflow with fake ports; SQLite only when persistence matters | `pnpm test test/application/<file>.test.ts`                    | `pnpm check`                                              |
 | Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`                 | `pnpm check`                                              |
+| Cursor path, store, message normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/cursor/<file>.test.ts`                | `pnpm check`                                              |
 | Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`                 | `pnpm check`                                              |
 | Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | Focused search or entry-query application/infrastructure tests | `pnpm check`                                              |
 | Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                        | `pnpm check`                                              |
