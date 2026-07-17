@@ -164,7 +164,11 @@ export function createSyntheticSourceFixture(
     sourceInstance: SOURCE_INSTANCE,
     identities: [primaryIdentity, missingMetadataIdentity],
     primaryIdentity,
-    missingMetadataIdentity,
+    metadataAbsence: {
+      identity: missingMetadataIdentity,
+      fields: ["title", "workspace", "createdAt", "updatedAt"],
+    },
+    expectedProvenance: { origin: "unknown", originConfidence: "unknown" },
     repeatedText: REPEATED_TEXT,
     repeatedTextProvenance: { origin: "unknown", originConfidence: "unknown" },
     expectedInputs,

@@ -137,7 +137,11 @@ export async function createCodexSessionSourceContractFixture(
     sourceInstance: selected.instance,
     identities: [primaryIdentity, missingMetadataIdentity],
     primaryIdentity,
-    missingMetadataIdentity,
+    metadataAbsence: {
+      identity: missingMetadataIdentity,
+      fields: ["title", "workspace", "createdAt", "updatedAt"],
+    },
+    expectedProvenance: { origin: "unknown", originConfidence: "unknown" },
     repeatedText: REPEATED_TEXT,
     repeatedTextProvenance: { origin: "human", originConfidence: "high" },
     expectedInputs,

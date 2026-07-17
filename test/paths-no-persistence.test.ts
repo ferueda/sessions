@@ -50,6 +50,10 @@ describe("paths persistence boundary", () => {
           source: { kind: "codex" },
           probe: { status: "unavailable" },
         },
+        {
+          source: { kind: "cursor" },
+          probe: { status: "unavailable" },
+        },
       ],
     });
     await expect(readdir(sandbox, { recursive: true })).resolves.toEqual([]);
