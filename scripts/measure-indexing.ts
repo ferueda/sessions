@@ -66,6 +66,7 @@ interface MeasurementSource {
 
 interface SemanticState {
   readonly staticRows: readonly SqliteRow[];
+  readonly writerLeaseRows: readonly SqliteRow[];
   readonly sourceRows: readonly SqliteRow[];
   readonly trackingRows: readonly SqliteRow[];
   readonly canonicalRows: readonly SqliteRow[];
@@ -104,20 +105,34 @@ async function main(): Promise<void> {
     const timedPaths = pathsAt(path.join(temporaryRoot, "timed"));
     const seedLifecycle = lifecycleAt(SEED_AT);
     const seedSource = createMeasurementSource(corpus, true);
+    const seedCollector = createIndexTimingCollector();
 
-    const seedReport = await runIndex({
-      paths: seedPaths,
-      sources: [seedSource.selected],
-      lifecycle: seedLifecycle,
-      clock: fixedClock(SEED_AT),
-    });
+    const seedReport = await timeIndexOperation(seedCollector.recorder, "total", () =>
+      runIndex({
+        paths: seedPaths,
+        sources: [seedSource.selected],
+        lifecycle: seedLifecycle,
+        clock: fixedClock(SEED_AT),
+        timing: seedCollector.recorder,
+      }),
+    );
+    const seedTiming = seedCollector.snapshot();
     assertStableCounts(seedReport, 0, CORPUS_SESSIONS);
     assert.equal(seedSource.readCount(), CORPUS_SESSIONS, "seed run did not read each session");
+    assertSeedTimingOwnership(seedTiming);
     await assertCleanDatabase(seedPaths);
 
-    const seededState = readSemanticState(seedPaths);
     await cloneDatabase(seedPaths, controlPaths);
     await cloneDatabase(seedPaths, timedPaths);
+    await prepareCleanStableLibrary(controlPaths);
+    await prepareCleanStableLibrary(timedPaths);
+    const controlSeededState = readSemanticState(controlPaths);
+    const timedSeededState = readSemanticState(timedPaths);
+    assert.deepStrictEqual(
+      timedSeededState,
+      controlSeededState,
+      "timed and control libraries differ before the stable run",
+    );
 
     const control = await runStable(controlPaths, corpus);
     const collector = createIndexTimingCollector();
@@ -133,12 +148,12 @@ async function main(): Promise<void> {
     assert.deepStrictEqual(timed.health, control.health, "timing changed index health");
     assert.deepStrictEqual(timed.queries, control.queries, "timing changed query results");
     assert.equal(control.health.ok, true, "control library health is not ready");
-    assertStableTransition(seededState, control.state);
-    assertStableTransition(seededState, timed.state);
+    assertStableTransition(controlSeededState, control.state);
+    assertStableTransition(timedSeededState, timed.state);
     assertRepresentativeQueries(control.queries);
     assertTimingOwnership(timing);
 
-    report = createOutput(timing);
+    report = createOutput(seedTiming, timing);
   } catch (error) {
     failure = error;
   } finally {
@@ -476,6 +491,17 @@ function assertStableTransition(before: SemanticState, after: SemanticState): vo
     "stable run bookkeeping is incorrect",
   );
   assert.deepStrictEqual(after.runItemRows, before.runItemRows, "stable run added failure items");
+
+  const priorLease = singleRow(before.writerLeaseRows, "prior writer lease");
+  const stableLease = singleRow(after.writerLeaseRows, "stable writer lease");
+  assert.equal(stableLease.generation, Number(priorLease.generation) + 1);
+  assert.equal(stableLease.clean_generation, stableLease.generation);
+  assert.equal(stableLease.clean_schema_cookie, priorLease.clean_schema_cookie);
+  assert.deepStrictEqual(
+    withoutKeys(stableLease, ["generation", "clean_generation"]),
+    withoutKeys(priorLease, ["generation", "clean_generation"]),
+    "stable run changed writer integrity state outside its clean generation",
+  );
 }
 
 function assertTimingOwnership(snapshot: IndexTimingSnapshot): void {
@@ -499,6 +525,27 @@ function assertTimingOwnership(snapshot: IndexTimingSnapshot): void {
   assert(snapshot.phases.total.elapsedMs > 0, "total timing did not advance");
 }
 
+function assertSeedTimingOwnership(snapshot: IndexTimingSnapshot): void {
+  const calls = Object.fromEntries(
+    Object.entries(snapshot.phases).map(([phase, aggregate]) => [phase, aggregate.calls]),
+  );
+  assert.deepStrictEqual(calls, {
+    sourceResolution: 0,
+    writerOpen: 1,
+    sourceProbe: 1,
+    sourceDiscovery: 1,
+    freshnessRead: CORPUS_SESSIONS,
+    unchangedWrite: 0,
+    changedReadAndNormalize: CORPUS_SESSIONS,
+    replacement: CORPUS_SESSIONS,
+    reconciliation: 1,
+    runBookkeeping: 2,
+    writerClose: 1,
+    total: 1,
+  });
+  assert(snapshot.phases.total.elapsedMs > 0, "seed total timing did not advance");
+}
+
 function readSemanticState(paths: IndexPaths): SemanticState {
   const database = openImmutableDatabase(paths.database);
   try {
@@ -507,6 +554,7 @@ function readSemanticState(paths: IndexPaths): SemanticState {
         ...rows(database, "SELECT * FROM sessions_schema_migrations ORDER BY version"),
         ...rows(database, "SELECT * FROM sessions_library ORDER BY singleton"),
       ],
+      writerLeaseRows: rows(database, "SELECT * FROM sessions_writer_lease ORDER BY singleton"),
       sourceRows: rows(
         database,
         "SELECT * FROM sessions_source_instances ORDER BY source_instance_id",
@@ -556,6 +604,12 @@ async function cloneDatabase(source: IndexPaths, target: IndexPaths): Promise<vo
   await mkdir(target.directory, { mode: 0o700 });
   await copyFile(source.database, target.database);
   await chmod(target.database, 0o600);
+}
+
+async function prepareCleanStableLibrary(paths: IndexPaths): Promise<void> {
+  const writer = await lifecycleAt(SEED_AT).openWriter(paths);
+  await writer.close();
+  await assertCleanDatabase(paths);
 }
 
 async function assertCleanDatabase(paths: IndexPaths): Promise<void> {
@@ -610,6 +664,11 @@ function withoutKeys(row: SqliteRow, keys: readonly string[]): SqliteRow {
   return Object.fromEntries(Object.entries(row).filter(([key]) => !omitted.has(key)));
 }
 
+function singleRow(rows: readonly SqliteRow[], label: string): SqliteRow {
+  assert.equal(rows.length, 1, `${label} is not singular`);
+  return rows[0]!;
+}
+
 function temporaryHome(): string {
   return process.platform === "win32" ? "C:\\sessions-measurement" : "/sessions-measurement";
 }
@@ -618,7 +677,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function createOutput(timing: IndexTimingSnapshot) {
+function createOutput(seedTiming: IndexTimingSnapshot, timing: IndexTimingSnapshot) {
   return {
     corpus: {
       sessions: CORPUS_SESSIONS,
@@ -630,12 +689,14 @@ function createOutput(timing: IndexTimingSnapshot) {
       reports: true,
       canonicalState: true,
       trackingAndRuns: true,
+      writerIntegrityState: true,
       health: true,
       pagedListSearchEntries: true,
       supportAndLineage: true,
       stableTransition: true,
       zeroStableSourceReads: true,
     },
+    seedTimings: seedTiming.phases,
     timings: timing.phases,
   };
 }

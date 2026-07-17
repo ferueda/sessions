@@ -28,6 +28,21 @@ export interface WriterLeaseIdentity {
   readonly token: string;
 }
 
+export interface WriterLeaseCleanClaim {
+  readonly generation: number;
+  readonly schemaCookie: number;
+}
+
+export interface IndexWriterLeaseAcquisition {
+  readonly lease: WriterLeaseIdentity;
+  readonly priorCleanEligible: boolean;
+}
+
+export interface WriterLeaseCleanSeal {
+  readonly generation: number;
+  readonly schemaCookie: number;
+}
+
 export type WriterLeaseHealth =
   | {
       readonly status: "free";
@@ -81,6 +96,24 @@ export function acquireWriterLeaseInTransaction(
   purpose: WriterLeasePurpose,
   options: AcquireWriterLeaseOptions,
 ): WriterLeaseIdentity {
+  return acquireWriterLeaseRow(database, purpose, options).lease;
+}
+
+/** Acquire index ownership and bind optional fast-path evidence to the prior row. */
+export function acquireIndexWriterLeaseInTransaction(
+  database: DatabaseSync,
+  options: AcquireWriterLeaseOptions,
+  cleanClaim?: WriterLeaseCleanClaim,
+): IndexWriterLeaseAcquisition {
+  return acquireWriterLeaseRow(database, "index", options, cleanClaim);
+}
+
+function acquireWriterLeaseRow(
+  database: DatabaseSync,
+  purpose: WriterLeasePurpose,
+  options: AcquireWriterLeaseOptions,
+  cleanClaim?: WriterLeaseCleanClaim,
+): IndexWriterLeaseAcquisition {
   if (!database.isTransaction) {
     throw new TypeError("Writer lease transaction must already be active");
   }
@@ -91,7 +124,15 @@ export function acquireWriterLeaseInTransaction(
   const expiresAt = expiryFrom(now.date);
 
   const current = readLeaseRow(database);
-  assertAcquirable(healthFromRow(current, now.timestamp), purpose);
+  const currentHealth = healthFromRow(current, now.timestamp);
+  assertAcquirable(currentHealth, purpose);
+  const priorCleanEligible =
+    purpose === "index" &&
+    currentHealth.status === "free" &&
+    cleanClaim !== undefined &&
+    current.generation === cleanClaim.generation &&
+    current.clean_generation === cleanClaim.generation &&
+    current.clean_schema_cookie === cleanClaim.schemaCookie;
 
   const generation = incrementGeneration(current.generation);
   const result = database
@@ -118,7 +159,10 @@ export function acquireWriterLeaseInTransaction(
     )
     .run(now.timestamp);
 
-  return { purpose, generation, token };
+  return {
+    lease: { purpose, generation, token },
+    priorCleanEligible,
+  };
 }
 
 /** Assert while the caller holds the surrounding write transaction. */
@@ -197,6 +241,53 @@ export function interruptOwnedRunsAndReleaseWriterLease(
   });
 }
 
+/** Seal one proven index generation and release only that exact live owner. */
+export function interruptOwnedRunsMarkCleanAndReleaseWriterLease(
+  database: DatabaseSync,
+  identity: WriterLeaseIdentity,
+  options: WriterLeaseOperationOptions,
+): WriterLeaseCleanSeal | undefined {
+  if (identity.purpose !== "index") {
+    throw new TypeError("Clean writer release requires index ownership");
+  }
+  const now = canonicalNow(options.now);
+  return runImmediateTransaction(database, () => {
+    const row = readLeaseRow(database);
+    assertLeaseClockDidNotMoveBackward(row, identity, now.timestamp);
+    if (!isCurrentLiveLease(row, identity, now.timestamp)) return undefined;
+
+    const schemaCookie = readSchemaCookie(database);
+    database
+      .prepare(
+        `UPDATE sessions_index_runs
+         SET status = 'interrupted',
+             finished_at = ?,
+             failure_code = 'interrupted'
+         WHERE status = 'active'`,
+      )
+      .run(now.timestamp);
+    const result = database
+      .prepare(
+        `UPDATE sessions_writer_lease
+         SET clean_generation = generation,
+             clean_schema_cookie = ?,
+             purpose = NULL,
+             owner_token = NULL,
+             acquired_at = NULL,
+             heartbeat_at = NULL,
+             expires_at = NULL
+         WHERE singleton = 1
+           AND generation = ?
+           AND purpose = 'index'
+           AND owner_token = ?
+           AND expires_at > ?`,
+      )
+      .run(schemaCookie, identity.generation, identity.token, now.timestamp);
+    if (result.changes !== 1) throw new SqliteWriterLeaseError("writer-lease-lost");
+    return { generation: identity.generation, schemaCookie };
+  });
+}
+
 export function readWriterLeaseHealth(
   database: DatabaseSync,
   options: WriterLeaseOperationOptions,
@@ -240,6 +331,8 @@ export function startWriterLeaseHeartbeat(
 
 interface LeaseRow {
   readonly generation: unknown;
+  readonly clean_generation: unknown;
+  readonly clean_schema_cookie: unknown;
   readonly purpose: unknown;
   readonly owner_token: unknown;
   readonly acquired_at: unknown;
@@ -250,7 +343,8 @@ interface LeaseRow {
 function readLeaseRow(database: DatabaseSync): NormalizedLeaseRow {
   const row = database
     .prepare(
-      `SELECT generation, purpose, owner_token, acquired_at, heartbeat_at, expires_at
+      `SELECT generation, clean_generation, clean_schema_cookie,
+              purpose, owner_token, acquired_at, heartbeat_at, expires_at
        FROM sessions_writer_lease
        WHERE singleton = 1`,
     )
@@ -258,6 +352,14 @@ function readLeaseRow(database: DatabaseSync): NormalizedLeaseRow {
   if (row === undefined) throw new SqliteWriterLeaseError("corrupt-data");
 
   const generation = integerAt(row.generation);
+  const cleanGeneration = nullableIntegerAt(row.clean_generation);
+  const cleanSchemaCookie = nullableIntegerAt(row.clean_schema_cookie);
+  if (
+    (cleanGeneration === null) !== (cleanSchemaCookie === null) ||
+    (cleanGeneration !== null && cleanGeneration > generation)
+  ) {
+    throw new SqliteWriterLeaseError("corrupt-data");
+  }
   const nullableValues = [
     row.purpose,
     row.owner_token,
@@ -268,6 +370,8 @@ function readLeaseRow(database: DatabaseSync): NormalizedLeaseRow {
   if (nullableValues.every((value) => value === null)) {
     return {
       generation,
+      clean_generation: cleanGeneration,
+      clean_schema_cookie: cleanSchemaCookie,
       purpose: null,
       owner_token: null,
       acquired_at: null,
@@ -293,6 +397,8 @@ function readLeaseRow(database: DatabaseSync): NormalizedLeaseRow {
   }
   return {
     generation,
+    clean_generation: cleanGeneration,
+    clean_schema_cookie: cleanSchemaCookie,
     purpose: row.purpose,
     owner_token: row.owner_token,
     acquired_at: row.acquired_at,
@@ -303,6 +409,8 @@ function readLeaseRow(database: DatabaseSync): NormalizedLeaseRow {
 
 interface NormalizedLeaseRow {
   readonly generation: number;
+  readonly clean_generation: number | null;
+  readonly clean_schema_cookie: number | null;
   readonly purpose: WriterLeasePurpose | null;
   readonly owner_token: string | null;
   readonly acquired_at: string | null;
@@ -450,6 +558,17 @@ function integerAt(value: unknown): number {
     throw new SqliteWriterLeaseError("corrupt-data");
   }
   return result;
+}
+
+function nullableIntegerAt(value: unknown): number | null {
+  return value === null ? null : integerAt(value);
+}
+
+function readSchemaCookie(database: DatabaseSync): number {
+  const row = database.prepare("PRAGMA schema_version").get() as
+    | { readonly schema_version?: unknown }
+    | undefined;
+  return integerAt(row?.schema_version);
 }
 
 function isPurpose(value: unknown): value is WriterLeasePurpose {

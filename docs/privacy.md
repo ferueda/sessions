@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: current behavior plus explicit later-V1 boundaries
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -47,8 +47,9 @@ Sessions resolves its durable application-data directory as follows:
 
 An absolute `SESSIONS_DATA_DIR` replaces the whole owned directory. The database
 is `sessions.sqlite3`, with known `sessions.sqlite3-wal` and
-`sessions.sqlite3-shm` sidecars. The only ephemeral workspace is the exact
-`.scratch` child. Sessions does not read, migrate, or delete the pre-public cache
+`sessions.sqlite3-shm` sidecars. The directory also owns one private writer-clean
+proof, recognized bounded proof residue, and the exact ephemeral `.scratch`
+workspace. Sessions does not read, migrate, or delete the pre-public cache
 database or legacy Harness JSONL cache.
 
 Pre-alpha builds recognize one current Sessions-owned database baseline. Earlier
@@ -78,11 +79,27 @@ canonical evidence and has no public command. `sessions data repair-orphans` is
 a separate public canonical-deletion operation for content that no retained
 occurrence reaches. It never rebuilds FTS or resolves a provider.
 
+Index-writer acquisition marks its lease generation dirty. A normal close may
+seal only that exact generation, then closes and hardens the database before
+publishing the private proof last. The proof contains only bounded library,
+generation, schema, and database-stat metadata—never transcript text, provider
+identity, local paths, content hashes, or lease tokens. Missing, malformed,
+unsafe, or stale proof only disables the clean-open optimization. Recovery,
+migration, maintenance, or failed cleanup uses full canonical, foreign-key, and
+FTS validation/repair.
+
+Doctor remains immutable and semantically compares retained FTS terms,
+positions, and docsize with a contentless TEMP index built from canonical text in
+memory. That transient derived index is not persisted. Direct SQLite edits
+outside Sessions are unsupported and are not guaranteed to be detected by every
+clean writer open.
+
 The persisted public-document digest is canonical state, not a rebuildable FTS
 projection. A missing, malformed, unknown-scheme, or mismatching digest makes the
 canonical library unhealthy and fails full document reads. FTS rebuild and
 orphan maintenance cannot repair it. The schema addition changes the one current
-pre-launch checksum, so an earlier development database follows the fresh data
+pre-launch checksum. The clean-writer fields change that baseline checksum again,
+so an earlier development database follows the fresh data
 directory/manual Sessions-owned-directory reset path above.
 
 ## Codex capture

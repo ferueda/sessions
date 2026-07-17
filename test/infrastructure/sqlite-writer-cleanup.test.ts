@@ -6,9 +6,21 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { openExistingSqliteWriterDatabase } from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  readWriterCleanProof,
+  writerCleanProofPaths,
+} from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
+import {
+  admittedReplacement,
+  identity,
+  minimalDocument,
+  observation,
+} from "../contracts/session-index.contract.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -43,12 +55,125 @@ describe("SQLite writer cleanup", () => {
     const database = new DatabaseSync(paths.database, { readOnly: true });
     try {
       expect(readWriterLeaseHealth(database, { now })).toEqual({ status: "free", generation: 1 });
+      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: null,
+        clean_schema_cookie: null,
+      });
     } finally {
       database.close();
     }
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
     await expect(lstat(paths.scratch)).resolves.toMatchObject({ isFile: expect.any(Function) });
   });
+
+  test("does not publish clean proof after a repository write failure", async () => {
+    const paths = await fixturePaths();
+    const now = () => new Date("2026-07-14T13:00:00.000Z");
+    const writer = await createSqliteIndexLifecycle({
+      now,
+      writerToken: () => "failed-write-owner",
+    }).openWriter(paths);
+    const sessionIdentity = identity("failed-write-profile", "failed-write-session");
+    const run = await writer.sessions.startRun({
+      source: sessionIdentity.source,
+      startedAt: "2026-07-14T13:00:00.000Z",
+    });
+    writer.database.exec(`CREATE TRIGGER test_fail_canonical_insert
+                          BEFORE INSERT ON sessions_canonical_sessions
+                          BEGIN
+                            SELECT RAISE(ABORT, 'synthetic write failure');
+                          END`);
+
+    await expect(
+      writer.sessions.replaceSession(
+        run,
+        admittedReplacement(
+          observation(sessionIdentity, "failed-write-revision"),
+          minimalDocument(sessionIdentity),
+        ),
+      ),
+    ).rejects.toThrow("synthetic write failure");
+    await writer.close();
+
+    const database = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: null,
+        clean_schema_cookie: null,
+        purpose: null,
+      });
+    } finally {
+      database.close();
+    }
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
+  });
+
+  test("a proof publication failure forces the next writer through full repair", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const writer = await lifecycle.openWriter(paths);
+    const canonicalText = "canonical publication alpha";
+    const contentHash = hashContent(canonicalText);
+    const row = writer.database
+      .prepare(
+        `INSERT INTO sessions_content_values (digest, text)
+         VALUES (?, ?)
+         RETURNING content_id`,
+      )
+      .get(encodeSqliteContentDigest(contentHash.digest), canonicalText) as {
+      readonly content_id: number | bigint;
+    };
+    const proofPath = writerCleanProofPaths(paths.database).proof;
+    await mkdir(proofPath, { mode: 0o700 });
+
+    await expect(writer.close()).rejects.toMatchObject({ code: "publication-failed" });
+    const afterFailure = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(afterFailure.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: 1,
+        purpose: null,
+      });
+    } finally {
+      afterFailure.close();
+    }
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
+    await rm(proofPath, { force: true, recursive: true });
+
+    const damaged = new DatabaseSync(paths.database);
+    try {
+      damaged
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(row.content_id, canonicalText);
+      damaged
+        .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+        .run(row.content_id, "poison publication beta");
+    } finally {
+      damaged.close();
+    }
+
+    const repairingWriter = await lifecycle.openWriter(paths);
+    expect(ftsMatchCount(repairingWriter.database, "alpha")).toBe(1);
+    expect(ftsMatchCount(repairingWriter.database, "beta")).toBe(0);
+    await repairingWriter.close();
+  });
 });
+
+function ftsMatchCount(database: DatabaseSync, text: string): number {
+  const row = database
+    .prepare(
+      `SELECT count(*) AS count
+       FROM sessions_content_fts
+       WHERE sessions_content_fts MATCH ?`,
+    )
+    .get(text) as { readonly count: number };
+  return row.count;
+}
 
 async function fixturePaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-writer-cleanup-"));

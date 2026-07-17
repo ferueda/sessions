@@ -9,8 +9,9 @@ never writes to the provider.
 ## Flow
 
 1. Validate and sort the selected source instances before opening the library.
-2. Acquire the single index writer lease and start one run per source. Starting
-   a run changes that source's coverage to `unknown`.
+2. Acquire the single index writer lease, which makes the new generation dirty,
+   and start one run per source. Starting a run changes that source's coverage
+   to `unknown`.
 3. Probe the source, then exhaust and validate discovery before applying any
    candidate. Conflicting duplicates or any invalid discovery item make the
    whole discovery set incomplete.
@@ -29,6 +30,9 @@ never writes to the provider.
    absent from that exact source instance as `missing`. This includes a failed
    first capture that has tracking evidence but no canonical document. Finish
    the run with `complete` coverage.
+8. After all index work and cleanup succeeds, seal and release only the exact
+   owned generation, close the database, harden its files, and publish the
+   private post-close proof last.
 
 ## Guarantees and failures
 
@@ -52,6 +56,16 @@ never writes to the provider.
   current without a new transcript read.
 - Source kind, source instance, and native ID form the tracking boundary. The
   writer lease prevents concurrent maintenance or indexing writes.
+- A matching clean lease generation and stat-bound post-close proof allow the
+  next ready, sidecar-free, current-schema open to use constant-size schema/FTS
+  structure checks. Missing, stale, malformed, or unsafe proof disables only
+  this optimization.
+- Recovery, migration, maintenance, abandoned work, or failed cleanup keeps the
+  generation dirty and uses the existing full canonical, foreign-key, and FTS
+  validation/repair path.
+- Changed documents are reconstructed and digest-checked after replacement;
+  affected canonical content IDs must match their FTS rows. Direct out-of-band
+  SQLite edits are unsupported.
 
 List, search, and entries report a page-level capture scope built from this
 tracking state. Doctor reports the same global aggregate. Capture scope describes
@@ -87,12 +101,12 @@ paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
 clock, collection, and stderr failures are best-effort and cannot replace the
 underlying command result.
 
-The accepted baseline selected writer open as the next owner. A fixed synthetic
-2,000-session stable run spent 282.069 of 532.902 ms there. An authorized real
-Codex 120-session stable run spent 3,177.450 of 3,553.177 ms there, while all
-freshness reads and unchanged writes used 14.935 ms. Exact semantic and selected
-provider-evidence checks passed. These local measurements guide architecture;
-they are not release budgets or public guarantees.
+The accepted baseline selected writer open as the measured owner. After the
+clean-generation fast path, a fixed synthetic 2,000-session exact-equality run
+used 2.767 ms for writer open and 264.666 ms total. An authorized read-only real
+Codex 120-session exact-cohort run used 3.262 ms and 366.055 ms, with zero
+changed reads. Both local budgets passed. These measurements are implementation
+evidence, not public performance guarantees.
 
 ## Code and proofs
 
@@ -102,6 +116,10 @@ they are not release budgets or public guarantees.
   `src/application/read-session-document.ts`
 - Durable writes: `src/infrastructure/sqlite/sqlite-session-index.ts`,
   `src/infrastructure/sqlite/database.ts`
+- Clean state: `src/infrastructure/sqlite/writer-lease.ts`,
+  `src/infrastructure/sqlite/writer-clean-proof.ts`
+- FTS structure, repair, and semantic doctor proof:
+  `src/infrastructure/sqlite/fts-projection.ts`
 - Timing aggregation: `src/infrastructure/runtime/index-timings.ts`
 - Tests: `test/application/run-index.sqlite.test.ts`,
   `test/application/discover-sessions.test.ts`,

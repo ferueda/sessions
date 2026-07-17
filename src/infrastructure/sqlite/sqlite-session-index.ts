@@ -7,10 +7,14 @@ import {
   type SessionIndexRun,
   type SessionIndexWriter,
 } from "../../application/ports/session-index.ts";
-import type { SessionObservation } from "../../application/validate-session.ts";
+import type {
+  SessionObservation,
+  ValidatedSessionReplacement,
+} from "../../application/validate-session.ts";
 import { sameSessionDocumentDigest } from "../../domain/public-session-document.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity, SourceInstance } from "../../domain/session.ts";
+import { assertFtsProjectionContentParityForIds } from "./fts-projection.ts";
 import {
   readCanonicalDocument,
   readCanonicalDocumentRecord,
@@ -88,6 +92,7 @@ export function createSqliteSessionIndexReader(database: DatabaseSync): SessionI
 export interface CoordinatedSqliteSessionIndexOptions {
   readonly lease: WriterLeaseIdentity;
   readonly now: () => Date;
+  readonly onIntegrityUncertain?: () => void;
 }
 
 export function createCoordinatedSqliteSessionIndex(
@@ -99,8 +104,23 @@ export function createCoordinatedSqliteSessionIndex(
   }
   const reader = createSqliteSessionIndexReader(database);
   const assertLease = (): void => assertWriterLease(database, options.lease, options);
-  const runLeasedReplacement = <T>(operation: () => T): T =>
-    runLeasedImmediateTransaction(database, options.lease, options, operation);
+  const markIntegrityUncertain = (): void => options.onIntegrityUncertain?.();
+  const runTrackedImmediateTransaction = <T>(operation: () => T): T => {
+    try {
+      return runImmediateTransaction(database, operation);
+    } catch (error) {
+      markIntegrityUncertain();
+      throw error;
+    }
+  };
+  const runLeasedReplacement = <T>(operation: () => T): T => {
+    try {
+      return runLeasedImmediateTransaction(database, options.lease, options, operation);
+    } catch (error) {
+      markIntegrityUncertain();
+      throw error;
+    }
+  };
   const index: SessionIndexWriter = {
     ...reader,
 
@@ -112,16 +132,18 @@ export function createCoordinatedSqliteSessionIndex(
     async startRun(input) {
       assertSource(input.source);
       assertCanonicalTimestamp(input.startedAt, "Index run start");
-      return runImmediateTransaction(database, () => {
+      return runTrackedImmediateTransaction(() => {
         assertLease();
         const sourceInstanceId = ensureSourceInstance(database, input.source);
-        database
-          .prepare(
-            `UPDATE sessions_source_instances
+        assertSingleRowChange(
+          database
+            .prepare(
+              `UPDATE sessions_source_instances
              SET coverage_status = 'unknown', coverage_observed_at = ?
              WHERE source_instance_id = ?`,
-          )
-          .run(input.startedAt, sourceInstanceId);
+            )
+            .run(input.startedAt, sourceInstanceId),
+        );
         const row = database
           .prepare(
             `INSERT INTO sessions_index_runs (source_instance_id, status, started_at)
@@ -139,7 +161,7 @@ export function createCoordinatedSqliteSessionIndex(
 
     async recordUnchanged(run, observation) {
       assertIdentity(observation.identity);
-      runImmediateTransaction(database, () => {
+      runTrackedImmediateTransaction(() => {
         assertLease();
         const context = assertActiveRun(database, run, observation.identity.source);
         const tracking = findSessionTracking(database, observation.identity);
@@ -166,7 +188,7 @@ export function createCoordinatedSqliteSessionIndex(
     async recordFailure(run, observation, failure) {
       assertIdentity(observation.identity);
       assertFailureCode(failure);
-      runImmediateTransaction(database, () => {
+      runTrackedImmediateTransaction(() => {
         assertLease();
         recordFailure(database, run, observation, failure);
       });
@@ -187,12 +209,13 @@ export function createCoordinatedSqliteSessionIndex(
             null,
             run.startedAt,
           );
-          replaceCanonicalDocument(
+          const affectedContentIds = replaceCanonicalDocument(
             database,
             sessionId,
             replacement.document,
             replacement.documentDigest,
           );
+          assertReplacementIntegrity(database, sessionId, replacement, affectedContentIds);
           updateSuccessfulRevision(database, sessionId, replacement.observation, run.startedAt);
           incrementRun(database, context.runId, "indexed");
         });
@@ -215,7 +238,7 @@ export function createCoordinatedSqliteSessionIndex(
 
     async recordMissing(run, identity) {
       assertIdentity(identity);
-      runImmediateTransaction(database, () => {
+      runTrackedImmediateTransaction(() => {
         assertLease();
         const context = assertActiveRun(database, run, identity.source);
         const tracking = findSessionTracking(database, identity);
@@ -226,14 +249,16 @@ export function createCoordinatedSqliteSessionIndex(
           return;
         }
         const sessionId = integerAt(tracking.session_id);
-        database
-          .prepare(
-            `UPDATE sessions_session_tracking
+        assertSingleRowChange(
+          database
+            .prepare(
+              `UPDATE sessions_session_tracking
              SET presence_status = 'missing',
                  presence_observed_at = ?
              WHERE session_id = ?`,
-          )
-          .run(run.startedAt, sessionId);
+            )
+            .run(run.startedAt, sessionId),
+        );
         incrementRun(database, context.runId, "missing");
         addRunItem(database, context.runId, sessionId, "missing", null);
       });
@@ -244,17 +269,19 @@ export function createCoordinatedSqliteSessionIndex(
       if (completion.status === "incomplete" && !RUN_FAILURE_CODES.has(completion.failure)) {
         throw new TypeError("Invalid index run failure code");
       }
-      return runImmediateTransaction(database, () => {
+      return runTrackedImmediateTransaction(() => {
         assertLease();
         const context = assertActiveRun(database, run);
         if (completion.status === "completed") {
-          database
-            .prepare(
-              `UPDATE sessions_source_instances
+          assertSingleRowChange(
+            database
+              .prepare(
+                `UPDATE sessions_source_instances
                SET coverage_status = 'complete'
                WHERE source_instance_id = ?`,
-            )
-            .run(context.sourceInstanceId);
+              )
+              .run(context.sourceInstanceId),
+          );
         }
         const result = readImmutableIndexRunResult(database, context.runId, run, completion);
         const status =
@@ -263,18 +290,20 @@ export function createCoordinatedSqliteSessionIndex(
             : completion.failure === "interrupted"
               ? "interrupted"
               : "failed";
-        database
-          .prepare(
-            `UPDATE sessions_index_runs
+        assertSingleRowChange(
+          database
+            .prepare(
+              `UPDATE sessions_index_runs
              SET status = ?, finished_at = ?, failure_code = ?
              WHERE run_id = ?`,
-          )
-          .run(
-            status,
-            completion.finishedAt,
-            completion.status === "completed" ? null : completion.failure,
-            context.runId,
-          );
+            )
+            .run(
+              status,
+              completion.finishedAt,
+              completion.status === "completed" ? null : completion.failure,
+              context.runId,
+            ),
+        );
         pruneFinishedRuns(database, context.sourceInstanceId);
         return result;
       });
@@ -286,6 +315,26 @@ export function createCoordinatedSqliteSessionIndex(
 interface RunContext {
   readonly runId: number;
   readonly sourceInstanceId: number;
+}
+
+function assertReplacementIntegrity(
+  database: DatabaseSync,
+  sessionId: number,
+  replacement: ValidatedSessionReplacement,
+  affectedContentIds: readonly bigint[],
+): void {
+  const record = readCanonicalDocumentRecord(database, replacement.observation.identity, sessionId);
+  if (
+    record === undefined ||
+    !sameSessionDocumentDigest(record.documentDigest, replacement.documentDigest)
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  try {
+    assertFtsProjectionContentParityForIds(database, affectedContentIds);
+  } catch (error) {
+    throw new SqliteSessionIndexError("corrupt-data", { cause: error });
+  }
 }
 
 function listTrackedIdentities(
@@ -396,9 +445,10 @@ function ensureTracking(
   observedAt: string,
 ): number {
   const revision = observation.revision;
-  database
-    .prepare(
-      `INSERT INTO sessions_session_tracking (
+  assertSingleRowChange(
+    database
+      .prepare(
+        `INSERT INTO sessions_session_tracking (
          source_instance_id,
          native_id,
          latest_fingerprint_scheme,
@@ -419,18 +469,19 @@ function ensureTracking(
          presence_status = 'present',
          presence_observed_at = excluded.presence_observed_at,
          last_seen_at = excluded.last_seen_at`,
-    )
-    .run(
-      context.sourceInstanceId,
-      observation.identity.nativeId,
-      revision.aggregateFingerprint.scheme,
-      revision.aggregateFingerprint.digest,
-      revision.adapterVersion,
-      outcome,
-      failure,
-      observedAt,
-      observedAt,
-    );
+      )
+      .run(
+        context.sourceInstanceId,
+        observation.identity.nativeId,
+        revision.aggregateFingerprint.scheme,
+        revision.aggregateFingerprint.digest,
+        revision.adapterVersion,
+        outcome,
+        failure,
+        observedAt,
+        observedAt,
+      ),
+  );
   const tracking = findSessionTracking(database, observation.identity);
   if (
     tracking === undefined ||
@@ -450,9 +501,10 @@ function updateLatest(
   observedAt: string,
 ): void {
   const revision = observation.revision;
-  database
-    .prepare(
-      `UPDATE sessions_session_tracking
+  assertSingleRowChange(
+    database
+      .prepare(
+        `UPDATE sessions_session_tracking
        SET latest_fingerprint_scheme = ?,
            latest_fingerprint_digest = ?,
            latest_adapter_version = ?,
@@ -462,17 +514,18 @@ function updateLatest(
            presence_observed_at = ?,
            last_seen_at = ?
        WHERE session_id = ?`,
-    )
-    .run(
-      revision.aggregateFingerprint.scheme,
-      revision.aggregateFingerprint.digest,
-      revision.adapterVersion,
-      outcome,
-      failure,
-      observedAt,
-      observedAt,
-      sessionId,
-    );
+      )
+      .run(
+        revision.aggregateFingerprint.scheme,
+        revision.aggregateFingerprint.digest,
+        revision.adapterVersion,
+        outcome,
+        failure,
+        observedAt,
+        observedAt,
+        sessionId,
+      ),
+  );
 }
 
 function updateSuccessfulRevision(
@@ -482,9 +535,10 @@ function updateSuccessfulRevision(
   observedAt: string,
 ): void {
   const revision = observation.revision;
-  database
-    .prepare(
-      `UPDATE sessions_session_tracking
+  assertSingleRowChange(
+    database
+      .prepare(
+        `UPDATE sessions_session_tracking
        SET last_good_fingerprint_scheme = ?,
            last_good_fingerprint_digest = ?,
            last_good_adapter_version = ?,
@@ -498,19 +552,20 @@ function updateSuccessfulRevision(
            captured_at = ?,
            last_seen_at = ?
        WHERE session_id = ?`,
-    )
-    .run(
-      revision.aggregateFingerprint.scheme,
-      revision.aggregateFingerprint.digest,
-      revision.adapterVersion,
-      revision.aggregateFingerprint.scheme,
-      revision.aggregateFingerprint.digest,
-      revision.adapterVersion,
-      observedAt,
-      observedAt,
-      observedAt,
-      sessionId,
-    );
+      )
+      .run(
+        revision.aggregateFingerprint.scheme,
+        revision.aggregateFingerprint.digest,
+        revision.adapterVersion,
+        revision.aggregateFingerprint.scheme,
+        revision.aggregateFingerprint.digest,
+        revision.adapterVersion,
+        observedAt,
+        observedAt,
+        observedAt,
+        sessionId,
+      ),
+  );
 }
 
 function incrementRun(
@@ -526,15 +581,17 @@ function incrementRun(
     missing: "missing_count",
   } as const;
   const discovered = outcome === "missing" ? 0 : 1;
-  database
-    .prepare(
-      `UPDATE sessions_index_runs
+  assertSingleRowChange(
+    database
+      .prepare(
+        `UPDATE sessions_index_runs
      SET discovered_count = discovered_count + ${discovered},
          ${columns[outcome]} = ${columns[outcome]} + 1,
          stale_count = stale_count + ${stale ? 1 : 0}
      WHERE run_id = ? AND status = 'active'`,
-    )
-    .run(runId);
+      )
+      .run(runId),
+  );
 }
 
 function addRunItem(
@@ -553,13 +610,15 @@ function addRunItem(
     .get(runId) as { readonly count?: unknown; readonly maximum?: unknown } | undefined;
   const count = integerAt(row?.count);
   if (count >= 100) {
-    database
-      .prepare(
-        `UPDATE sessions_index_runs
+    assertSingleRowChange(
+      database
+        .prepare(
+          `UPDATE sessions_index_runs
          SET omitted_item_count = omitted_item_count + 1
          WHERE run_id = ?`,
-      )
-      .run(runId);
+        )
+        .run(runId),
+    );
     return;
   }
   const maximum = signedIntegerAt(row?.maximum);
@@ -641,6 +700,12 @@ function signedIntegerAt(value: unknown): number {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   return result;
+}
+
+function assertSingleRowChange(result: { readonly changes: number | bigint }): void {
+  if (result.changes !== 1 && result.changes !== 1n) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
 }
 
 interface RunRow {

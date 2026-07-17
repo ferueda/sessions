@@ -11,7 +11,8 @@ import {
 } from "./migrations.ts";
 import { runImmediateTransaction } from "./sqlite-session-transaction.ts";
 import {
-  acquireWriterLease,
+  acquireIndexWriterLeaseInTransaction,
+  acquireWriterLeaseInTransaction,
   assertWriterLease,
   type WriterLeaseIdentity,
   type WriterLeasePurpose,
@@ -23,11 +24,20 @@ const MIGRATION_TABLE = "sessions_schema_migrations";
 export interface WriterSchemaOptions {
   readonly now: () => Date;
   readonly token?: () => string;
+  readonly cleanClaim?: WriterSchemaCleanClaim;
+}
+
+export interface WriterSchemaCleanClaim {
+  readonly generation: number;
+  readonly schemaCookie: number;
+  readonly schemaVersion: number;
+  readonly libraryInstanceId: string;
 }
 
 export interface AcquiredWriterSchema {
   readonly history: MigrationHistory;
   readonly lease: WriterLeaseIdentity;
+  readonly fastPathEligible: boolean;
 }
 
 export function validateWriterSchemaCatalog(migrations: readonly SqliteMigration[]): void {
@@ -62,8 +72,32 @@ export function acquireWriterSchema(
     throw new MigrationHistoryError("invalid-history", history.currentVersion);
   }
 
-  const lease = acquireWriterLease(database, purpose, options);
-  return { history: readMigrationHistory(database, migrations), lease };
+  return runImmediateTransaction(database, () => {
+    const lockedHistory = readMigrationHistory(database, migrations);
+    const claim =
+      purpose === "index" && cleanClaimMatches(database, lockedHistory, options.cleanClaim)
+        ? options.cleanClaim
+        : undefined;
+    if (purpose === "index") {
+      const acquired = acquireIndexWriterLeaseInTransaction(
+        database,
+        options,
+        claim === undefined
+          ? undefined
+          : { generation: claim.generation, schemaCookie: claim.schemaCookie },
+      );
+      return {
+        history: lockedHistory,
+        lease: acquired.lease,
+        fastPathEligible: acquired.priorCleanEligible,
+      };
+    }
+    return {
+      history: lockedHistory,
+      lease: acquireWriterLeaseInTransaction(database, purpose, options),
+      fastPathEligible: false,
+    };
+  });
 }
 
 /** Apply future released migrations only while the writer lease remains live. */
@@ -121,4 +155,34 @@ function canonicalTimestamp(now: () => Date): string {
     throw new TypeError("Writer schema clock must return a valid Date");
   }
   return date.toISOString();
+}
+
+function cleanClaimMatches(
+  database: DatabaseSync,
+  history: MigrationHistory,
+  claim: WriterSchemaCleanClaim | undefined,
+): boolean {
+  if (
+    claim === undefined ||
+    history.pending.length !== 0 ||
+    claim.schemaVersion !== history.currentVersion ||
+    claim.schemaCookie !== readSchemaCookie(database)
+  ) {
+    return false;
+  }
+  const row = database
+    .prepare("SELECT instance_id FROM sessions_library WHERE singleton = 1")
+    .get() as { readonly instance_id?: unknown } | undefined;
+  return row?.instance_id === claim.libraryInstanceId;
+}
+
+function readSchemaCookie(database: DatabaseSync): number {
+  const row = database.prepare("PRAGMA schema_version").get() as
+    | { readonly schema_version?: unknown }
+    | undefined;
+  const value = row?.schema_version;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new MigrationHistoryError("invalid-history", null);
+  }
+  return value;
 }

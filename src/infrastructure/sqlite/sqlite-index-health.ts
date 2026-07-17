@@ -20,7 +20,11 @@ import { inspectSqlitePageReclamation } from "./sqlite-page-reclamation.ts";
 import { readCanonicalDocument } from "./sqlite-session-document.ts";
 import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
-import { ftsProjectionContentIsValid, ftsProjectionStructureIsValid } from "./fts-projection.ts";
+import {
+  ftsProjectionContentIsValid,
+  ftsProjectionSemanticContentIsValidReadOnly,
+  ftsProjectionStructureIsValid,
+} from "./fts-projection.ts";
 import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
@@ -67,7 +71,12 @@ function inspectDatabaseHealth(
   const foreignKeys = check(() => foreignKeysAreValid(database));
   const contentReachability = inspectContentReachability(database);
   const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
-  const ftsContent = check(() => ftsProjectionContentIsValid(database));
+  const ftsContent = check(
+    () =>
+      ftsStructure === "ok" &&
+      ftsProjectionContentIsValid(database) &&
+      ftsProjectionSemanticContentIsValidReadOnly(database),
+  );
   const ftsSecureDelete = inspectFtsSecureDeleteHealth(database, fts5SecureDeleteRequired);
   const pageReclamation = inspectSqlitePageReclamation(database);
   const ftsRemediation =

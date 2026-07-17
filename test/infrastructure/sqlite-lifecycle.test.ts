@@ -42,6 +42,16 @@ import {
   configureSqliteWriterDatabase,
   openSqliteWriterDatabase,
 } from "../../src/infrastructure/sqlite/sqlite-writer-database.ts";
+import {
+  readWriterCleanProof,
+  writerCleanProofPaths,
+} from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
+import {
+  admittedReplacement,
+  completeDocument,
+  identity,
+  observation,
+} from "../contracts/session-index.contract.ts";
 
 const PRIOR_DOCUMENT_DIGEST_BOOTSTRAP_CHECKSUM =
   "sha256-utf8-v1:9e2233fa22b3dc8f999252985e3a65a036198d773ac4ebe6d787fd45ddbc2e5e";
@@ -115,6 +125,13 @@ describe("SQLite index lifecycle", () => {
       expect(firstHistory[index]?.checksum).toMatch(/^sha256-utf8-v1:[a-f0-9]{64}$/u);
     }
     await firstWriter.close();
+    const firstProof = await readWriterCleanProof(paths.database);
+    expect(firstProof).toMatchObject({
+      version: 1,
+      writerGeneration: 1,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      schemaCookie: expect.any(Number),
+    });
 
     const secondWriter = await lifecycle.openWriter(paths);
     expect(secondWriter.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
@@ -123,11 +140,102 @@ describe("SQLite index lifecycle", () => {
         .prepare("SELECT version, name, checksum, applied_at FROM sessions_schema_migrations")
         .all(),
     ).toEqual(firstHistory);
+    expect(
+      secondWriter.database.prepare("SELECT * FROM sessions_writer_lease").get(),
+    ).toMatchObject({
+      generation: 2,
+      clean_generation: 1,
+      clean_schema_cookie: firstProof?.schemaCookie,
+      purpose: "index",
+    });
     await secondWriter.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: 2,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      schemaCookie: firstProof?.schemaCookie,
+    });
     await expect(lifecycle.inspect(paths)).resolves.toMatchObject({
       status: "ready",
       schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
+  });
+
+  test("consumes clean proof before temporary-residue cleanup can fail", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const firstWriter = await lifecycle.openWriter(paths);
+    const sessionIdentity = identity("proof-failure-profile", "proof-failure-session");
+    const run = await firstWriter.sessions.startRun({
+      source: sessionIdentity.source,
+      startedAt: "2026-07-16T12:00:00.000Z",
+    });
+    await firstWriter.sessions.replaceSession(
+      run,
+      admittedReplacement(
+        observation(sessionIdentity, "proof-failure-revision"),
+        completeDocument(sessionIdentity),
+      ),
+    );
+    await firstWriter.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: 1,
+    });
+
+    const residue = `${writerCleanProofPaths(paths.database).temporaryPrefix}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`;
+    await mkdir(residue, { mode: 0o700 });
+    await expect(lifecycle.openWriter(paths)).rejects.toMatchObject({ code: "cleanup-failed" });
+
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
+    const afterFailure = openReadOnly(paths.database);
+    try {
+      expect(afterFailure.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        clean_generation: 1,
+        purpose: null,
+      });
+    } finally {
+      afterFailure.close();
+    }
+    await rm(residue, { force: true, recursive: true });
+
+    mutateDatabase(paths.database, (database) => {
+      const occurrence = database
+        .prepare(
+          `SELECT session_id, entry_ordinal, segment_ordinal
+           FROM sessions_content_occurrences
+           WHERE content_id IS NOT NULL
+           ORDER BY session_id, entry_ordinal, segment_ordinal
+           LIMIT 1`,
+        )
+        .get() as
+        | {
+            readonly session_id: number | bigint;
+            readonly entry_ordinal: number | bigint;
+            readonly segment_ordinal: number | bigint;
+          }
+        | undefined;
+      if (occurrence === undefined) throw new Error("Expected indexed content occurrence");
+      const inserted = database
+        .prepare("INSERT INTO sessions_content_values (digest, text) VALUES (?, ?)")
+        .run(Buffer.alloc(32, 0x7f), "canonical content with a mismatched digest");
+      database
+        .prepare(
+          `UPDATE sessions_content_occurrences
+           SET content_id = ?
+           WHERE session_id = ? AND entry_ordinal = ? AND segment_ordinal = ?`,
+        )
+        .run(
+          inserted.lastInsertRowid,
+          occurrence.session_id,
+          occurrence.entry_ordinal,
+          occurrence.segment_ordinal,
+        );
+    });
+
+    await expect(lifecycle.openWriter(paths)).rejects.toThrow(
+      "SQLite FTS projection recovery failed: canonical-corrupt",
+    );
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
   });
 
   test("applies a contiguous catalog in order", async () => {
@@ -524,6 +632,7 @@ process.exit(0);`,
         { code: "ERR_INVALID_STATE", message: "database is not open" },
       ]);
       expect((await stat(paths.database)).mode & 0o777).toBe(0o600);
+      await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
       await expect(writer.close()).resolves.toBeUndefined();
     },
   );
@@ -544,6 +653,7 @@ process.exit(0);`,
       { code: "ERR_INVALID_STATE", message: "database is not open" },
       { code: "ENOENT" },
     ]);
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
   });
 
   test.skipIf(process.platform === "win32")(

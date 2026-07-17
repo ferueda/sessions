@@ -1,0 +1,155 @@
+import { DatabaseSync } from "node:sqlite";
+
+import { describe, expect, test } from "vitest";
+
+import {
+  assertFtsProjectionContentParityForIds,
+  FTS_PROJECTION_SCHEMA_SQL,
+  ftsProjectionSemanticContentIsValidReadOnly,
+} from "../../src/infrastructure/sqlite/fts-projection.ts";
+
+const ABOVE_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
+
+describe("SQLite FTS projection invariants", () => {
+  test("compares complete semantic content across signed-ID keyset windows and cleans TEMP state", () => {
+    const database = createProjectionDatabase();
+    try {
+      const insert = database.prepare(
+        "INSERT INTO sessions_content_values (content_id, text) VALUES (?, ?)",
+      );
+      insert.run(-1n, "negative common evidence");
+      insert.run(0n, "zero common evidence");
+      for (let id = 1n; id <= 510n; id += 1n) {
+        insert.run(id, id === 510n ? "!!!" : `common evidence token${id}`);
+      }
+      insert.run(ABOVE_SAFE_INTEGER, "outside safe integer");
+      insert.run(SQLITE_INTEGER_MAX, "signed integer maximum");
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(true);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+      expect(database.prepare("PRAGMA temp_store").get()).toEqual({ temp_store: 2 });
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(true);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "wrong terms with the same token count",
+      canonical: "alpha beta alpha",
+      indexed: "alpha poison alpha",
+    },
+    {
+      name: "the same terms at different offsets",
+      canonical: "alpha beta gamma",
+      indexed: "alpha gamma beta",
+    },
+    {
+      name: "an unexpected term for zero-token canonical text",
+      canonical: "!!!",
+      indexed: "unexpected",
+    },
+  ])("detects $name", ({ canonical, indexed }) => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, ABOVE_SAFE_INTEGER, canonical);
+      replaceIndexedText(database, ABOVE_SAFE_INTEGER, canonical, indexed);
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("asserts affected canonical and FTS presence for full signed IDs", () => {
+    const database = createProjectionDatabase();
+    try {
+      const ids = [-1n, 0n, ABOVE_SAFE_INTEGER, SQLITE_INTEGER_MAX] as const;
+      for (const id of ids) insertContent(database, id, `content ${id}`);
+
+      expect(() => assertFtsProjectionContentParityForIds(database, ids)).not.toThrow();
+
+      database.prepare("DELETE FROM sessions_content_values WHERE content_id = ?").run(-1n);
+      expect(() => assertFtsProjectionContentParityForIds(database, [-1n])).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rejects missing, extra, and malformed affected content parity", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, ABOVE_SAFE_INTEGER, "canonical evidence");
+      database
+        .prepare(
+          `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+           VALUES ('delete', ?, ?)`,
+        )
+        .run(ABOVE_SAFE_INTEGER, "canonical evidence");
+      expect(() => assertFtsProjectionContentParityForIds(database, [ABOVE_SAFE_INTEGER])).toThrow(
+        /canonical content and FTS projection disagree/u,
+      );
+
+      database
+        .prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)")
+        .run(SQLITE_INTEGER_MAX, "projection only");
+      expect(() => assertFtsProjectionContentParityForIds(database, [SQLITE_INTEGER_MAX])).toThrow(
+        /canonical content and FTS projection disagree/u,
+      );
+
+      expect(() =>
+        assertFtsProjectionContentParityForIds(database, [0 as unknown as bigint]),
+      ).toThrow(/content ID is malformed/u);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+function createProjectionDatabase(): DatabaseSync {
+  const database = new DatabaseSync(":memory:");
+  database.exec(`CREATE TABLE sessions_content_values (
+  content_id INTEGER PRIMARY KEY,
+  text TEXT NOT NULL COLLATE BINARY
+) STRICT;
+
+${FTS_PROJECTION_SCHEMA_SQL};`);
+  return database;
+}
+
+function insertContent(database: DatabaseSync, id: bigint, text: string): void {
+  database
+    .prepare("INSERT INTO sessions_content_values (content_id, text) VALUES (?, ?)")
+    .run(id, text);
+}
+
+function replaceIndexedText(
+  database: DatabaseSync,
+  id: bigint,
+  canonical: string,
+  indexed: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO sessions_content_fts (sessions_content_fts, rowid, text)
+       VALUES ('delete', ?, ?)`,
+    )
+    .run(id, canonical);
+  database.prepare("INSERT INTO sessions_content_fts (rowid, text) VALUES (?, ?)").run(id, indexed);
+}
+
+function readDoctorTempObjects(database: DatabaseSync): readonly Record<string, unknown>[] {
+  return database
+    .prepare(
+      `SELECT name, type
+       FROM temp.sqlite_schema
+       WHERE name LIKE 'sessions_doctor_%'
+       ORDER BY name`,
+    )
+    .all();
+}

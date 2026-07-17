@@ -275,11 +275,25 @@ CREATE TABLE sessions_index_run_items (
 CREATE TABLE sessions_writer_lease (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   generation INTEGER NOT NULL CHECK (generation >= 0),
+  clean_generation INTEGER CHECK (clean_generation >= 0),
+  clean_schema_cookie INTEGER CHECK (clean_schema_cookie >= 0),
   purpose TEXT CHECK (purpose IN ('index', 'forget', 'repair', 'clear', 'compact')),
   owner_token TEXT CHECK (owner_token <> ''),
   acquired_at TEXT,
   heartbeat_at TEXT,
   expires_at TEXT,
+  CHECK (
+    (
+      clean_generation IS NULL
+      AND clean_schema_cookie IS NULL
+    )
+    OR
+    (
+      clean_generation IS NOT NULL
+      AND clean_schema_cookie IS NOT NULL
+      AND clean_generation <= generation
+    )
+  ),
   CHECK (
     (
       purpose IS NULL

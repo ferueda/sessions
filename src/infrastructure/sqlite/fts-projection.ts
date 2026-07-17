@@ -4,6 +4,13 @@ import { runLeasedImmediateTransaction, type WriterLeaseIdentity } from "./write
 
 export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
 
+const DOCTOR_CONTENT_WINDOW_SIZE = 512;
+const DOCTOR_EXPECTED_FTS_TABLE = "sessions_doctor_expected_fts";
+const DOCTOR_EXPECTED_VOCAB_TABLE = "sessions_doctor_expected_fts_vocab";
+const DOCTOR_ACTUAL_VOCAB_TABLE = "sessions_doctor_actual_fts_vocab";
+const SQLITE_INTEGER_MIN = -9_223_372_036_854_775_808n;
+const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
+
 export const FTS_PROJECTION_OBJECTS = [
   [SESSIONS_CONTENT_FTS_TABLE, "table"],
   ["sessions_content_fts_config", "table"],
@@ -124,6 +131,14 @@ export function repairFtsProjection(
 }
 
 export function ftsProjectionStructureIsValid(database: DatabaseSync): boolean {
+  try {
+    return inspectFtsProjectionStructure(database);
+  } catch {
+    return false;
+  }
+}
+
+function inspectFtsProjectionStructure(database: DatabaseSync): boolean {
   const rows = database
     .prepare(
       `SELECT name, type, sql
@@ -193,12 +208,196 @@ export function ftsProjectionContentIsValid(database: DatabaseSync): boolean {
   return mismatch === undefined;
 }
 
+/** Compare canonical text with the real FTS term and position index without writing main. */
+export function ftsProjectionSemanticContentIsValidReadOnly(database: DatabaseSync): boolean {
+  let valid = false;
+  try {
+    database.exec("PRAGMA temp_store = MEMORY");
+    if (!tempStorageIsMemory(database)) return false;
+
+    dropDoctorProjection(database);
+    database.exec(`CREATE VIRTUAL TABLE temp.${DOCTOR_EXPECTED_FTS_TABLE} USING fts5(
+  text,
+  content='',
+  tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE temp.${DOCTOR_EXPECTED_VOCAB_TABLE}
+USING fts5vocab(temp, ${DOCTOR_EXPECTED_FTS_TABLE}, 'instance');
+
+CREATE VIRTUAL TABLE temp.${DOCTOR_ACTUAL_VOCAB_TABLE}
+USING fts5vocab(main, ${SESSIONS_CONTENT_FTS_TABLE}, 'instance');`);
+
+    loadExpectedDoctorProjection(database);
+    valid =
+      tablesMatchExactly(
+        database,
+        "main.sessions_content_fts_docsize",
+        `temp.${DOCTOR_EXPECTED_FTS_TABLE}_docsize`,
+        "id, sz",
+      ) &&
+      tablesMatchExactly(
+        database,
+        `temp.${DOCTOR_ACTUAL_VOCAB_TABLE}`,
+        `temp.${DOCTOR_EXPECTED_VOCAB_TABLE}`,
+        "term, doc, col, offset",
+      );
+  } catch {
+    valid = false;
+  } finally {
+    try {
+      dropDoctorProjection(database);
+    } catch {
+      valid = false;
+    }
+  }
+  return valid;
+}
+
+/** Assert canonical and FTS row presence for the exact content IDs changed by one writer. */
+export function assertFtsProjectionContentParityForIds(
+  database: DatabaseSync,
+  contentIds: readonly bigint[],
+): void {
+  const statement = database.prepare(
+    `SELECT EXISTS (
+              SELECT 1
+              FROM sessions_content_values
+              WHERE content_id = ?
+            ) AS canonical_present,
+            EXISTS (
+              SELECT 1
+              FROM sessions_content_fts_docsize
+              WHERE id = ?
+            ) AS projection_present`,
+  );
+  statement.setReadBigInts(true);
+  for (const contentId of contentIds) {
+    assertSqliteInteger(contentId);
+    const row = statement.get(contentId, contentId) as Record<string, unknown> | undefined;
+    if (
+      row === undefined ||
+      !booleanInteger(row.canonical_present) ||
+      !booleanInteger(row.projection_present) ||
+      row.canonical_present !== row.projection_present
+    ) {
+      throw new Error("SQLite canonical content and FTS projection disagree");
+    }
+  }
+}
+
 function inspectFtsProjectionSafely(database: DatabaseSync): FtsProjectionHealth {
   try {
     return inspectFtsProjection(database);
   } catch {
     return { structure: false, content: false };
   }
+}
+
+interface DoctorContentRow {
+  readonly content_id: unknown;
+  readonly text: unknown;
+}
+
+function loadExpectedDoctorProjection(database: DatabaseSync): void {
+  const first = database.prepare(
+    `SELECT content_id, text
+     FROM sessions_content_values
+     ORDER BY content_id
+     LIMIT ${DOCTOR_CONTENT_WINDOW_SIZE}`,
+  );
+  const next = database.prepare(
+    `SELECT content_id, text
+     FROM sessions_content_values
+     WHERE content_id > ?
+     ORDER BY content_id
+     LIMIT ${DOCTOR_CONTENT_WINDOW_SIZE}`,
+  );
+  first.setReadBigInts(true);
+  next.setReadBigInts(true);
+  const insert = database.prepare(
+    `INSERT INTO temp.${DOCTOR_EXPECTED_FTS_TABLE} (rowid, text)
+     VALUES (?, ?)`,
+  );
+
+  let cursor: bigint | null = null;
+  while (true) {
+    const rows = (cursor === null
+      ? first.all()
+      : next.all(cursor)) as unknown as readonly DoctorContentRow[];
+    if (rows.length === 0) return;
+
+    let previous: bigint | null = cursor;
+    for (const row of rows) {
+      const contentId = row.content_id;
+      assertSqliteInteger(contentId);
+      if (previous !== null && contentId <= previous) {
+        throw new Error("SQLite canonical content IDs are not ordered");
+      }
+      if (typeof row.text !== "string") {
+        throw new Error("SQLite canonical content text is malformed");
+      }
+      insert.run(contentId, row.text);
+      previous = contentId;
+    }
+    cursor = previous;
+  }
+}
+
+function tablesMatchExactly(
+  database: DatabaseSync,
+  left: string,
+  right: string,
+  columns: string,
+): boolean {
+  const leftOnly = database
+    .prepare(
+      `SELECT 1 AS mismatch
+       FROM (
+         SELECT ${columns} FROM ${left}
+         EXCEPT
+         SELECT ${columns} FROM ${right}
+       )
+       LIMIT 1`,
+    )
+    .get();
+  if (leftOnly !== undefined) return false;
+  return (
+    database
+      .prepare(
+        `SELECT 1 AS mismatch
+         FROM (
+           SELECT ${columns} FROM ${right}
+           EXCEPT
+           SELECT ${columns} FROM ${left}
+         )
+         LIMIT 1`,
+      )
+      .get() === undefined
+  );
+}
+
+function tempStorageIsMemory(database: DatabaseSync): boolean {
+  const row = database.prepare("PRAGMA temp_store").get() as
+    | { readonly temp_store?: unknown }
+    | undefined;
+  return row?.temp_store === 2;
+}
+
+function dropDoctorProjection(database: DatabaseSync): void {
+  database.exec(`DROP TABLE IF EXISTS temp.${DOCTOR_ACTUAL_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_FTS_TABLE};`);
+}
+
+function assertSqliteInteger(value: unknown): asserts value is bigint {
+  if (typeof value !== "bigint" || value < SQLITE_INTEGER_MIN || value > SQLITE_INTEGER_MAX) {
+    throw new Error("SQLite content ID is malformed");
+  }
+}
+
+function booleanInteger(value: unknown): value is 0n | 1n {
+  return value === 0n || value === 1n;
 }
 
 function ftsProjectionSemanticContentIsValid(database: DatabaseSync): boolean {

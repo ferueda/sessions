@@ -32,7 +32,11 @@ import {
   secureIndexFiles,
 } from "./permissions.ts";
 import { createSqliteReadSnapshot, type SqliteReadSnapshot } from "./read-snapshot.ts";
-import { repairFtsProjection, SESSIONS_CONTENT_FTS_TABLE } from "./fts-projection.ts";
+import {
+  ftsProjectionStructureIsValid,
+  repairFtsProjection,
+  SESSIONS_CONTENT_FTS_TABLE,
+} from "./fts-projection.ts";
 import {
   canonicalIntegrityIsValid,
   foreignKeysAreValid,
@@ -56,12 +60,18 @@ import {
 import {
   assertWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
+  interruptOwnedRunsMarkCleanAndReleaseWriterLease,
   SqliteWriterLeaseError,
   startWriterLeaseHeartbeat,
   type WriterLeaseHeartbeat,
   type WriterLeaseIdentity,
   type WriterLeaseScheduler,
 } from "./writer-lease.ts";
+import {
+  consumeWriterCleanProof,
+  publishWriterCleanProof,
+  removeWriterCleanProofTemporaryFiles,
+} from "./writer-clean-proof.ts";
 import {
   openSourceDiscoveryWorkspace,
   type SourceDiscoveryWorkspaceLifecycle,
@@ -157,8 +167,8 @@ export function createSqliteIndexLifecycle(
     },
 
     async openWriter(paths) {
-      const fts5Security = fts5Probe();
       await refuseSidecarOnlyWriterState(paths, platform, supportedSchemaVersion);
+      const preCreateFts5Security = (await fileIsAbsent(paths.database)) ? fts5Probe() : undefined;
       let databaseCreated = false;
       try {
         databaseCreated = (await prepareIndexPathsForWriter(paths, { platform })).databaseCreated;
@@ -176,6 +186,11 @@ export function createSqliteIndexLifecycle(
         throw error;
       }
 
+      const selectedCleanProof = databaseCreated
+        ? undefined
+        : await consumeWriterCleanProof(paths.database, { platform });
+      await removeWriterCleanProofTemporaryFiles(paths.database, { platform });
+
       const state = await inspectSqliteIndex(paths, {
         migrations,
         platform,
@@ -188,6 +203,8 @@ export function createSqliteIndexLifecycle(
       ) {
         throw new SqliteIndexLifecycleError(state);
       }
+      const cleanProof = state.status === "ready" ? selectedCleanProof : undefined;
+      const fts5Security = preCreateFts5Security ?? fts5Probe();
 
       const database = await openWriterWithFailureCleanup(paths, busyTimeoutMs, platform);
       let heartbeat: WriterLeaseHeartbeat | undefined;
@@ -200,6 +217,16 @@ export function createSqliteIndexLifecycle(
         const acquired = acquireWriterSchema(database, "index", migrations, {
           now,
           ...(options.writerToken === undefined ? {} : { token: options.writerToken }),
+          ...(cleanProof === undefined
+            ? {}
+            : {
+                cleanClaim: {
+                  generation: cleanProof.writerGeneration,
+                  schemaCookie: cleanProof.schemaCookie,
+                  schemaVersion: cleanProof.schemaVersion,
+                  libraryInstanceId: cleanProof.libraryInstanceId,
+                },
+              }),
         });
         const ownedLease = acquired.lease;
         lease = ownedLease;
@@ -213,15 +240,17 @@ export function createSqliteIndexLifecycle(
           throw new Error("SQLite migrations did not reach the supported schema");
         }
         await secureIndexFiles(paths, { platform });
-        repairFtsProjection(database, {
-          assertCanonicalIntegrity: () => {
-            if (!canonicalIntegrityIsValid(database) || !foreignKeysAreValid(database)) {
-              throw new Error("Canonical SQLite integrity check failed");
-            }
-          },
-          lease: ownedLease,
-          now,
-        });
+        if (!acquired.fastPathEligible || !ftsProjectionStructureIsValid(database)) {
+          repairFtsProjection(database, {
+            assertCanonicalIntegrity: () => {
+              if (!canonicalIntegrityIsValid(database) || !foreignKeysAreValid(database)) {
+                throw new Error("Canonical SQLite integrity check failed");
+              }
+            },
+            lease: ownedLease,
+            now,
+          });
+        }
         // Persistent FTS configuration is a write and must happen only after
         // this handle owns the high-level writer lease.
         const fts5SecureDelete = configureFts5SecureDelete(
@@ -229,7 +258,15 @@ export function createSqliteIndexLifecycle(
           SESSIONS_CONTENT_FTS_TABLE,
           fts5Security,
         );
-        const sessions = createCoordinatedSqliteSessionIndex(database, { lease: ownedLease, now });
+        let integrityUncertain = false;
+        const sessions = createCoordinatedSqliteSessionIndex(database, {
+          lease: ownedLease,
+          now,
+          onIntegrityUncertain: () => {
+            integrityUncertain = true;
+          },
+        });
+        const libraryInstanceId = readLibraryInstanceId(database);
         workspace = await openSourceDiscoveryWorkspace(paths, {
           assertLease: () => assertWriterLease(database, ownedLease, { now }),
           platform,
@@ -247,6 +284,8 @@ export function createSqliteIndexLifecycle(
           ownedLease,
           heartbeat,
           now,
+          libraryInstanceId,
+          () => integrityUncertain,
         );
       } catch (error) {
         const operationError =
@@ -422,6 +461,15 @@ async function inspectSqliteIndex(
   return inspectedState;
 }
 
+async function fileIsAbsent(file: string): Promise<boolean> {
+  try {
+    await lstat(file);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
+}
+
 function openImmutableDatabase(file: string): DatabaseSync {
   const url = pathToFileURL(file);
   url.searchParams.set("mode", "ro");
@@ -460,6 +508,8 @@ function createWriter(
   lease: WriterLeaseIdentity,
   heartbeat: WriterLeaseHeartbeat,
   now: () => Date,
+  libraryInstanceId: string,
+  integrityIsUncertain: () => boolean,
 ): SqliteIndexWriter {
   let closed = false;
   let databaseClosed = false;
@@ -486,10 +536,17 @@ function createWriter(
         cleanupErrors.push(error);
       }
       if (heartbeat.failure !== undefined) cleanupErrors.push(heartbeat.failure);
+      let cleanSeal: { readonly generation: number; readonly schemaCookie: number } | undefined;
       if (!databaseClosed) {
         try {
           if (database.isOpen) {
-            const released = interruptOwnedRunsAndReleaseWriterLease(database, lease, { now });
+            const cleanEligible = cleanupErrors.length === 0 && !integrityIsUncertain();
+            cleanSeal = cleanEligible
+              ? interruptOwnedRunsMarkCleanAndReleaseWriterLease(database, lease, { now })
+              : undefined;
+            const released =
+              cleanSeal !== undefined ||
+              (!cleanEligible && interruptOwnedRunsAndReleaseWriterLease(database, lease, { now }));
             if (!released && heartbeat.failure === undefined) {
               cleanupErrors.push(new SqliteWriterLeaseError("writer-lease-lost"));
             }
@@ -516,10 +573,36 @@ function createWriter(
       } catch (error) {
         cleanupErrors.push(error);
       }
+      if (cleanupErrors.length === 0 && cleanSeal !== undefined) {
+        try {
+          await publishWriterCleanProof(
+            paths.database,
+            {
+              libraryInstanceId,
+              writerGeneration: cleanSeal.generation,
+              schemaVersion: supportedSchemaVersion,
+              schemaCookie: cleanSeal.schemaCookie,
+            },
+            { platform },
+          );
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
       closed = databaseClosed && hardened;
       throwCleanupErrors(cleanupErrors, "SQLite writer cleanup failed");
     },
   };
+}
+
+function readLibraryInstanceId(database: DatabaseSync): string {
+  const row = database
+    .prepare("SELECT instance_id FROM sessions_library WHERE singleton = 1")
+    .get() as { readonly instance_id?: unknown } | undefined;
+  if (typeof row?.instance_id !== "string" || !/^[a-f0-9]{32}$/u.test(row.instance_id)) {
+    throw new MigrationHistoryError("invalid-history");
+  }
+  return row.instance_id;
 }
 
 interface WriterSetupCleanupContext {

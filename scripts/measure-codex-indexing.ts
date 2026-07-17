@@ -3,6 +3,8 @@ import { constants, type BigIntStats, type Dirent } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 import {
   captureCodexEnvironment,
@@ -26,9 +28,13 @@ import { runIndex } from "../src/application/run-index.ts";
 import { createIndexTimingCollector } from "../src/infrastructure/runtime/index-timings.ts";
 import { resolveIndexPaths } from "../src/infrastructure/state/paths.ts";
 import { createSqliteIndexLifecycle } from "../src/infrastructure/sqlite/database.ts";
+import { CURRENT_INDEX_SCHEMA_VERSION } from "../src/infrastructure/sqlite/migrations.ts";
+import { readWriterCleanProof } from "../src/infrastructure/sqlite/writer-clean-proof.ts";
 
 const ACKNOWLEDGEMENT = "--allow-provider-read";
 const COHORT_SESSIONS = 120;
+const CLEAN_WRITER_OPEN_BUDGET_MS = 800;
+const STABLE_TOTAL_BUDGET_MS = 1_250;
 const FILE_BUFFER_BYTES = 128 * 1024;
 const TEMPORARY_PREFIX = "sessions-codex-indexing-";
 const PRIVATE_RESIDUE_WARNING =
@@ -145,18 +151,27 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
   const lifecycle = createSqliteIndexLifecycle({ platform });
   const clock = Object.freeze({ now: () => new Date() });
 
+  const seedTimings = createIndexTimingCollector();
   let seedCohort: SelectedCohort | undefined;
-  const seedSource = limitDiscovery(await createCodexSource(environment), codexPaths, (cohort) => {
-    seedCohort = cohort;
-  });
   const seed = await runStage("seed-index", () =>
-    runIndex({
-      paths: indexPaths,
-      sources: [seedSource],
-      lifecycle,
-      clock,
+    timeIndexOperation(seedTimings.recorder, "total", async () => {
+      const selected = await timeIndexOperation(seedTimings.recorder, "sourceResolution", () =>
+        createCodexSource(environment),
+      );
+      return runIndex({
+        paths: indexPaths,
+        sources: [
+          limitDiscovery(selected, codexPaths, (cohort) => {
+            seedCohort = cohort;
+          }),
+        ],
+        lifecycle,
+        clock,
+        timing: seedTimings.recorder,
+      });
     }),
   );
+  const seedClean = await writerCleanStateIsValid(indexPaths.database, platform);
 
   const timings = createIndexTimingCollector();
   let stableCohort: SelectedCohort | undefined;
@@ -178,6 +193,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
       });
     }),
   );
+  const stableClean = await writerCleanStateIsValid(indexPaths.database, platform);
   const admittedSeedCohort = requireCapturedCohort(seedCohort);
   const admittedStableCohort = requireCapturedCohort(stableCohort);
   const cohortEqual = sameSelectedCohort(admittedSeedCohort, admittedStableCohort);
@@ -193,6 +209,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     requireCondition(cohortEqual && selectedRolloutBytesEqual);
   });
   await runStage("seed-admission", async () => {
+    requireCondition(seedClean);
     requireCompleteReport(seed, {
       discovered: COHORT_SESSIONS,
       unchanged: 0,
@@ -203,6 +220,7 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     });
   });
   await runStage("stable-admission", async () => {
+    requireCondition(stableClean);
     requireCompleteReport(stable, {
       discovered: COHORT_SESSIONS,
       unchanged: COHORT_SESSIONS,
@@ -217,9 +235,16 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     requireCondition(health.ok && health.writerLease === "free");
   });
 
+  const seedTimingSnapshot = seedTimings.snapshot();
   const timingSnapshot = timings.snapshot();
   await runStage("timing-admission", async () =>
-    requireCondition(timingSnapshot.phases.changedReadAndNormalize.calls === 0),
+    requireCondition(
+      timingSnapshot.phases.changedReadAndNormalize.calls === 0 &&
+        timingSnapshot.phases.writerOpen.calls === 1 &&
+        timingSnapshot.phases.writerOpen.elapsedMs <= CLEAN_WRITER_OPEN_BUDGET_MS &&
+        timingSnapshot.phases.total.calls === 1 &&
+        timingSnapshot.phases.total.elapsedMs <= STABLE_TOTAL_BUDGET_MS,
+    ),
   );
   const selectedRolloutBytes = admittedSeedCohort.rolloutSnapshots.reduce(
     (sum, snapshot) => addSafeInteger(sum, parseSafeBytes(snapshot.size)),
@@ -236,8 +261,60 @@ async function measureCodexIndexing(platform: "darwin" | "linux") {
     stableComplete: true,
     stableCounts: stable.counts,
     libraryHealthy: true,
+    writerIntegrityState: true,
+    seedTimings: seedTimingSnapshot.phases,
     timings: timingSnapshot.phases,
   });
+}
+
+async function writerCleanStateIsValid(
+  databasePath: string,
+  platform: "darwin" | "linux",
+): Promise<boolean> {
+  const proof = await readWriterCleanProof(databasePath, { platform });
+  if (proof === undefined) return false;
+  const database = new DatabaseSync(pathToImmutableDatabase(databasePath), {
+    allowExtension: false,
+    defensive: true,
+    enableDoubleQuotedStringLiterals: false,
+    enableForeignKeyConstraints: true,
+    readOnly: true,
+  });
+  try {
+    const row = database
+      .prepare(
+        `SELECT library.instance_id,
+                lease.generation,
+                lease.clean_generation,
+                lease.clean_schema_cookie,
+                lease.purpose,
+                lease.owner_token
+         FROM sessions_library AS library
+         CROSS JOIN sessions_writer_lease AS lease
+         WHERE library.singleton = 1 AND lease.singleton = 1`,
+      )
+      .get() as Record<string, unknown> | undefined;
+    const schemaCookie = Object.values(database.prepare("PRAGMA schema_version").get() ?? {})[0];
+    return (
+      row?.instance_id === proof.libraryInstanceId &&
+      row.generation === proof.writerGeneration &&
+      row.clean_generation === proof.writerGeneration &&
+      row.clean_schema_cookie === proof.schemaCookie &&
+      row.purpose === null &&
+      row.owner_token === null &&
+      proof.schemaVersion === CURRENT_INDEX_SCHEMA_VERSION &&
+      schemaCookie === proof.schemaCookie
+    );
+  } finally {
+    database.close();
+  }
+}
+
+function pathToImmutableDatabase(databasePath: string): string {
+  const url = pathToFileURL(databasePath);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  return url.href;
 }
 
 function limitDiscovery(

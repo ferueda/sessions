@@ -171,6 +171,37 @@ describe("SQLite session index", () => {
     }
   });
 
+  test.each([-1n, 0n, BigInt(Number.MAX_SAFE_INTEGER) + 1n])(
+    "preserves full signed SQLite content ID %s through replacement proof",
+    async (contentId) => {
+      const database = migratedDatabase();
+      const index = createIndex(database);
+      try {
+        const sessionIdentity = identity("signed-content-id-profile", String(contentId));
+        const text = `content stored with signed SQLite ID ${contentId}`;
+        insertContentAtId(database, contentId, text);
+        const run = await index.startRun({
+          source: sessionIdentity.source,
+          startedAt: "2026-07-13T12:00:00.000Z",
+        });
+        const admitted = replacement(sessionIdentity, "signed-content-id-a", {
+          ...minimalDocument(sessionIdentity),
+          entries: [entry(0, text)],
+        });
+
+        await index.replaceSession(run, admitted);
+
+        await expect(index.getDocument(sessionIdentity)).resolves.toEqual(admitted.document);
+        const statement = database.prepare("SELECT content_id FROM sessions_content_occurrences");
+        statement.setReadBigInts(true);
+        expect(statement.get()).toEqual({ content_id: contentId });
+        expectFtsIntegrity(database);
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   test("fails closed when canonical storage contains duplicate exact bucket members", async () => {
     const database = migratedDatabase();
     const index = createIndex(database);
@@ -203,54 +234,113 @@ describe("SQLite session index", () => {
     }
   });
 
-  test.each([-1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n])(
-    "rejects associated content ID %s before replacing canonical rows",
-    async (invalidContentId) => {
-      const database = migratedDatabase();
-      const index = createIndex(database);
-      try {
-        const sessionIdentity = identity("invalid-content-id-profile", String(invalidContentId));
-        const baseline = replacement(sessionIdentity, "revision-a", {
-          ...minimalDocument(sessionIdentity),
-          entries: [entry(0, "retained canonical evidence")],
-        });
-        const run = await index.startRun({
-          source: sessionIdentity.source,
-          startedAt: "2026-07-13T12:00:00.000Z",
-        });
-        await index.replaceSession(run, baseline);
-
-        database.exec("PRAGMA foreign_keys = OFF; DROP TRIGGER sessions_content_values_bu");
-        database
-          .prepare("UPDATE sessions_content_occurrences SET content_id = ?")
-          .run(invalidContentId);
-        database.prepare("UPDATE sessions_content_values SET content_id = ?").run(invalidContentId);
-        database.exec("PRAGMA foreign_keys = ON");
-
-        await expect(
-          index.replaceSession(
-            run,
-            replacement(sessionIdentity, "revision-b", {
-              ...minimalDocument(sessionIdentity),
-              entries: [entry(0, "replacement canonical evidence")],
-            }),
-          ),
-        ).rejects.toMatchObject({ code: "corrupt-data" });
-
-        expect(rowCount(database, "sessions_canonical_sessions")).toBe(1);
-        expect(rowCount(database, "sessions_entries")).toBe(1);
-        expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
-        expect(database.prepare("SELECT text FROM sessions_content_values").all()).toEqual([
-          { text: "retained canonical evidence" },
-        ]);
-        const statement = database.prepare("SELECT content_id FROM sessions_content_occurrences");
-        statement.setReadBigInts(true);
-        expect(statement.get()).toEqual({ content_id: invalidContentId });
-      } finally {
-        database.close();
-      }
+  test.each([
+    {
+      name: "former content deletion",
+      trigger: "sessions_content_values_bd",
     },
-  );
+    {
+      name: "resulting content insertion",
+      trigger: "sessions_content_values_ai",
+    },
+  ])("rolls back when $name fails the affected-row FTS proof", async ({ trigger }) => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const sessionIdentity = identity("affected-proof-profile", trigger);
+      const baseline = replacement(sessionIdentity, "revision-a", {
+        ...minimalDocument(sessionIdentity),
+        entries: [entry(0, "last good affected-row evidence")],
+      });
+      const baselineRun = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      await index.replaceSession(baselineRun, baseline);
+      await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
+      const replacementRun = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T13:00:00.000Z",
+      });
+      database.exec(`DROP TRIGGER ${trigger}`);
+      const next = replacement(sessionIdentity, "revision-b", {
+        ...minimalDocument(sessionIdentity),
+        entries: [entry(0, "replacement affected-row evidence")],
+      });
+
+      await expect(index.replaceSession(replacementRun, next)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+
+      expect(integrityUncertain).toBe(true);
+      await expect(index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
+      await expect(index.getFreshness(sessionIdentity)).resolves.toEqual({
+        status: "stale",
+        identity: sessionIdentity,
+        lastGood: baseline.observation.revision,
+        latest: {
+          outcome: "failed",
+          revision: next.observation.revision,
+          failure: "repository-write",
+        },
+      });
+      expect(ftsCount(database, "good")).toBe(1);
+      expect(ftsCount(database, "replacement")).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back when canonical reread disagrees with the admitted digest", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const sessionIdentity = identity("readback-proof-profile", "readback-proof-session");
+      const baseline = replacement(sessionIdentity, "revision-a", {
+        ...minimalDocument(sessionIdentity),
+        entries: [entry(0, "retained readback evidence")],
+      });
+      const baselineRun = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      await index.replaceSession(baselineRun, baseline);
+      await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
+      const replacementRun = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T13:00:00.000Z",
+      });
+      database.exec(
+        `CREATE TEMP TRIGGER test_corrupt_document_digest
+         AFTER INSERT ON sessions_canonical_sessions
+         BEGIN
+           UPDATE sessions_canonical_sessions
+           SET document_digest = zeroblob(32)
+           WHERE session_id = new.session_id;
+         END`,
+      );
+      const next = replacement(sessionIdentity, "revision-b", {
+        ...minimalDocument(sessionIdentity),
+        entries: [entry(0, "replacement readback evidence")],
+      });
+
+      await expect(index.replaceSession(replacementRun, next)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+
+      expect(integrityUncertain).toBe(true);
+      await expect(index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
+      expect(storedDocumentDigest(database)).toEqual(baseline.documentDigest);
+    } finally {
+      database.close();
+    }
+  });
 
   test("rolls back a forced replacement failure, records staleness, and retries cleanly", async () => {
     const database = migratedDatabase();
@@ -657,6 +747,128 @@ describe("SQLite session index", () => {
       database.close();
     }
   });
+
+  test("fails closed when a source coverage update affects no row", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const source = identity("coverage-count-profile", "seed").source;
+      const seedRun = await index.startRun({
+        source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      await finishCompleted(index, seedRun, counts());
+      database.exec(
+        `CREATE TEMP TRIGGER test_ignore_source_coverage
+         BEFORE UPDATE OF coverage_status, coverage_observed_at ON sessions_source_instances
+         BEGIN
+           SELECT RAISE(IGNORE);
+         END`,
+      );
+
+      await expect(
+        index.startRun({ source, startedAt: "2026-07-13T11:00:00.000Z" }),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+
+      expect(integrityUncertain).toBe(true);
+      expect(rowCount(database, "sessions_index_runs")).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back when a run counter update affects no row", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const sessionIdentity = identity("run-count-profile", "run-count-session");
+      const admitted = replacement(sessionIdentity, "revision-a", minimalDocument(sessionIdentity));
+      const baselineRun = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      await index.replaceSession(baselineRun, admitted);
+      await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T11:00:00.000Z",
+      });
+      database.exec(
+        `CREATE TEMP TRIGGER test_ignore_run_count
+         BEFORE UPDATE OF unchanged_count ON sessions_index_runs
+         BEGIN
+           SELECT RAISE(IGNORE);
+         END`,
+      );
+
+      await expect(index.recordUnchanged(run, admitted.observation)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+
+      expect(integrityUncertain).toBe(true);
+      await expect(index.getFreshness(sessionIdentity)).resolves.toEqual({
+        status: "current",
+        identity: sessionIdentity,
+        lastGood: admitted.observation.revision,
+        latest: { outcome: "indexed", revision: admitted.observation.revision },
+      });
+      expect(
+        database
+          .prepare(
+            "SELECT discovered_count, unchanged_count FROM sessions_index_runs WHERE run_id = ?",
+          )
+          .get(Number(run.id)),
+      ).toEqual({ discovered_count: 0, unchanged_count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back when a tracking update affects no row", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const sessionIdentity = identity("tracking-count-profile", "tracking-count-session");
+      const admitted = replacement(sessionIdentity, "revision-a", minimalDocument(sessionIdentity));
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      await index.replaceSession(run, admitted);
+      database.exec(
+        `CREATE TEMP TRIGGER test_ignore_tracking_update
+         BEFORE UPDATE OF presence_status ON sessions_session_tracking
+         BEGIN
+           SELECT RAISE(IGNORE);
+         END`,
+      );
+
+      await expect(index.recordMissing(run, sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+
+      expect(integrityUncertain).toBe(true);
+      await expect(index.getFreshness(sessionIdentity)).resolves.toMatchObject({
+        status: "current",
+      });
+      expect(
+        database
+          .prepare("SELECT missing_count FROM sessions_index_runs WHERE run_id = ?")
+          .get(Number(run.id)),
+      ).toEqual({ missing_count: 0 });
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function createFixture(): SessionIndexContractFixture {
@@ -669,13 +881,17 @@ function createFixture(): SessionIndexContractFixture {
   };
 }
 
-function createIndex(database: DatabaseSync) {
+function createIndex(database: DatabaseSync, onIntegrityUncertain?: () => void) {
   const now = () => new Date("2026-07-13T11:00:00.000Z");
   const lease = acquireWriterLease(database, "index", {
     now,
     token: () => "synthetic-test-owner",
   });
-  return createCoordinatedSqliteSessionIndex(database, { lease, now });
+  return createCoordinatedSqliteSessionIndex(database, {
+    lease,
+    now,
+    ...(onIntegrityUncertain === undefined ? {} : { onIntegrityUncertain }),
+  });
 }
 
 function migratedDatabase(): DatabaseSync {
@@ -738,6 +954,15 @@ function insertContentWithDigest(database: DatabaseSync, digest: string, text: s
     readonly content_id: number | bigint;
   };
   return Number(row.content_id);
+}
+
+function insertContentAtId(database: DatabaseSync, contentId: bigint, text: string): void {
+  database
+    .prepare(
+      `INSERT INTO sessions_content_values (content_id, digest, text)
+       VALUES (?, ?, ?)`,
+    )
+    .run(contentId, encodeSqliteContentDigest(hashContent(text).digest), text);
 }
 
 function contentOccurrenceCount(database: DatabaseSync, text: string): number | undefined {
