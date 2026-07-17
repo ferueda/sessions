@@ -153,12 +153,16 @@ export function decideReleaseOrder(input: ReleaseOrderInput): ReleaseOrderDecisi
     throw new Error("published target does not have a valid latest-tag state");
   }
 
-  if (
-    input.targetVersion === FIRST_SUPPORTED_VERSION &&
-    input.parentVersion === BOOTSTRAP_VERSION &&
-    input.latestVersion === null &&
-    input.bootstrapVersion === BOOTSTRAP_VERSION
-  ) {
+  if (input.parentVersion === BOOTSTRAP_VERSION) {
+    if (
+      input.targetVersion !== FIRST_SUPPORTED_VERSION ||
+      input.latestVersion !== null ||
+      input.bootstrapVersion !== BOOTSTRAP_VERSION
+    ) {
+      throw new Error(
+        "first supported release requires the bootstrap seed, no latest tag, and target 0.1.0",
+      );
+    }
     return { action: "publish" };
   }
 

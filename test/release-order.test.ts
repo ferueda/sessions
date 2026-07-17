@@ -123,6 +123,44 @@ describe("npm release ordering", () => {
     ).toEqual({ action: "publish" });
   });
 
+  test.each([
+    {
+      name: "bootstrap seed was assigned latest",
+      targetVersion: "0.1.0",
+      latestVersion: "0.0.0",
+      bootstrapVersion: "0.0.0",
+    },
+    {
+      name: "bootstrap tag is missing",
+      targetVersion: "0.1.0",
+      latestVersion: null,
+      bootstrapVersion: null,
+    },
+    {
+      name: "bootstrap tag points to another version",
+      targetVersion: "0.1.0",
+      latestVersion: null,
+      bootstrapVersion: "0.0.1",
+    },
+    {
+      name: "first supported target skips 0.1.0",
+      targetVersion: "0.2.0",
+      latestVersion: null,
+      bootstrapVersion: "0.0.0",
+    },
+  ])("rejects the first release when $name", (state) => {
+    expect(() =>
+      decideReleaseOrder({
+        parentVersion: "0.0.0",
+        targetVersion: state.targetVersion,
+        latestVersion: state.latestVersion,
+        bootstrapVersion: state.bootstrapVersion,
+        targetIntegrity: null,
+        qualifiedIntegrity: integrity,
+      }),
+    ).toThrow("first supported release requires");
+  });
+
   test("publishes only after the registry parent", () => {
     expect(
       decideReleaseOrder({
