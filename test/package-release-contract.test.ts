@@ -1,5 +1,5 @@
 import { gzipSync } from "node:zlib";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -209,6 +209,18 @@ describe("package release artifact contract", () => {
     ).toThrow(/npm or lifecycle warning/u);
     expect(() => assertCheckoutUnchanged(" M package.json\n", " M package.json\n")).not.toThrow();
     expect(() => assertCheckoutUnchanged("", "?? leaked.tgz\n")).toThrow(/changed/u);
+  });
+
+  test("keeps shim checks while preserving workflow arguments across platforms", async () => {
+    const smoke = await readFile(
+      path.resolve(import.meta.dirname, "../scripts/smoke-release-package.ts"),
+      "utf8",
+    );
+
+    expect(smoke).toContain('runCommand(shim, ["--help"]');
+    expect(smoke).toContain('runCommand(shim, ["--version"]');
+    expect(smoke).toMatch(/runCommand\(\s*process\.execPath,\s*\[installedBinary, \.\.\.args\]/u);
+    expect(smoke).not.toContain("runCommand(shim, args");
   });
 
   test("reads and validates the normalized manifest and exact skill from a tarball", async () => {
