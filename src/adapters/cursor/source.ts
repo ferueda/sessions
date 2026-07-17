@@ -21,6 +21,7 @@ import {
   type CursorDiscoveryMapping,
 } from "./discovery.ts";
 import {
+  consumeStableCursorFile,
   cursorPath,
   describeCursorEntry,
   sameCursorDescriptor,
@@ -28,7 +29,9 @@ import {
 } from "./filesystem.ts";
 import { CursorFormatError } from "./format-error.ts";
 import { type CursorSqliteInventory } from "./inventory.ts";
+import { parseCursorJsonl } from "./jsonl.ts";
 import { normalizeCursorSession } from "./normalize.ts";
+import { createCursorJsonlNormalizer } from "./normalize-jsonl.ts";
 import { type CursorEnvironment, type ResolvedCursorPaths, resolveCursorPaths } from "./paths.ts";
 import { createCursorSourceInstance } from "./source-instance.ts";
 import { materializeCursorStore } from "./store.ts";
@@ -38,6 +41,12 @@ import {
 } from "../shared/sqlite-source-snapshot.ts";
 
 export const CURSOR_ADAPTER_VERSION = "cursor-v1";
+export const CURSOR_JSONL_ADAPTER_VERSION = "cursor-jsonl-v1";
+
+type RichCursorCandidateSeed = Extract<
+  CursorCandidateSeed,
+  { readonly family: "chat-store-v1" | "agent-checkpoint-store-v1" }
+>;
 
 interface FrozenCursorSession {
   readonly seed: CursorCandidateSeed;
@@ -56,6 +65,13 @@ export async function createCursorSource(
 
   const adapter: SessionSource = Object.freeze({
     kind: "cursor",
+    canReplace(previousAdapterVersion: string, nextAdapterVersion: string): boolean {
+      return (
+        nextAdapterVersion === CURSOR_ADAPTER_VERSION ||
+        (previousAdapterVersion === CURSOR_JSONL_ADAPTER_VERSION &&
+          nextAdapterVersion === CURSOR_JSONL_ADAPTER_VERSION)
+      );
+    },
     async probe(): Promise<SourceProbe> {
       return probeCursorSource(paths, instance);
     },
@@ -101,9 +117,21 @@ export async function createCursorSource(
       if (frozen === undefined || !sameCandidate(frozen.candidate, candidate)) {
         throw sourceFailure("source-changed", instance);
       }
+      const seed = frozen.seed;
+
+      if (seed.family === "agent-transcript-conflict-v1") {
+        throw sourceFailure("unsupported-format", instance);
+      }
+      if (seed.family === "agent-transcript-jsonl-v1") {
+        try {
+          return await readCursorJsonlSession(paths, frozen, seed);
+        } catch (error) {
+          throw mapCursorError(error, instance, "unreadable");
+        }
+      }
 
       try {
-        await assertCurrentStore(paths, frozen.seed.store);
+        await assertCurrentStore(paths, seed.store);
       } catch (error) {
         throw mapCursorError(error, instance, "source-changed");
       }
@@ -112,20 +140,20 @@ export async function createCursorSource(
       let operationError: unknown;
       try {
         store = await materializeSqliteSourceSnapshot({
-          databasePath: cursorPath(paths.cursorHome, frozen.seed.store.main.components),
+          databasePath: cursorPath(paths.cursorHome, seed.store.main.components),
           workspace,
           materialize: (database) =>
             materializeCursorStore(
               database,
-              frozen.seed.family === "chat-store-v1"
+              seed.family === "chat-store-v1"
                 ? {
                     family: "chat-store-v1",
-                    nativeId: frozen.seed.nativeId,
+                    nativeId: seed.nativeId,
                   }
                 : {
                     family: "agent-checkpoint-store-v1",
-                    nativeId: frozen.seed.nativeId,
-                    rootBlobId: requireCheckpointRoot(frozen.seed),
+                    nativeId: seed.nativeId,
+                    rootBlobId: requireCheckpointRoot(seed),
                   },
             ),
         });
@@ -135,7 +163,7 @@ export async function createCursorSource(
 
       let verificationError: unknown;
       try {
-        await assertCurrentStore(paths, frozen.seed.store);
+        await assertCurrentStore(paths, seed.store);
       } catch (error) {
         verificationError = error;
       }
@@ -157,7 +185,7 @@ export async function createCursorSource(
       if (store === undefined) throw sourceFailure("malformed", instance);
 
       try {
-        return normalizeCursorStore(frozen, store);
+        return normalizeCursorStore(frozen, seed, store);
       } catch (error) {
         throw mapCursorError(error, instance, "malformed");
       }
@@ -169,6 +197,7 @@ export async function createCursorSource(
 
 function normalizeCursorStore(
   frozen: FrozenCursorSession,
+  seed: RichCursorCandidateSeed,
   store: ReturnType<typeof materializeCursorStore>,
 ): SessionDocument {
   const shared = {
@@ -176,23 +205,41 @@ function normalizeCursorStore(
     logicalLocator: frozen.logicalLocator,
     messages: store.messages,
   } as const;
-  if (frozen.seed.family === "chat-store-v1") {
+  if (seed.family === "chat-store-v1") {
     return normalizeCursorSession({
       ...shared,
-      createdAt: frozen.seed.metadata.createdAt,
-      updatedAt: frozen.seed.metadata.updatedAt,
-      title: frozen.seed.metadata.title ?? store.metadata.name,
-      ...(frozen.seed.metadata.workspace === undefined
-        ? {}
-        : { workspace: frozen.seed.metadata.workspace }),
+      createdAt: seed.metadata.createdAt,
+      updatedAt: seed.metadata.updatedAt,
+      title: seed.metadata.title ?? store.metadata.name,
+      ...(seed.metadata.workspace === undefined ? {} : { workspace: seed.metadata.workspace }),
     });
   }
   return normalizeCursorSession({
     ...shared,
-    createdAt: frozen.seed.agent.createdAt,
-    updatedAt: frozen.seed.agent.updatedAt,
-    ...(frozen.seed.agent.title === undefined ? {} : { title: frozen.seed.agent.title }),
+    createdAt: seed.agent.createdAt,
+    updatedAt: seed.agent.updatedAt,
+    ...(seed.agent.title === undefined ? {} : { title: seed.agent.title }),
   });
+}
+
+async function readCursorJsonlSession(
+  paths: ResolvedCursorPaths,
+  frozen: FrozenCursorSession,
+  seed: Extract<CursorCandidateSeed, { readonly family: "agent-transcript-jsonl-v1" }>,
+): Promise<SessionDocument> {
+  const normalizer = createCursorJsonlNormalizer({
+    identity: frozen.candidate.identity,
+    logicalLocator: frozen.logicalLocator,
+  });
+  await consumeStableCursorFile(
+    paths.cursorHome,
+    seed.transcript.file.components,
+    seed.transcript.file,
+    async (source) => {
+      await parseCursorJsonl(source, normalizer.addRecord);
+    },
+  );
+  return normalizer.finish();
 }
 
 async function probeCursorSource(
@@ -226,10 +273,10 @@ function freezeCursorSession(
 ): FrozenCursorSession {
   const identity = Object.freeze({ source, nativeId: seed.nativeId });
   const logicalLocator = cursorSessionLocator(seed);
-  const inputs: readonly SourceInputDescriptor[] = seed.inputs.map((input) =>
+  const inputs: readonly SourceInputDescriptor[] = seed.inputs.map((input, inputIndex) =>
     Object.freeze({
       role: input.role,
-      locator: Object.freeze({ uri: cursorInputLocator(seed, input.role) }),
+      locator: Object.freeze({ uri: cursorInputLocator(seed, input.role, inputIndex) }),
       fingerprint: input.fingerprint,
     }),
   );
@@ -237,7 +284,11 @@ function freezeCursorSession(
     createDiscoveredSession({
       identity,
       inputs,
-      adapterVersion: CURSOR_ADAPTER_VERSION,
+      adapterVersion:
+        seed.family === "agent-transcript-jsonl-v1" ||
+        seed.family === "agent-transcript-conflict-v1"
+          ? CURSOR_JSONL_ADAPTER_VERSION
+          : CURSOR_ADAPTER_VERSION,
     }),
   );
   return Object.freeze({ seed, logicalLocator, candidate });
@@ -250,8 +301,12 @@ function cursorSessionLocator(seed: CursorCandidateSeed): string {
 function cursorInputLocator(
   seed: CursorCandidateSeed,
   role: CursorCandidateSeed["inputs"][number]["role"],
+  inputIndex?: number,
 ): string {
-  return `${cursorSessionLocator(seed)}/${role}`;
+  const base = `${cursorSessionLocator(seed)}/${role}`;
+  return seed.family === "agent-transcript-conflict-v1" && inputIndex !== undefined
+    ? `${base}/${inputIndex}`
+    : base;
 }
 
 async function assertCurrentStore(

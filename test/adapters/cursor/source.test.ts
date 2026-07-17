@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -11,7 +11,11 @@ import {
   isSourceFailureError,
   type SourceFailureError,
 } from "../../../src/application/source-failure.ts";
-import { createCursorSource, CURSOR_ADAPTER_VERSION } from "../../../src/adapters/cursor/source.ts";
+import {
+  createCursorSource,
+  CURSOR_ADAPTER_VERSION,
+  CURSOR_JSONL_ADAPTER_VERSION,
+} from "../../../src/adapters/cursor/source.ts";
 import type { SessionDocument } from "../../../src/domain/session.ts";
 import {
   createCursorSourceFixture,
@@ -19,6 +23,8 @@ import {
   CURSOR_AGENT_TITLE,
   CURSOR_CHAT_NATIVE_ID,
   CURSOR_CHAT_TITLE,
+  CURSOR_JSONL_NATIVE_ID,
+  CURSOR_JSONL_TEXT,
   snapshotCursorProviderTree,
   type CursorSourceFixture,
 } from "../../fixtures/cursor/source.ts";
@@ -91,6 +97,62 @@ describe("Cursor source adapter", () => {
     await expect(selected.adapter.read(first, fixture.workspace)).rejects.toMatchObject({
       failure: { kind: "source-changed" },
     });
+  });
+
+  test("captures one reduced JSONL transcript without inferring missing evidence", async () => {
+    const fixture = await createFixture({ ready: false });
+    await fixture.writeJsonlTranscript();
+    const before = snapshotCursorProviderTree(fixture.cursorHome);
+    const selected = await createCursorSource(fixture.environment);
+
+    const candidates = await discover(selected.adapter, fixture);
+    const jsonl = candidate(candidates, CURSOR_JSONL_NATIVE_ID);
+    const result = await selected.adapter.read(jsonl, fixture.workspace);
+
+    expect(jsonl).toMatchObject({ adapterVersion: CURSOR_JSONL_ADAPTER_VERSION });
+    expect(result).toMatchObject({
+      identity: { nativeId: CURSOR_JSONL_NATIVE_ID },
+      lineageCoverage: "unknown",
+      relations: [],
+      entries: [
+        { ordinal: 0, actor: "human", kind: "message" },
+        { ordinal: 1, actor: "model", kind: "message" },
+        { ordinal: 2, actor: "model", kind: "tool-call", toolName: "cursor_jsonl_tool" },
+        { ordinal: 3, actor: "system", kind: "turn-completed", content: [] },
+      ],
+    });
+    expect(result).not.toHaveProperty("title");
+    expect(result).not.toHaveProperty("workspace");
+    expect(result).not.toHaveProperty("createdAt");
+    expect(result).not.toHaveProperty("updatedAt");
+    expect(JSON.stringify(result)).toContain(CURSOR_JSONL_TEXT);
+    expect(JSON.stringify(jsonl)).not.toContain(fixture.cursorHome);
+    expect(
+      selected.adapter.canReplace?.(CURSOR_JSONL_ADAPTER_VERSION, CURSOR_ADAPTER_VERSION),
+    ).toBe(true);
+    expect(
+      selected.adapter.canReplace?.(CURSOR_ADAPTER_VERSION, CURSOR_JSONL_ADAPTER_VERSION),
+    ).toBe(false);
+    expect(snapshotCursorProviderTree(fixture.cursorHome)).toBe(before);
+  });
+
+  test("groups duplicate JSONL identities into one unopened conflict candidate", async () => {
+    const fixture = await createFixture({ ready: false });
+    const first = await fixture.writeJsonlTranscript({ project: "a" });
+    const second = await fixture.writeJsonlTranscript({ project: "z" });
+    const selected = await createCursorSource(fixture.environment);
+
+    const candidates = await discover(selected.adapter, fixture);
+    const conflict = candidate(candidates, CURSOR_JSONL_NATIVE_ID);
+    expect(conflict.inputs).toHaveLength(2);
+    expect(new Set(conflict.inputs.map(({ locator }) => locator.uri)).size).toBe(2);
+    await Promise.all([rm(first), rm(second)]);
+
+    const unsupported = await captureFailure(() =>
+      selected.adapter.read(conflict, fixture.workspace),
+    );
+    expect(unsupported.failure.kind).toBe("unsupported-format");
+    expectSafe(unsupported, fixture);
   });
 
   test("maps deferred-only state and conflicting store identity to safe typed failures", async () => {

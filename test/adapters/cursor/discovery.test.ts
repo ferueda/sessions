@@ -1,12 +1,13 @@
 import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
   captureCursorFile,
   compareCursorComponents,
+  consumeStableCursorFile,
   CursorInventoryChangedError,
   describeCursorEntry,
   listCursorDirectory,
@@ -28,6 +29,11 @@ import { syntheticCaptureWorkspace } from "../../fixtures/capture-workspace.ts";
 const roots: string[] = [];
 const CREATED_MS = Date.parse("2026-07-16T10:00:00.000Z");
 const UPDATED_MS = Date.parse("2026-07-16T10:05:00.000Z");
+const RICH_JSONL_ID = "agent-11111111-1111-4111-8111-111111111111";
+const NONCANDIDATE_JSONL_ID = "agent-22222222-2222-4222-8222-222222222222";
+const UNIQUE_JSONL_ID = "agent-33333333-3333-4333-8333-333333333333";
+const CHILD_JSONL_ID = "44444444-4444-4444-8444-444444444444";
+const DUPLICATE_JSONL_ID = "agent-55555555-5555-4555-8555-555555555555";
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -131,6 +137,23 @@ describe("Cursor filesystem inventory", () => {
     ).rejects.toBeInstanceOf(CursorInventoryChangedError);
   });
 
+  test("lets post-read descriptor verification win over a parser failure", async () => {
+    const root = await temporaryCursorRoot();
+    const components = ["transcript.jsonl"] as const;
+    const file = join(root, ...components);
+    await writeFile(file, '{"record":1}\n');
+    const expected = await describeCursorEntry(root, components);
+
+    await expect(
+      consumeStableCursorFile(root, components, expected, async (source) => {
+        for await (const _chunk of source) {
+          await writeFile(file, '{"record":2}\n');
+          throw new Error("synthetic parser failure");
+        }
+      }),
+    ).rejects.toBeInstanceOf(CursorInventoryChangedError);
+  });
+
   test("detects same-size chat metadata replacement between inventories", async () => {
     const root = await temporaryCursorRoot();
     await writeChat(root, "scope", "chat-one", { title: "one" });
@@ -141,6 +164,19 @@ describe("Cursor filesystem inventory", () => {
         await writeChat(root, "scope", "chat-one", { title: "two" });
       }),
     ).rejects.toBeInstanceOf(CursorInventoryChangedError);
+  });
+
+  test("includes exact JSONL descendants in stable inventory fingerprints", async () => {
+    const root = await temporaryCursorRoot();
+    const transcript = await writeAgentTranscript(root, "project", UNIQUE_JSONL_ID);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+    const first = await inventoryCursorSource(paths);
+
+    await writeFile(transcript, '{"role":"user"}');
+    const second = await inventoryCursorSource(paths);
+
+    expect(first.agentTranscripts).toHaveLength(1);
+    expect(second.fingerprint).not.toBe(first.fingerprint);
   });
 });
 
@@ -273,7 +309,11 @@ describe("Cursor structural discovery", () => {
       cursorHome: deferredRoot,
     });
     const deferred = mapCursorDiscovery(await inventoryCursorSource(deferredPaths), []);
-    expect(deferred).toMatchObject({ outcome: "unsupported-format", candidates: [] });
+    expect(deferred).toMatchObject({
+      outcome: "incomplete",
+      candidates: [],
+      issues: [{ kind: "invalid-agent-transcript" }],
+    });
 
     const supportedRoot = await temporaryCursorRoot();
     await writeChat(supportedRoot, "scope", "chat-one");
@@ -295,6 +335,89 @@ describe("Cursor structural discovery", () => {
       outcome: "complete-empty",
       candidates: [],
     });
+  });
+
+  test("applies rich and explicit noncandidate ownership before JSONL fallback grouping", async () => {
+    const root = await temporaryCursorRoot();
+    await Promise.all([
+      writeChat(root, "rich", RICH_JSONL_ID),
+      writeChat(root, "noncandidate", NONCANDIDATE_JSONL_ID, { hasConversation: false }, false),
+      writeAgentTranscript(root, "a", RICH_JSONL_ID),
+      writeAgentTranscript(root, "a", NONCANDIDATE_JSONL_ID),
+      writeAgentTranscript(root, "a", UNIQUE_JSONL_ID),
+      writeAgentTranscript(root, "a", CHILD_JSONL_ID, UNIQUE_JSONL_ID),
+      writeAgentTranscript(root, "a", DUPLICATE_JSONL_ID),
+      writeAgentTranscript(root, "z", DUPLICATE_JSONL_ID),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const mapping = mapCursorDiscovery(await inventoryCursorSource(paths), []);
+    const byId = new Map(mapping.candidates.map((candidate) => [candidate.nativeId, candidate]));
+
+    expect(mapping.outcome).toBe("supported");
+    expect(byId.get(RICH_JSONL_ID)).toMatchObject({
+      family: "chat-store-v1",
+      inputs: expect.not.arrayContaining([expect.objectContaining({ role: "transcript" })]),
+    });
+    expect(byId.has(NONCANDIDATE_JSONL_ID)).toBe(false);
+    expect(byId.get(UNIQUE_JSONL_ID)).toMatchObject({
+      family: "agent-transcript-jsonl-v1",
+      inputs: [{ role: "transcript" }],
+    });
+    expect(byId.get(CHILD_JSONL_ID)).toMatchObject({
+      family: "agent-transcript-jsonl-v1",
+    });
+    expect(byId.get(DUPLICATE_JSONL_ID)).toMatchObject({
+      family: "agent-transcript-conflict-v1",
+      inputs: [{ role: "transcript" }, { role: "transcript" }],
+    });
+  });
+
+  test("lets null-checkpoint catalog ownership suppress unique and duplicate JSONL fallback", async () => {
+    const root = await temporaryCursorRoot();
+    await Promise.all([
+      writeCatalog(root, "project", "scope"),
+      writeAgentTranscript(root, "a", UNIQUE_JSONL_ID),
+      writeAgentTranscript(root, "a", DUPLICATE_JSONL_ID),
+      writeAgentTranscript(root, "z", DUPLICATE_JSONL_ID),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+    const inventory = await inventoryCursorSource(paths);
+    const catalog = inventory.catalogs[0]!;
+
+    const mapping = mapCursorDiscovery(inventory, [
+      materializedCatalog(catalog, [
+        { ...agent(UNIQUE_JSONL_ID), checkpoint: null },
+        { ...agent(DUPLICATE_JSONL_ID), checkpoint: null },
+      ]),
+    ]);
+
+    expect(mapping).toMatchObject({
+      outcome: "complete-empty",
+      candidates: [],
+      issues: [],
+    });
+  });
+
+  test("marks unknown and wrong-type transcript grammar entries incomplete", async () => {
+    const root = await temporaryCursorRoot();
+    await writeAgentTranscript(root, "project", UNIQUE_JSONL_ID);
+    const transcripts = join(root, "projects", "project", "agent-transcripts");
+    await Promise.all([
+      mkdir(join(transcripts, "unknown-layout"), { recursive: true }),
+      mkdir(join(transcripts, CHILD_JSONL_ID, `${CHILD_JSONL_ID}.jsonl`), {
+        recursive: true,
+      }),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const mapping = mapCursorDiscovery(await inventoryCursorSource(paths), []);
+
+    expect(mapping.outcome).toBe("incomplete");
+    expect(mapping.issues).toEqual([
+      { kind: "invalid-agent-transcript" },
+      { kind: "invalid-agent-transcript" },
+    ]);
   });
 
   test.each([
@@ -398,6 +521,22 @@ async function writeCatalog(
     await mkdir(store);
     await writeFile(join(store, "store.db"), "store");
   }
+}
+
+async function writeAgentTranscript(
+  root: string,
+  project: string,
+  nativeId: string,
+  parentId?: string,
+): Promise<string> {
+  const transcriptRoot = join(root, "projects", project, "agent-transcripts");
+  const file =
+    parentId === undefined
+      ? join(transcriptRoot, nativeId, `${nativeId}.jsonl`)
+      : join(transcriptRoot, parentId, "subagents", `${nativeId}.jsonl`);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, '{"type":"turn_ended","status":"success"}');
+  return file;
 }
 
 function materializedCatalog(

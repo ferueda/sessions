@@ -1072,8 +1072,10 @@ correctness remains their only gate.
 
 ### Phase 7 — Equivalent second adapter (complete)
 
-Cursor discovery and transcript normalization use the same port, with no changes
-to domain, storage, indexing, query, export, or CLI behavior.
+Cursor rich stores and reduced JSONL use the same port. One optional
+adapter-version replacement decision prevents reduced evidence from replacing a
+rich last-good snapshot. Domain, storage, query, export, and CLI behavior remain
+provider-neutral.
 
 ### Phase 8 — Public release and parity
 

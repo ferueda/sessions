@@ -1,7 +1,7 @@
 # Current architecture
 
-Status: M11b Cursor parity is complete over the existing provider-neutral
-capture, library, query, export, and maintenance contracts.
+Status: M11c Cursor rich-store and JSONL fallback capture is complete over the
+provider-neutral library, query, export, and maintenance contracts.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -124,7 +124,9 @@ gate.
 
 ## Capture boundary
 
-The source port is `probe` / `discover(workspace)` / `read(candidate, workspace)`.
+The source port is `probe` / `discover(workspace)` /
+`read(candidate, workspace)`, plus an optional adapter-version replacement
+guard.
 The exact writer-owned capture workspace reaches discovery and changed reads.
 The application engine first applies the provider-neutral optional-source rule,
 then admits a complete discovery set for each attempted source,
@@ -150,9 +152,14 @@ document after change or parse failure.
 
 Cursor discovery traverses only its documented local store grammar. It snapshots
 selected SQLite main/WAL bytes into the same private workspace, never opens
-provider SHM, and normalizes only the two families in the
+provider SHM, and normalizes the two rich store families or streams one exact
+recognized JSONL fallback from the
 [Cursor format support reference](../reference/cursor-format-support.md).
-Deferred JSONL, legacy, and cloud-only history remain outside current coverage.
+Rich evidence owns a shared native ID. Reduced JSONL can promote to rich but
+cannot replace a retained rich snapshot; the provider-neutral engine records an
+unsupported candidate and keeps last-good evidence stale. Duplicate unowned
+JSONL basenames fail as one candidate. Legacy and cloud-only history remain
+outside current coverage.
 
 ## Durable library
 

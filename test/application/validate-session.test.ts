@@ -62,6 +62,12 @@ describe("session admission", () => {
     expect(() => selectSessionSource({ kind: "other", instanceId: "one" }, adapter)).toThrow(
       "Selected source adapter does not match",
     );
+    expect(() =>
+      selectSessionSource({ kind: "synthetic", instanceId: "one" }, {
+        ...adapter,
+        canReplace: "invalid",
+      } as never),
+    ).toThrow("Selected source adapter does not match");
   });
 
   test("deeply snapshots and brands an admitted observation", () => {

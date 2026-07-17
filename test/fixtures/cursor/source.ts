@@ -18,9 +18,12 @@ import type { CursorEnvironment } from "../../../src/adapters/cursor/paths.ts";
 import type { CursorStoreMetadata } from "../../../src/adapters/cursor/store.ts";
 import { encodeRoot, insertBlob, insertStoreMetadata, messageBlobId } from "./store.ts";
 
-export const CURSOR_CHAT_NATIVE_ID = "chat-primary";
+export const CURSOR_CHAT_NATIVE_ID = "agent-11111111-1111-4111-8111-111111111111";
 export const CURSOR_AGENT_NATIVE_ID = "agent-secondary";
+export const CURSOR_JSONL_NATIVE_ID = "agent-33333333-3333-4333-8333-333333333333";
+export const CURSOR_JSONL_CHILD_NATIVE_ID = "44444444-4444-4444-8444-444444444444";
 export const CURSOR_SHARED_TEXT = "Shared synthetic Cursor evidence";
+export const CURSOR_JSONL_TEXT = "Synthetic Cursor JSONL evidence";
 export const CURSOR_CHAT_TITLE = "Synthetic Cursor chat";
 export const CURSOR_AGENT_TITLE = "Synthetic Cursor agent";
 export const CURSOR_CHAT_ROOT_BLOB_ID = "10".repeat(32);
@@ -45,11 +48,13 @@ export interface CursorSourceFixture {
   readonly chatStore: string;
   readonly catalog: string;
   readonly agentStore: string;
+  readonly jsonlTranscript: string;
   writeReadySource(): Promise<void>;
   writeChatMetadata(overrides?: CursorChatMetadataOverrides): Promise<void>;
   writeChatStore(options?: CursorStoreOptions): void;
   writeAgentCatalog(overrides?: CursorAgentCatalogOverrides): void;
   writeAgentStore(options?: CursorStoreOptions): void;
+  writeJsonlTranscript(options?: CursorJsonlTranscriptOptions): Promise<string>;
   mutateChatMetadata(): void;
   mutateChatMessage(text?: string): void;
   mutateAgentMessage(text?: string): void;
@@ -84,6 +89,14 @@ export interface CursorStoreOptions {
   readonly unsupportedSchema?: boolean;
 }
 
+export interface CursorJsonlTranscriptOptions {
+  readonly nativeId?: string;
+  readonly project?: string;
+  readonly parentId?: string;
+  readonly records?: readonly unknown[];
+  readonly bytes?: string | Uint8Array;
+}
+
 /**
  * Create a generated provider tree under the real default `<home>/.cursor`
  * location. Smoke tests can inject only HOME and exercise production routing.
@@ -106,6 +119,9 @@ export async function createCursorSourceFixture(
     agentStoreDirectory(CURSOR_AGENT_NATIVE_ID),
     "store.db",
   );
+  const jsonlTranscript = cursorJsonlTranscriptPath(cursorHome, {
+    nativeId: CURSOR_JSONL_NATIVE_ID,
+  });
   await Promise.all([mkdir(home, { recursive: true }), mkdir(privateRoot, { recursive: true })]);
 
   const workspace: SourceCaptureWorkspace = Object.freeze({
@@ -134,6 +150,7 @@ export async function createCursorSourceFixture(
     chatStore,
     catalog,
     agentStore,
+    jsonlTranscript,
     async writeReadySource(): Promise<void> {
       await this.writeChatMetadata();
       this.writeChatStore();
@@ -190,6 +207,21 @@ export async function createCursorSourceFixture(
         malformedMessage: options.malformedMessage ?? false,
         unsupportedSchema: options.unsupportedSchema ?? false,
       });
+    },
+    async writeJsonlTranscript(options = {}): Promise<string> {
+      const file = cursorJsonlTranscriptPath(cursorHome, options);
+      await mkdir(dirname(file), { recursive: true });
+      const value =
+        options.bytes ??
+        cursorJsonlRecords(
+          options.nativeId === CURSOR_JSONL_CHILD_NATIVE_ID
+            ? "Synthetic Cursor child JSONL evidence"
+            : CURSOR_JSONL_TEXT,
+        )
+          .map((record) => JSON.stringify(record))
+          .join("\n");
+      await writeFile(file, value);
+      return file;
     },
     mutateChatMetadata(): void {
       chatMetadataMutation += 1;
@@ -282,6 +314,22 @@ export function cursorConversationMessages(
         },
       ],
     },
+  ];
+}
+
+export function cursorJsonlRecords(text = CURSOR_JSONL_TEXT): readonly unknown[] {
+  return [
+    { role: "user", message: { content: [{ type: "text", text }] } },
+    {
+      role: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Synthetic Cursor JSONL answer" },
+          { type: "tool_use", name: "cursor_jsonl_tool", input: { value: 1 } },
+        ],
+      },
+    },
+    { type: "turn_ended", status: "success" },
   ];
 }
 
@@ -408,6 +456,18 @@ function replaceSelectedMessageBytes(file: string, index: number, value: Uint8Ar
 
 function agentStoreDirectory(agentId: string): string {
   return `agent-${createHash("sha256").update(agentId, "utf8").digest("hex")}`;
+}
+
+function cursorJsonlTranscriptPath(
+  cursorHome: string,
+  options: CursorJsonlTranscriptOptions,
+): string {
+  const project = options.project ?? AGENT_PROJECT;
+  const nativeId = options.nativeId ?? CURSOR_JSONL_NATIVE_ID;
+  const root = join(cursorHome, "projects", project, "agent-transcripts");
+  return options.parentId === undefined
+    ? join(root, nativeId, `${nativeId}.jsonl`)
+    : join(root, options.parentId, "subagents", `${nativeId}.jsonl`);
 }
 
 function mkdirSyncParent(file: string): void {

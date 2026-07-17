@@ -172,10 +172,17 @@ export function selectSessionSource(
 ): SelectedSessionSource {
   const snapshot = snapshotIdentity({ source: instance, nativeId: "selection" });
   if (snapshot === undefined) throw new TypeError("Invalid selected source instance");
+  if (typeof adapter !== "object" || adapter === null || adapter.kind !== snapshot.source.kind) {
+    throw new TypeError("Selected source adapter does not match its source instance");
+  }
+  let canReplace: unknown;
+  try {
+    canReplace = adapter.canReplace;
+  } catch {
+    throw new TypeError("Selected source adapter does not match its source instance");
+  }
   if (
-    typeof adapter !== "object" ||
-    adapter === null ||
-    adapter.kind !== snapshot.source.kind ||
+    (canReplace !== undefined && typeof canReplace !== "function") ||
     typeof adapter.probe !== "function" ||
     typeof adapter.discover !== "function" ||
     typeof adapter.read !== "function"

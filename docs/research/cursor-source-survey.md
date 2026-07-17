@@ -1,7 +1,7 @@
 # Cursor source survey
 
-- Status: M11b decision baseline; M11a and M11b0 prerequisites implemented
-- Date: 2026-07-16
+- Status: M11b decision baseline plus implemented M11c JSONL extension
+- Date: 2026-07-17
 - Scope: passive local Cursor adapter and its provider-neutral prerequisite
 
 ## Purpose
@@ -45,6 +45,9 @@ stays cheap. Only a candidate that the shared engine considers changed receives
 a private main/WAL snapshot. This changes the internal adapter port, not the
 domain, repository, query, CLI, JSON/JSONL, Agent Skill, or provider-read-only
 contract.
+
+M11c later added the reduced JSONL branch only for otherwise-unowned local
+history, with rich precedence and a no-downgrade replacement guard.
 
 ## Evidence used
 
@@ -166,9 +169,10 @@ The filename alone is not a globally safe native identity:
 - 7 filename groups appeared in multiple project roots; and
 - all 7 duplicate groups had different transcript bytes.
 
-M11 must resolve exact identity from structurally owned metadata/catalog state
-or use a proven provider-scoped identity. It must not globally join metadata by
-bare filename, project traversal order, title, timestamp, digest, or text.
+M11c uses the bare basename only when authoritative rich/noncandidate ownership
+does not apply and exactly one artifact has that basename. Duplicate basenames
+remain one explicit conflict; project traversal order, title, timestamp, digest,
+and text never choose or invent identity.
 
 ### Agent blob store and project catalog
 
@@ -207,14 +211,16 @@ representation is eligible.
 
 ## Source authority and coverage
 
-One `cursor` adapter should hide two first-release reader branches. Their labels
-are internal format names, not public source kinds:
+One `cursor` adapter hides three reader branches. Their labels are internal
+format names, not public source kinds:
 
-- `chat-store-v1`; and
-- `agent-checkpoint-store-v1`.
+- `chat-store-v1`;
+- `agent-checkpoint-store-v1`; and
+- `agent-transcript-jsonl-v1`.
 
-JSONL-only history, legacy Composer/App Support state, and cloud-only records
-remain outside first-release coverage.
+M11b admitted the two rich stores. M11c later admitted the exact reduced JSONL
+grammar below. Legacy Composer/App Support state and cloud-only records remain
+outside coverage.
 
 Each branch needs:
 
@@ -432,6 +438,23 @@ The exact supported fields and normalization rules are frozen in
 Implementation must stop if fixtures or live structural proof contradict these
 decisions. It must not choose identity or authority from private text, directory
 order, timestamps, product labels, or undocumented opaque fields.
+
+## M11c JSONL fallback decisions
+
+M11c uses bare JSONL basename identity only after rich and explicit noncandidate
+ownership are applied. Rich evidence wins and same-ID JSONL never changes its
+fingerprint. One otherwise-unowned basename is eligible; duplicate files for an
+unowned basename produce one deterministic `unsupported-format` candidate rather
+than a chosen file, merge, or invented project-scoped identity.
+
+The JSONL branch preserves only exact ordered user/model text, assistant tool
+calls, and turn-end lifecycle records. It does not infer title, workspace,
+timestamps, tool results, call IDs, result linkage, relations, or lineage.
+JSONL-to-rich promotion is allowed. Rich-to-JSONL replacement fails closed and
+keeps the rich last-good snapshot queryable.
+
+The exact grammar, schemas, precedence, and failure rules are in
+[Cursor local format v1 evidence](cursor-format-v1.md).
 
 ## Accepted multi-provider policy
 

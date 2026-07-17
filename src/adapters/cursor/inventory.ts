@@ -38,10 +38,18 @@ export interface CursorCatalogInventory {
   readonly stores: readonly CursorAgentStoreInventory[];
 }
 
+export interface CursorAgentTranscriptInventory {
+  readonly nativeId: string;
+  readonly placement: "top-level" | "subagent";
+  readonly file: CursorEntryDescriptor;
+}
+
 export interface CursorStructuralInventory {
   readonly chats: readonly CursorChatInventory[];
   readonly catalogs: readonly CursorCatalogInventory[];
-  readonly deferredAgentTranscripts: readonly CursorEntryDescriptor[];
+  readonly agentTranscriptRoots: readonly CursorEntryDescriptor[];
+  readonly agentTranscripts: readonly CursorAgentTranscriptInventory[];
+  readonly invalidAgentTranscriptEntries: readonly CursorEntryDescriptor[];
   readonly fingerprint: string;
 }
 
@@ -51,10 +59,19 @@ export async function inventoryCursorSource(
   const entries: CursorEntryDescriptor[] = [];
   const chats: CursorChatInventory[] = [];
   const catalogs: CursorCatalogInventory[] = [];
-  const deferredAgentTranscripts: CursorEntryDescriptor[] = [];
+  const agentTranscriptRoots: CursorEntryDescriptor[] = [];
+  const agentTranscripts: CursorAgentTranscriptInventory[] = [];
+  const invalidAgentTranscriptEntries: CursorEntryDescriptor[] = [];
 
   await inventoryChats(paths, entries, chats);
-  await inventoryProjects(paths, entries, catalogs, deferredAgentTranscripts);
+  await inventoryProjects(
+    paths,
+    entries,
+    catalogs,
+    agentTranscriptRoots,
+    agentTranscripts,
+    invalidAgentTranscriptEntries,
+  );
 
   const fingerprint = createHash("sha256")
     .update(JSON.stringify(entries.map(cursorDescriptorTuple)), "utf8")
@@ -62,7 +79,9 @@ export async function inventoryCursorSource(
   return Object.freeze({
     chats: Object.freeze(chats),
     catalogs: Object.freeze(catalogs),
-    deferredAgentTranscripts: Object.freeze(deferredAgentTranscripts),
+    agentTranscriptRoots: Object.freeze(agentTranscriptRoots),
+    agentTranscripts: Object.freeze(agentTranscripts),
+    invalidAgentTranscriptEntries: Object.freeze(invalidAgentTranscriptEntries),
     fingerprint: `sha256:${fingerprint}`,
   });
 }
@@ -129,7 +148,9 @@ async function inventoryProjects(
   paths: ResolvedCursorPaths,
   entries: CursorEntryDescriptor[],
   catalogs: CursorCatalogInventory[],
-  deferred: CursorEntryDescriptor[],
+  transcriptRoots: CursorEntryDescriptor[],
+  transcripts: CursorAgentTranscriptInventory[],
+  invalidTranscriptEntries: CursorEntryDescriptor[],
 ): Promise<void> {
   const root = await describeCursorEntry(paths.cursorHome, ["projects"]);
   entries.push(root);
@@ -138,8 +159,21 @@ async function inventoryProjects(
     if (projectEntry.kind !== "directory") continue;
     const project = lastComponent(projectEntry);
     const projectChildren = await childMap(paths, ["projects", project], entries);
-    const transcripts = projectChildren.get("agent-transcripts");
-    if (transcripts?.kind === "directory") deferred.push(transcripts);
+    const transcriptRoot = projectChildren.get("agent-transcripts");
+    if (transcriptRoot !== undefined) {
+      transcriptRoots.push(transcriptRoot);
+      if (transcriptRoot.kind === "directory") {
+        await inventoryAgentTranscripts(
+          paths,
+          transcriptRoot,
+          entries,
+          transcripts,
+          invalidTranscriptEntries,
+        );
+      } else {
+        invalidTranscriptEntries.push(transcriptRoot);
+      }
+    }
 
     const sdkRoot = projectChildren.get("sdk-agent-store");
     if (sdkRoot?.kind !== "directory") continue;
@@ -205,6 +239,76 @@ async function inventoryProjects(
   }
 }
 
+async function inventoryAgentTranscripts(
+  paths: ResolvedCursorPaths,
+  root: CursorEntryDescriptor,
+  entries: CursorEntryDescriptor[],
+  transcripts: CursorAgentTranscriptInventory[],
+  invalidEntries: CursorEntryDescriptor[],
+): Promise<void> {
+  for (const identityEntry of await children(paths, root.components)) {
+    entries.push(identityEntry);
+    const identityName = lastComponent(identityEntry);
+    if (!isCursorTopLevelTranscriptId(identityName)) {
+      invalidEntries.push(identityEntry);
+      continue;
+    }
+    if (identityEntry.kind !== "directory") {
+      invalidEntries.push(identityEntry);
+      continue;
+    }
+
+    for (const child of await children(paths, identityEntry.components)) {
+      entries.push(child);
+      if (lastComponent(child) === `${identityName}.jsonl`) {
+        transcripts.push(
+          Object.freeze({
+            nativeId: identityName,
+            placement: "top-level",
+            file: child,
+          }),
+        );
+        continue;
+      }
+      if (lastComponent(child) !== "subagents") {
+        invalidEntries.push(child);
+        continue;
+      }
+      if (child.kind !== "directory") {
+        invalidEntries.push(child);
+        continue;
+      }
+      for (const subagent of await children(paths, child.components)) {
+        entries.push(subagent);
+        const nativeId = jsonlNativeId(lastComponent(subagent));
+        if (nativeId === undefined || !isCursorSubagentTranscriptId(nativeId)) {
+          invalidEntries.push(subagent);
+          continue;
+        }
+        transcripts.push(
+          Object.freeze({
+            nativeId,
+            placement: "subagent",
+            file: subagent,
+          }),
+        );
+      }
+    }
+  }
+}
+
+function isCursorTopLevelTranscriptId(value: string): boolean {
+  return CURSOR_TOP_LEVEL_TRANSCRIPT_ID.test(value);
+}
+
+function isCursorSubagentTranscriptId(value: string): boolean {
+  return CURSOR_UUID.test(value);
+}
+
+function jsonlNativeId(value: string): string | undefined {
+  return value.endsWith(".jsonl") ? value.slice(0, -".jsonl".length) : undefined;
+}
+
 async function children(
   paths: ResolvedCursorPaths,
   components: readonly string[],
@@ -243,3 +347,7 @@ function lastComponent(entry: CursorEntryDescriptor): string {
   if (value === undefined) throw new TypeError("Cursor inventory entry has no component");
   return value;
 }
+
+const UUID_BODY = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const CURSOR_UUID = new RegExp(`^${UUID_BODY}$`, "u");
+const CURSOR_TOP_LEVEL_TRANSCRIPT_ID = new RegExp(`^(?:agent-)?${UUID_BODY}$`, "u");

@@ -18,6 +18,10 @@ Adapters translate provider histories into canonical documents. They do not defi
 - `read(candidate, workspace)`: deterministically normalize one changed candidate
   into a canonical `SessionDocument`, with the exact same writer-owned workspace
   available for private staging. Unchanged candidates never call `read`.
+- optional `canReplace(previousAdapterVersion, nextAdapterVersion)`: allow or
+  reject a changed format before `read`. Absence means allowed. A false, thrown,
+  or non-boolean result fails that candidate as `unsupported-format` and
+  preserves any last-good snapshot.
 
 The port and values live under `src/application/ports/`; canonical transcript values live under `src/domain/`.
 
@@ -29,6 +33,8 @@ The port and values live under `src/application/ports/`; canonical transcript va
   tuple. Adapter fixtures independently enumerate required inputs so metadata or
   lineage consumed by normalization cannot be omitted silently.
 - Parser behavior changes increment the adapter format version.
+- A replacement guard receives only adapter-version strings. It cannot read
+  provider state or change retention, storage, query, or presentation policy.
 - Discovery order does not change canonical results.
 - Reads compare every input before and after consumption or use an equivalent
   stable snapshot. Any mismatch or disappearance is `source-changed`.
@@ -71,7 +77,8 @@ The port and values live under `src/application/ports/`; canonical transcript va
 
 The reusable contract suite proves probe safety, deterministic discovery/read,
 declared-input coverage, aggregate invalidation, typed failures, missing metadata,
-ordering, provenance fallback, and read-only behavior. Fixtures declare each
+ordering, provenance fallback, replacement-guard admission, and read-only
+behavior. Fixtures declare each
 input as live or snapshot-owned: live inputs must pass pre-read/during-read checks;
 snapshot-owned inputs must remain deterministic from the frozen generation and
 surface changes on the next discovery. Its synthetic source proves the contract
@@ -138,11 +145,19 @@ compatibility boundary.
 ## Cursor implementation
 
 `src/adapters/cursor/` resolves one default local Cursor instance and discovers
-only the two store-backed families in the
+the two store-backed families plus the reduced JSONL fallback in the
 [Cursor format support reference](../reference/cursor-format-support.md).
 Discovery is stable across exact path inventories and captures SQLite main/WAL
 bytes only in the leased private workspace. Reads normalize the selected root
-and message blobs without inferring lineage or reopening deferred JSONL history.
+and message blobs or stream one frozen JSONL transcript without inferring
+metadata or lineage.
+
+Both rich families publish `cursor-v1`; the reduced branch publishes
+`cursor-jsonl-v1`. Cursor permits reduced-to-rich replacement and rejects
+rich-to-reduced replacement, so missing rich source evidence cannot silently
+downgrade a retained snapshot. Rich discovery also owns same-ID JSONL and keeps
+those files out of its fingerprint. Duplicate unowned JSONL basenames become one
+isolated unsupported candidate.
 
 The adapter shares only provider-neutral SQLite byte-capture mechanics with
 Codex. Cursor schema, path authority, identity, normalization, and failure

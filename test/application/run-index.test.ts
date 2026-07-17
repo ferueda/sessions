@@ -389,6 +389,130 @@ describe("runIndex", () => {
     expect(third.counts).toMatchObject({ discovered: 1, updated: 1, unchanged: 0 });
   });
 
+  test("preserves last-good evidence when the source rejects an adapter-version replacement", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("session", "revision-one", "adapter-v1")]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const canReplace = vi.fn<(previous: string, next: string) => boolean>(() => false);
+    Object.defineProperty(source.adapter, "canReplace", { value: canReplace });
+
+    source.setDiscovery([source.candidate("session", "revision-two", "adapter-v2")]);
+    const report = await execute(harness, [source.selected]);
+
+    expect(canReplace).toHaveBeenCalledOnce();
+    expect(canReplace).toHaveBeenCalledWith("adapter-v1", "adapter-v2");
+    expect(source.readNativeIds).toEqual(["session"]);
+    expect(report.counts).toEqual({
+      discovered: 1,
+      unchanged: 0,
+      updated: 0,
+      failed: 1,
+      missing: 0,
+      stale: 1,
+    });
+    expect(report.sources[0]?.items).toMatchObject([
+      {
+        identity: { source: source.instance, nativeId: "session" },
+        outcome: "failed",
+        failure: "unsupported-format",
+      },
+    ]);
+    await expect(
+      harness.index.getFreshness(identity(source.instance, "session")),
+    ).resolves.toMatchObject({
+      status: "stale",
+      lastGood: { adapterVersion: "adapter-v1" },
+      latest: {
+        outcome: "failed",
+        revision: { adapterVersion: "adapter-v2" },
+        failure: "unsupported-format",
+      },
+    });
+  });
+
+  test.each([
+    {
+      label: "throws",
+      guard: () => {
+        throw new Error("private replacement decision");
+      },
+    },
+    {
+      label: "returns a non-boolean value",
+      guard: () => "invalid" as unknown as boolean,
+    },
+  ])("fails only the guarded candidate when canReplace $label", async ({ guard }) => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("guarded", "revision-one", "adapter-v1")]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const canReplace = vi.fn<(previous: string, next: string) => boolean>(guard);
+    Object.defineProperty(source.adapter, "canReplace", { value: canReplace });
+
+    source.setDiscovery([
+      source.candidate("guarded", "revision-two", "adapter-v2"),
+      source.candidate("new-session", "revision-one", "adapter-v2"),
+    ]);
+    const report = await execute(harness, [source.selected]);
+
+    expect(canReplace).toHaveBeenCalledOnce();
+    expect(canReplace).toHaveBeenCalledWith("adapter-v1", "adapter-v2");
+    expect(source.readNativeIds).toEqual(["guarded", "new-session"]);
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: { discovered: 2, updated: 1, failed: 1, stale: 1 },
+      items: [
+        {
+          identity: { nativeId: "guarded" },
+          outcome: "failed",
+          failure: "unsupported-format",
+        },
+      ],
+    });
+    await expect(
+      harness.index.getFreshness(identity(source.instance, "guarded")),
+    ).resolves.toMatchObject({
+      status: "stale",
+      lastGood: { adapterVersion: "adapter-v1" },
+    });
+  });
+
+  test("fails only the guarded candidate when reading canReplace throws", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("guarded", "revision-one", "adapter-v1")]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    let guardReads = 0;
+    Object.defineProperty(source.adapter, "canReplace", {
+      get() {
+        guardReads += 1;
+        if (guardReads === 1) return () => true;
+        throw new Error("private replacement getter");
+      },
+    });
+
+    source.setDiscovery([
+      source.candidate("guarded", "revision-two", "adapter-v2"),
+      source.candidate("new-session", "revision-one", "adapter-v2"),
+    ]);
+    const report = await execute(harness, [source.selected]);
+
+    expect(guardReads).toBe(2);
+    expect(source.readNativeIds).toEqual(["guarded", "new-session"]);
+    expect(report.sources[0]).toMatchObject({
+      status: "completed",
+      counts: { discovered: 2, updated: 1, failed: 1, stale: 1 },
+      items: [
+        {
+          identity: { nativeId: "guarded" },
+          outcome: "failed",
+          failure: "unsupported-format",
+        },
+      ],
+    });
+  });
+
   test("keeps failed reads seen and preserves last-good freshness", async () => {
     const source = createFakeIndexingSource();
     source.setDiscovery([source.candidate("session", "revision-one")]);
