@@ -11,8 +11,7 @@ Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-r
 
 There are no active executor plans.
 
-Complete the M12 maintainer rollout in
-[Releasing](../../docs/contributing/releasing.md), including the unsupported
-bootstrap seed and first supported `0.1.0` release, before resuming M13.
+M12 and the public release rollout are complete. M13 parity, Harness cutover,
+and V1 closure are next and require a reviewed executor plan.
 
 Markdown presentation remains deferred beyond V1.
