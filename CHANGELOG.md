@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* recover first supported release ([ee09754](https://github.com/ferueda/sessions/commit/ee09754ce3b8f32b891296c6153c3c9f491f0a33))
 * recover first supported release ([b16e5e1](https://github.com/ferueda/sessions/commit/b16e5e1ceadfac947f6330694e3cb83400432ae5))
 * retry npm attestation verification ([097b997](https://github.com/ferueda/sessions/commit/097b997641a9c1159d19702a1d470942c1848417))
 
