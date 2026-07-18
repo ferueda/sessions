@@ -22,6 +22,7 @@ export interface ReleaseRouteInput {
   readonly eventName: "push" | "workflow_dispatch";
   readonly ref: string;
   readonly bootstrapRequested: boolean;
+  readonly retryReleaseRequested?: boolean;
   readonly previousManifestVersion: string | null;
   readonly currentManifestVersion: string;
   readonly packageVersion: string;
@@ -34,7 +35,12 @@ export interface ReleaseRoute {
   readonly mode: "bootstrap" | "supported" | "none";
   readonly version: string;
   readonly parentVersion: string;
-  readonly reason: "bootstrap-qualification" | "manifest-seed" | "release-target" | "no-change";
+  readonly reason:
+    | "bootstrap-qualification"
+    | "manifest-seed"
+    | "release-retry"
+    | "release-target"
+    | "no-change";
 }
 
 export interface RegistryReleaseState {
@@ -63,10 +69,36 @@ export function classifyReleaseRoute(input: ReleaseRouteInput): ReleaseRoute {
 
   if (input.eventName === "workflow_dispatch") {
     if (input.ref !== "refs/heads/main") {
-      throw new Error("bootstrap qualification must select the main branch");
+      throw new Error("manual release operations must select the main branch");
+    }
+    if (input.retryReleaseRequested === true) {
+      if (input.bootstrapRequested) {
+        throw new Error("bootstrap qualification and supported-release retry are exclusive");
+      }
+      if (input.previousManifestVersion === null) {
+        throw new Error("supported-release retry requires a parent release manifest");
+      }
+      assertVersion(input.previousManifestVersion, "parent manifest version");
+      if (compareVersions(input.currentManifestVersion, input.previousManifestVersion) <= 0) {
+        throw new Error("release manifest versions must increase");
+      }
+      if (compareVersions(input.currentManifestVersion, FIRST_SUPPORTED_VERSION) < 0) {
+        throw new Error("supported releases must be at least version 0.1.0");
+      }
+      if (!hasChangelogRelease(input.changelog, input.currentManifestVersion)) {
+        throw new Error("the target version is missing from CHANGELOG.md");
+      }
+      return {
+        qualify: false,
+        releaseTarget: true,
+        mode: "supported",
+        version: input.currentManifestVersion,
+        parentVersion: input.previousManifestVersion,
+        reason: "release-retry",
+      };
     }
     if (!input.bootstrapRequested) {
-      throw new Error("manual qualification requires the bootstrap input");
+      throw new Error("manual release operation requires bootstrap or retry-release");
     }
     if (input.currentManifestVersion !== BOOTSTRAP_VERSION) {
       throw new Error("manual qualification is limited to the 0.0.0 bootstrap seed");
@@ -156,11 +188,11 @@ export function decideReleaseOrder(input: ReleaseOrderInput): ReleaseOrderDecisi
   if (input.parentVersion === BOOTSTRAP_VERSION) {
     if (
       input.targetVersion !== FIRST_SUPPORTED_VERSION ||
-      input.latestVersion !== null ||
+      (input.latestVersion !== null && input.latestVersion !== BOOTSTRAP_VERSION) ||
       input.bootstrapVersion !== BOOTSTRAP_VERSION
     ) {
       throw new Error(
-        "first supported release requires the bootstrap seed, no latest tag, and target 0.1.0",
+        "first supported release requires the bootstrap seed, latest absent or on the seed, and target 0.1.0",
       );
     }
     return { action: "publish" };
@@ -354,6 +386,19 @@ function readParentManifestVersion(cwd: string, beforeSha: string): string | nul
   return value;
 }
 
+function resolveCommit(cwd: string, revision: string, label: string): string {
+  const result = spawnSync("git", ["rev-parse", `${revision}^{commit}`], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const commit = result.stdout.trim();
+  if (result.status !== 0 || !/^[0-9a-f]{40}$/.test(commit)) {
+    throw new Error(`${label} does not resolve to a commit`);
+  }
+  return commit;
+}
+
 function assertExactCheckout(cwd: string, headSha: string): void {
   if (!/^[0-9a-f]{40}$/.test(headSha)) throw new Error("release SHA must be a full commit SHA");
   const result = spawnSync("git", ["rev-parse", "HEAD"], {
@@ -389,15 +434,23 @@ function runRoute(args: readonly string[]): void {
   }
   const headSha = valueAfter(args, "--head-sha");
   assertExactCheckout(cwd, headSha);
+  const retryReleaseRequested = valueAfter(args, "--retry-release") === "true";
+  const currentManifestVersion = readRootVersion(path.join(cwd, ".release-please-manifest.json"));
+  const releaseSha = retryReleaseRequested
+    ? resolveCommit(cwd, `v${currentManifestVersion}`, "supported release tag")
+    : headSha;
+  const previousManifestVersion = retryReleaseRequested
+    ? readParentManifestVersion(cwd, resolveCommit(cwd, `${releaseSha}^1`, "release parent"))
+    : eventName === "push"
+      ? readParentManifestVersion(cwd, valueAfter(args, "--before-sha"))
+      : null;
   const route = classifyReleaseRoute({
     eventName,
     ref: valueAfter(args, "--ref"),
     bootstrapRequested: valueAfter(args, "--bootstrap") === "true",
-    previousManifestVersion:
-      eventName === "push"
-        ? readParentManifestVersion(cwd, valueAfter(args, "--before-sha"))
-        : null,
-    currentManifestVersion: readRootVersion(path.join(cwd, ".release-please-manifest.json")),
+    retryReleaseRequested,
+    previousManifestVersion,
+    currentManifestVersion,
     packageVersion: readRootVersion(path.join(cwd, "package.json")),
     changelog: readFileSync(path.join(cwd, "CHANGELOG.md"), "utf8"),
   });
@@ -408,6 +461,7 @@ function runRoute(args: readonly string[]): void {
     version: route.version,
     parent_version: route.parentVersion,
     reason: route.reason,
+    release_sha: releaseSha,
   });
 }
 

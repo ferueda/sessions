@@ -32,7 +32,10 @@ from the original release revision; do not rebuild from newer `main` or move
 Trusted publishing requires the npm package to exist. The sole exception is an
 interactive publication of the exact qualified `0.0.0` tarball with maintainer
 2FA, public access, and the non-default `bootstrap` tag. Do not create
-`v0.0.0`, assign `latest`, or treat that seed as supported.
+`v0.0.0` or treat that seed as supported. npm's public registry may also point
+the required `latest` tag at the sole published version; the first supported
+release accepts only `latest` absent or pointing to that exact seed and replaces
+it with `0.1.0`.
 
 After the manual bootstrap qualification passes, download its tarball and
 digest, verify both, then publish those exact bytes:
@@ -92,13 +95,23 @@ After the seed exists:
 7. Verify `0.1.0` as `latest` with matching tag, integrity, and provenance, then
    disallow token publishing and revoke obsolete automation tokens.
 
+If a publish fails after qualification and GitHub release creation, dispatch the
+same `Release` workflow on `main` with `retry_release=true`, the original
+qualifying run ID, and the SHA-256 from its qualification summary. The retry
+resolves the immutable release tag, downloads the retained artifact from that
+run, verifies its bytes, and uses the current reviewed release-order guard. It
+does not move the tag or rebuild the package.
+
 `0.1.0` is the first supported package and the compatibility baseline for the
 CLI, structured output, and retained Sessions data. See
 [ADR 0009](../decisions/0009-establish-the-supported-release-baseline.md).
 
 ## Recovery rules
 
-- An absent target with an unexpected parent `latest` fails before mutation.
+- An absent first supported target accepts `latest` only when it is absent or
+  still points to the exact `0.0.0` bootstrap seed.
+- Any other absent target with an unexpected parent `latest` fails before
+  mutation.
 - An existing version is a no-op only when its registry integrity matches the
   qualified artifact.
 - An existing tag must point to the release revision.

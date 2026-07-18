@@ -925,8 +925,10 @@ honest observational conclusion.
   the full gate and Linux/macOS/Windows release smokes before the protected npm
   job publishes it through OIDC with provenance.
 - One interactive, 2FA-protected `0.0.0` publish under `bootstrap` seeds npm so
-  trusted publishing can be configured. It is unsupported and not `latest`;
-  `0.1.0` is the first supported and compatibility-bearing release.
+  trusted publishing can be configured. It is unsupported; if npm also assigns
+  its required `latest` tag to that sole version, the first supported publish
+  advances it to `0.1.0`. That release is the first compatibility-bearing
+  baseline.
 
 No V1 daemon, watcher, TUI, native binary, Homebrew formula, shell-piped
 installer, or self-update path. Revisit another distribution channel only when

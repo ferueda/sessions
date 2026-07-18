@@ -19,8 +19,11 @@ data-preserving compatibility promise begins.
 
 Publish one qualified `0.0.0` tarball interactively with maintainer 2FA, public
 access, and the non-default `bootstrap` tag. It is an unsupported package seed:
-it has no Git tag, provenance, `latest` assignment, support policy, or
-data-preserving migration promise.
+it has no Git tag, provenance, support policy, or data-preserving migration
+promise. npm's registry may still assign its required `latest` field to the sole
+published version. The first supported release accepts that state only when both
+`bootstrap` and `latest` point to the exact `0.0.0` seed, then advances `latest`
+to `0.1.0`.
 
 After that seed exists, bind the exact GitHub repository, workflow, protected
 environment, and `npm publish` operation as the npm trusted publisher. Publish

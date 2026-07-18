@@ -29,6 +29,9 @@ describe("release workflow contract", () => {
   test("keeps bootstrap qualification separate from push release mutation", () => {
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain("bootstrap:");
+    expect(workflow).toContain("retry_release:");
+    expect(workflow).toContain("artifact_run_id:");
+    expect(workflow).toContain("artifact_sha256:");
     expect(workflow).toContain("push:");
     expect(workflow).toContain("branches:\n      - main");
 
@@ -61,9 +64,11 @@ describe("release workflow contract", () => {
     expect(createRelease).toContain(
       "if: >-\n      github.event_name == 'push' &&\n      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n      needs.route.outputs.release_target == 'true'",
     );
-    expect(publish).toContain(
-      "if: >-\n      github.event_name == 'push' &&\n      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&\n      needs.route.outputs.release_target == 'true'",
-    );
+    expect(publish).toContain("always() &&");
+    expect(publish).toContain("github.event_name == 'push' &&");
+    expect(publish).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true' &&");
+    expect(publish).toContain("needs.route.outputs.release_target == 'true' &&");
+    expect(publish).toContain("needs.create-release.result == 'success'");
   });
 
   test("uses separate least-privilege GitHub App tokens", () => {
@@ -95,15 +100,24 @@ describe("release workflow contract", () => {
 
     expect(workflow.match(/id-token: write/gu)).toHaveLength(1);
     expect(publish).toContain("environment:\n      name: npm");
-    expect(publish).toContain("permissions:\n      contents: read\n      id-token: write");
+    expect(publish).toContain(
+      "permissions:\n      actions: read\n      contents: read\n      id-token: write",
+    );
     expect(publish).toContain("group: npm-${{ needs.route.outputs.version }}");
     expect(publish).toContain("cancel-in-progress: false");
-    expect(publish).toContain("scripts/release-order.ts prepublish");
+    expect(publish).toContain(".release-automation/scripts/release-order.ts prepublish");
     expect(publish).toContain('--sha256 "$QUALIFIED_SHA256"');
     expect(publish).toContain("if: steps.order.outputs.action == 'publish'");
     expect(publish).toContain('npm publish "$TARBALL" --access public');
-    expect(publish).toContain("scripts/release-order.ts verify-registry");
+    expect(publish).toContain(".release-automation/scripts/release-order.ts verify-registry");
     expect(publish).toContain("npm audit signatures");
+    expect(publish).toContain("ref: ${{ needs.route.outputs.release_sha }}");
+    expect(publish).toContain("path: .release-automation");
+    expect(publish).toContain("run-id: ${{ inputs.retry_release");
+    expect(publish).toContain("github-token: ${{ github.token }}");
+    expect(publish).toContain("inputs.retry_release == true");
+    expect(publish).toContain("inputs.artifact_run_id != ''");
+    expect(publish).toContain("inputs.artifact_sha256 != ''");
     expect(workflow.match(/registry-url: https:\/\/registry\.npmjs\.org/gu)).toHaveLength(1);
     expect(publish).toContain("registry-url: https://registry.npmjs.org");
     expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|secrets\.NPM/gu);
@@ -119,7 +133,7 @@ describe("release workflow contract", () => {
       "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
     );
     expect(smoke).toContain("name: sessions-${{ needs.qualify.outputs.version }}");
-    expect(publish).toContain("name: sessions-${{ needs.qualify.outputs.version }}");
+    expect(publish).toContain("name: sessions-${{ needs.route.outputs.version }}");
     expect(smoke).toContain("${{ runner.temp }}/sessions-release-artifact");
     expect(publish).toContain("${{ runner.temp }}/sessions-release-artifact");
     expect(smoke).not.toContain("path: release-artifact");
