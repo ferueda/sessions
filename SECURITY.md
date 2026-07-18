@@ -10,9 +10,10 @@ If private reporting is unavailable, open a public issue containing no sensitive
 
 ## Supported versions
 
-The project is pre-release. Security fixes target the current `main` branch
-until `0.1.0` establishes the first supported baseline. The unsupported `0.0.0`
-bootstrap seed establishes no support policy.
+Security fixes target supported Sessions releases beginning with `0.1.0`.
+Current supported release: 0.1.0 <!-- x-release-please-version -->
+
+The unsupported `0.0.0` bootstrap seed establishes no support policy.
 
 ## Scope
 

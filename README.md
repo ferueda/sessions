@@ -4,15 +4,13 @@ Local-first search and analysis for AI coding-agent session history.
 
 Sessions will normalize Cursor, Codex, and future agent histories into one faithful local library. Humans and agents can preserve sessions beyond provider retention, recover or carry forward context, inspect decisions, audit drift and verification, and discover recurring work without uploading transcripts.
 
-> **Status: pre-alpha.** The Cursor- and Codex-backed retained-library and query
+> **Status: supported.** The Cursor- and Codex-backed retained-library and query
 > slice is implemented: explicit durable indexing, bounded list/search/entries/show,
 > portable JSON/JSONL export, scoped deletion, source diagnostics, orphan
 > repair, and SQLite page reclamation. The packaged Sessions Agent Skill adds
 > seven evidence-first analysis routes over those commands. Retained query pages
 > now report capture scope so empty or partial results expose stale, unindexed,
-> and unknown-coverage limits. npm installation remains planned until the first
-> supported `0.1.0` release; Markdown
-> presentation is deferred beyond V1.
+> and unknown-coverage limits. Markdown presentation is deferred beyond V1.
 
 ## Why Sessions
 
@@ -23,34 +21,32 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 - Deduplicated evidence counts that do not mistake forks or copied prompts for independent recurrence.
 - Human output for exploration and versioned JSON/JSONL for scripts, agents, and portable retained context.
 
-## Current quick start
+## Quick start
 
-Prerequisites: Node.js 24.16 or newer and pnpm 11.10 through Corepack.
+Prerequisite: Node.js 24.16 or newer.
 
 ```bash
-git clone https://github.com/ferueda/sessions.git
-cd sessions
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-node dist/bin/sessions.js doctor
+export SESSIONS_VERSION='0.1.0' # x-release-please-version
+npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
+sessions doctor
 ```
 
 ### Install the Agent Skill
 
-The skill needs a working `sessions` command in the agent process. From this
-repository checkout, install the packaged skill with:
+The skill needs a working `sessions` command in the agent process. Install the
+matching immutable release:
 
 ```bash
-DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
+  "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
+  --skill sessions
 ```
 
 You can instead copy `skills/sessions/` into a host's skill directory, preserving
 its layout. Codex and Cursor can host the same skill and are both registered
-local index sources. This pre-alpha guide documents the current local route. The
-[release-pinned agent setup](docs/agent-setup.md) records the planned public
-route without advertising the unavailable release. The pinned external
-installer contacts npm; the command above disables its anonymous telemetry.
+local index sources. The [release-pinned agent setup](docs/agent-setup.md)
+documents the complete agent-led route. The pinned external installer contacts
+npm; the command above disables its anonymous telemetry.
 
 See [getting started](docs/getting-started.md) for the complete first-use flow
 and [Agent Skill](docs/reference/agent-skill.md) for routes and limits.
@@ -59,18 +55,18 @@ After authorizing the source read, index Cursor, Codex, or both, then inspect th
 retained copy:
 
 ```bash
-node dist/bin/sessions.js doctor
-node dist/bin/sessions.js index
-node dist/bin/sessions.js list
-node dist/bin/sessions.js list --source codex --native-id '<provider-thread-id>'
-node dist/bin/sessions.js search 'query engine' --context 2
-node dist/bin/sessions.js search 'query engine' --match any --format jsonl
-node dist/bin/sessions.js search -- '-term'
-node dist/bin/sessions.js entries --activity-after '2026-07-01T00:00:00.000Z' \
+sessions doctor
+sessions index
+sessions list
+sessions list --source codex --native-id '<provider-thread-id>'
+sessions search 'query engine' --context 2
+sessions search 'query engine' --match any --format jsonl
+sessions search -- '-term'
+sessions entries --activity-after '2026-07-01T00:00:00.000Z' \
   --actor human --select last --format jsonl
-node dist/bin/sessions.js show '<canonical-id>'
-node dist/bin/sessions.js show '<canonical-id>' --from-entry 120 --to-entry 139
-node dist/bin/sessions.js export '<canonical-id>' --format jsonl
+sessions show '<canonical-id>'
+sessions show '<canonical-id>' --from-entry 120 --to-entry 139
+sessions export '<canonical-id>' --format jsonl
 ```
 
 Current command surface:
@@ -188,12 +184,12 @@ For a ready library, incomplete capture evidence is a warning with `ok: true`;
 canonical, foreign-key, FTS, reachability, run, and lease failures keep their
 existing failed-health semantics.
 
-Pre-alpha builds recognize one current on-disk baseline. Databases created by
-earlier development builds are not upgraded or deleted automatically; use a fresh
-`SESSIONS_DATA_DIR` or manually remove the old Sessions-owned directory and index
-again. Data-preserving forward migrations become a compatibility promise with
-the first supported `0.1.0` release. The unsupported `0.0.0` bootstrap seed
-carries no migration promise.
+Sessions `0.1.0` establishes the first supported on-disk baseline. Databases
+created by earlier development builds are not upgraded or deleted automatically;
+use a fresh `SESSIONS_DATA_DIR` or manually remove the old Sessions-owned
+directory and index again. Supported releases preserve data through forward
+migrations under the documented compatibility policy. The unsupported `0.0.0`
+bootstrap seed carries no migration promise.
 
 An index writer marks its lease generation dirty when acquired. A normal close
 can seal only that exact generation and publish a private, bounded post-close
@@ -221,10 +217,9 @@ M11b added rich Cursor store capture; M11c adds the reduced local
 `agent-transcripts` JSONL fallback without replacing richer retained evidence.
 Markdown remains deferred beyond V1; `--format md` is not accepted today.
 
-The planned public delivery target is
-`npm install --global @ferueda/sessions@<version>`; pinned `npx` is trial-only.
-It becomes current after package ownership, cross-platform qualification, and
-trusted publishing are complete.
+The supported delivery route is a pinned global npm install. Pinned `npx` is
+trial-only because it does not provide the stable command expected by the Agent
+Skill.
 
 ## Privacy
 

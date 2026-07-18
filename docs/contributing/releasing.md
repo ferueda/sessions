@@ -7,6 +7,10 @@ Apps, environments, or trusted publishing.
 ## Release ownership
 
 - Release Please owns package, manifest, changelog, and `vX.Y.Z` tag versions.
+  `CHANGELOG.md` keeps Release Please's generated style and is excluded from
+  repository formatting.
+- Release Please also updates the pinned public-version markers in README,
+  security, getting-started, agent-setup, and Agent Skill documentation.
 - A dedicated GitHub App opens release pull requests with short-lived tokens.
   Its installation tokens are limited to this repository and
   contents/pull-requests/issues write; PR and release phases mint separate
