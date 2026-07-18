@@ -6,19 +6,25 @@ import { describe, expect, test } from "vitest";
 const root = path.resolve(import.meta.dirname, "..");
 
 describe("Release Please configuration", () => {
-  test("has one root Node package with the pre-release seed and tag policy", async () => {
-    const [configText, manifestText, changelog] = await Promise.all([
+  test("has one root Node package with aligned release metadata and tag policy", async () => {
+    const [configText, manifestText, packageText, changelog, formatterText] = await Promise.all([
       readFile(path.join(root, "release-please-config.json"), "utf8"),
       readFile(path.join(root, ".release-please-manifest.json"), "utf8"),
+      readFile(path.join(root, "package.json"), "utf8"),
       readFile(path.join(root, "CHANGELOG.md"), "utf8"),
+      readFile(path.join(root, ".oxfmtrc.json"), "utf8"),
     ]);
     const config = JSON.parse(configText) as Record<string, unknown>;
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
+    const packageManifest = JSON.parse(packageText) as Record<string, unknown>;
+    const formatter = JSON.parse(formatterText) as Record<string, unknown>;
     const packages = asRecord(config.packages);
     const rootPackage = asRecord(packages["."]);
+    const version = manifest["."];
 
     expect(Object.keys(packages)).toEqual(["."]);
-    expect(manifest).toEqual({ ".": "0.0.0" });
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(packageManifest.version).toBe(version);
     expect(config["bootstrap-sha"]).toBe("601f92462ba24b9529cb90fda342344a22508a90");
     expect(rootPackage["release-type"]).toBe("node");
     expect(rootPackage["initial-version"]).toBe("0.1.0");
@@ -28,27 +34,50 @@ describe("Release Please configuration", () => {
     expect(rootPackage["include-component-in-tag"]).toBe(false);
     expect(changelog).toContain("unsupported npm bootstrap seed");
     expect(changelog).not.toMatch(/^## (?:\[)?0\.0\.0(?:\]|\s)/mu);
+    expect(formatter.ignorePatterns).toEqual(expect.arrayContaining(["CHANGELOG.md"]));
+
+    const stagedCommands = Object.values(asRecord(packageManifest["lint-staged"])).flatMap(
+      (command) => (Array.isArray(command) ? command : [command]),
+    );
+    const stagedFormatterCommands = stagedCommands.filter(
+      (command): command is string => typeof command === "string" && command.includes("oxfmt"),
+    );
+    expect(stagedFormatterCommands).not.toHaveLength(0);
+    expect(stagedFormatterCommands).toEqual(
+      stagedFormatterCommands.map(() => "pnpm exec oxfmt --write --no-error-on-unmatched-pattern"),
+    );
   });
 
-  test("gives Release Please exactly one agent-setup version marker", async () => {
-    const [configText, manifestText, guide] = await Promise.all([
+  test("keeps every public release marker aligned with the manifest", async () => {
+    const [configText, manifestText] = await Promise.all([
       readFile(path.join(root, "release-please-config.json"), "utf8"),
       readFile(path.join(root, ".release-please-manifest.json"), "utf8"),
-      readFile(path.join(root, "docs/agent-setup.md"), "utf8"),
     ]);
     const config = JSON.parse(configText) as Record<string, unknown>;
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
     const packages = asRecord(config.packages);
     const extraFiles = asRecord(packages["."])["extra-files"];
-
-    expect(extraFiles).toEqual([{ type: "generic", path: "docs/agent-setup.md" }]);
-    const markers = [
-      ...guide.matchAll(
-        /Supported CLI\/skill release: (\d+\.\d+\.\d+) <!-- x-release-please-version -->/gu,
-      ),
+    const expectedPaths = [
+      "README.md",
+      "SECURITY.md",
+      "docs/agent-setup.md",
+      "docs/getting-started.md",
+      "docs/reference/agent-skill.md",
     ];
-    expect(markers).toHaveLength(1);
-    expect(markers[0]?.[1]).toBe(manifest["."]);
+    expect(extraFiles).toEqual(expectedPaths.map((file) => ({ type: "generic", path: file })));
+
+    const documents = await Promise.all(
+      expectedPaths.map(async (file) => readFile(path.join(root, file), "utf8")),
+    );
+    for (const document of documents) {
+      const markers = [
+        ...document.matchAll(
+          /(?:Current supported release: |export SESSIONS_VERSION=')(\d+\.\d+\.\d+)(?:' #| <!--) x-release-please-version/gu,
+        ),
+      ];
+      expect(markers).toHaveLength(1);
+      expect(markers[0]?.[1]).toBe(manifest["."]);
+    }
   });
 });
 

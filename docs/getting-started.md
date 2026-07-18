@@ -3,49 +3,41 @@
 Sessions keeps a local retained copy of Cursor and Codex sessions for search and
 analysis.
 
-## 1. Build the CLI
+## 1. Install the CLI
 
-The current pre-alpha install is from a source checkout:
+Prerequisite: Node.js 24.16 or newer.
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-node dist/bin/sessions.js --help
+export SESSIONS_VERSION='0.1.0' # x-release-please-version
+npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
+sessions --version
 ```
 
-Add `dist/bin/sessions.js` to your preferred command wrapper or path as
-`sessions`. The Agent Skill expects that command to work in the agent process.
-No supported npm release is available yet.
-
-The planned supported route is a pinned global npm install, with pinned `npx`
-available only for a trial. Do not install the unsupported `0.0.0` bootstrap
-seed. Public onboarding becomes current with `0.1.0`; see
+The Agent Skill expects that command to work in the agent process. Pinned `npx`
+is available only for a trial and does not provide that stable command. Do not
+install the unsupported `0.0.0` bootstrap seed. See
 [agent setup](agent-setup.md) for the paired CLI/skill contract.
 
 ```bash
-# Planned; replace only with a supported release.
-npm install --global @ferueda/sessions@<supported-version>
-npx --yes @ferueda/sessions@<supported-version> --help
+npx --yes "@ferueda/sessions@${SESSIONS_VERSION}" --help
 ```
 
-The first command is the persistent install. The second is a trial and does not
-provide the stable command expected by the Agent Skill. Use a Node version
-manager or user-local npm prefix for permission errors; never use `sudo`.
+Use a Node version manager or user-local npm prefix for permission errors; never
+use `sudo`.
 
 ## 2. Install the Agent Skill
 
-From the repository root:
-
 ```bash
-DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
+  "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
+  --skill sessions
 ```
 
 The host-neutral alternative is to copy `skills/sessions/` into the host's skill
-directory without changing its internal layout. Public releases pair the npm CLI
-with the skill from the same immutable `v<version>` tag, never mutable `main`.
-The pinned external installer contacts npm; the command above disables its
-anonymous telemetry.
+directory without changing its internal layout. Pair the npm CLI with the skill
+from the same immutable `v<version>` tag, never mutable `main`. The pinned
+external installer contacts npm; the command above disables its anonymous
+telemetry.
 
 ## 3. Check local state
 

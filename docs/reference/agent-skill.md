@@ -6,27 +6,33 @@ provider write, or analysis engine.
 
 ## Requirements and installation
 
-The agent process must have a working `sessions` command. From a Sessions source
-checkout, the local installer route is:
+The agent process must have a working `sessions` command.
 
 ```bash
-DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions
+export SESSIONS_VERSION='0.1.0' # x-release-please-version
+npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
+  "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
+  --skill sessions
 ```
 
 The non-interactive host-specific forms verified locally are:
 
 ```bash
-DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions --agent codex --global --yes --copy
-DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add . --skill sessions --agent cursor --global --yes --copy
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
+  "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
+  --skill sessions --agent codex --global --yes --copy
+DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
+  "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
+  --skill sessions --agent cursor --global --yes --copy
 ```
 
 Both copy the same ten-file skill to the universal
 `~/.agents/skills/sessions/` location. The host-neutral alternative is to copy
-`skills/sessions/` into a supported host's skill directory while preserving the
-same layout. The pinned external installer contacts npm; the commands above
-disable its anonymous telemetry. The public release route is planned until
-`0.1.0`. It installs the CLI and skill at the same immutable release, verifies
-the CLI, and stops before indexing for separate permission. See
+`skills/sessions/` from the same immutable release into a supported host's skill
+directory while preserving the same layout. The pinned external installer
+contacts npm; the commands above disable its anonymous telemetry. The setup
+verifies the CLI and stops before indexing for separate permission. See
 [agent setup](../agent-setup.md).
 
 Codex and Cursor are agent hosts in the examples above and registered local

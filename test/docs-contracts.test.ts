@@ -90,15 +90,6 @@ describe("documentation contracts", () => {
       readFile(path.join(root, "docs/reference/agent-skill.md"), "utf8"),
       readFile(path.join(root, "SECURITY.md"), "utf8"),
     ]);
-    const markers = [
-      ...agentSetup.matchAll(
-        /Supported CLI\/skill release: (\d+\.\d+\.\d+) <!-- x-release-please-version -->/gu,
-      ),
-    ];
-
-    expect(markers).toHaveLength(1);
-    expect(markers[0]?.[1]).toBe(version);
-
     const assertOnboarding = isSupportedRelease(version)
       ? assertSupportedOnboarding
       : assertBootstrapOnboarding;
@@ -116,11 +107,17 @@ interface OnboardingDocuments {
 }
 
 function assertSupportedOnboarding(documents: OnboardingDocuments): void {
-  const install = `npm install --global @ferueda/sessions@${documents.version}`;
+  const versionExport = `export SESSIONS_VERSION='${documents.version}'`;
+  const install = 'npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"';
+  expect(documents.readme).toContain(versionExport);
   expect(documents.readme).toContain(install);
+  expect(documents.gettingStarted).toContain(versionExport);
   expect(documents.gettingStarted).toContain(install);
   expect(documents.agentSetup).toContain("- Status: current");
-  expect(documents.agentSetup).toContain(`export SESSIONS_VERSION='${documents.version}'`);
+  expect(documents.agentSetup).toContain(versionExport);
+  expect(documents.agentSetup).toContain(install);
+  expect(documents.agentSkill).toContain(versionExport);
+  expect(documents.agentSkill).toContain(install);
   expect(documents.agentSetup).toContain(
     "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions",
   );

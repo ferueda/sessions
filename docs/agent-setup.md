@@ -1,12 +1,9 @@
 # Agent setup
 
-- Status: planned while the release manifest is `0.0.0`
+- Status: current
 
-Supported CLI/skill release: 0.0.0 <!-- x-release-please-version -->
-
-The public npm and immutable-tag routes below become current with the first
-supported release, `0.1.0`. Do not install the unsupported `0.0.0` bootstrap
-seed as an end-user release.
+The public npm and immutable-tag routes below are current. Do not install the
+unsupported `0.0.0` bootstrap seed as an end-user release.
 
 ## Install the matching release
 
@@ -14,7 +11,7 @@ The agent may install the CLI and skill after the user approves network access
 and global package changes:
 
 ```bash
-export SESSIONS_VERSION='<supported-version>'
+export SESSIONS_VERSION='0.1.0' # x-release-please-version
 npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
 DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
   "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \
