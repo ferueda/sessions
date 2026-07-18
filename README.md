@@ -26,7 +26,7 @@ Sessions will normalize Cursor, Codex, and future agent histories into one faith
 Prerequisite: Node.js 24.16 or newer.
 
 ```bash
-export SESSIONS_VERSION='0.1.0' # x-release-please-version
+export SESSIONS_VERSION='0.1.1' # x-release-please-version
 npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
 sessions doctor
 ```

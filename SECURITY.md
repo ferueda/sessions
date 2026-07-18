@@ -11,7 +11,7 @@ If private reporting is unavailable, open a public issue containing no sensitive
 ## Supported versions
 
 Security fixes target supported Sessions releases beginning with `0.1.0`.
-Current supported release: 0.1.0 <!-- x-release-please-version -->
+Current supported release: 0.1.1 <!-- x-release-please-version -->
 
 The unsupported `0.0.0` bootstrap seed establishes no support policy.
 
