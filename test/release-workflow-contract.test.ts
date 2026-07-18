@@ -111,6 +111,12 @@ describe("release workflow contract", () => {
     expect(publish).toContain('npm publish "$TARBALL" --access public');
     expect(publish).toContain(".release-automation/scripts/release-order.ts verify-registry");
     expect(publish).toContain("npm audit signatures");
+    expect(publish).toContain("for attempt in 1 2 3 4 5 6; do");
+    expect(publish).toContain(
+      'grep -Fq "404 Not Found - GET https://registry.npmjs.org/-/npm/v1/attestations/"',
+    );
+    expect(publish).toContain('[ "$attempt" -eq 6 ]');
+    expect(publish).toContain("sleep 5");
     expect(publish).toContain("ref: ${{ needs.route.outputs.release_sha }}");
     expect(publish).toContain("path: .release-automation");
     expect(publish).toContain("run-id: ${{ inputs.retry_release");
