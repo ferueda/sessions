@@ -95,6 +95,10 @@ After the seed exists:
 7. Verify `0.1.0` as `latest` with matching tag, integrity, and provenance, then
    disallow token publishing and revoke obsolete automation tokens.
 
+The protected publish job retries only npm's known transient attestation-endpoint
+404 for up to 25 seconds. Other signature or provenance failures stop
+immediately.
+
 If a publish fails after qualification and GitHub release creation, dispatch the
 same `Release` workflow on `main` with `retry_release=true`, the original
 qualifying run ID, and the SHA-256 from its qualification summary. The retry

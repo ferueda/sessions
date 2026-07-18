@@ -445,4 +445,13 @@ jobs:
           cd "$RUNNER_TEMP/sessions-audit"
           npm init --yes
           npm install --ignore-scripts "@ferueda/sessions@$RELEASE_VERSION"
-          npm audit signatures
+          audit_log="$RUNNER_TEMP/sessions-audit-signatures.log"
+          for attempt in 1 2 3 4 5 6; do
+            if npm audit signatures 2>&1 | tee "$audit_log"; then
+              exit 0
+            fi
+            if ! grep -Fq "404 Not Found - GET https://registry.npmjs.org/-/npm/v1/attestations/" "$audit_log" || [ "$attempt" -eq 6 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
