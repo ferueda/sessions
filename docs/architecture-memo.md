@@ -2,16 +2,17 @@
 
 - Status: accepted design baseline
 - Date: 2026-07-13
-- Last updated: 2026-07-16
+- Last updated: 2026-07-18
 - Scope: standalone repository through V1
 
 ## Executive summary
 
-Build Sessions as a new local-first product, using the Harness implementation as evidence and reusable parser material rather than as a codebase to clean up in place.
+Sessions is a standalone local-first product. The legacy Harness implementation
+served as design evidence rather than a codebase to clean up in place.
 
 The core owns a provider-neutral session model, durable capture lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; after explicit indexing, the durable canonical library is the only source for list, search, entries, show, analysis, and export.
 
-The public delivery target is an npm package named `@ferueda/sessions` with a
+Public delivery is the npm package `@ferueda/sessions` with a
 `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, one exact
 cross-platform-qualified tarball, Release Please, npm trusted publishing, and
 provenance.
@@ -415,8 +416,8 @@ The schema separates source instances, sessions, source observations, relations,
 entries, content values, occurrences, index runs, migration metadata, library
 identity, and writer coordination.
 
-The current pre-launch baseline selects SQLite incremental auto-vacuum before
-WAL or schema creation and rejects existing databases in another mode. Explicit
+The supported storage baseline selects SQLite incremental auto-vacuum before WAL
+or schema creation and rejects existing databases in another mode. Explicit
 `data compact` owns a dedicated writer lease, runs bounded transactional
 incremental-vacuum batches, and checkpoints between them. Committed batches are
 durable and rerunnable; the operation changes physical allocation only and
@@ -517,16 +518,14 @@ FTS rebuild and orphan maintenance cannot recreate or repair it. Document and
 digest replacement share the existing leased immediate transaction, so any later
 write failure rolls both back to the last-good pair.
 
-Sessions is pre-alpha and recognizes one current on-disk baseline. Databases from
-earlier development builds are unsupported and fail closed without migration or
-deletion; users can select a fresh Sessions data directory and index again.
-The clean-writer state and persisted document digest define that schema-1
-baseline checksum. Current
-`data clear` does not claim an incompatible earlier database; the pre-launch
-reset is a fresh `SESSIONS_DATA_DIR` or manual removal of only the exact obsolete
-Sessions-owned directory followed by reindexing.
-Compatibility begins with the first supported `0.1.0` release. The unsupported
-`0.0.0` bootstrap seed has no migration promise. From `0.1.0`, SQLite
+Databases from development builds before `0.1.0` are unsupported and fail closed
+without migration or deletion; users can select a fresh Sessions data directory
+and index again. The clean-writer state and persisted document digest define the
+supported schema-1 baseline checksum. `data clear` does not claim an incompatible
+earlier database; reset with a fresh `SESSIONS_DATA_DIR` or manual removal of
+only the exact obsolete Sessions-owned directory followed by reindexing.
+Compatibility begins with supported `0.1.0`; the unsupported `0.0.0` bootstrap
+seed has no migration promise. From `0.1.0`, SQLite
 migrations are ordered, checksummed, transactional, and forward-only; they must
 preserve canonical evidence, arbitrate writer ownership before schema mutation,
 and fail recoverably. Repair and projection rebuilds distinguish canonical
@@ -610,12 +609,8 @@ sessions data clear --yes [--format human|json]
 ```
 
 Literal all/any search, per-hit matched terms, activity bounds, list/search/entry
-root attribution, page-level capture scope, textless entry inventory, and bounded
-show/export ranges are current. The next planned adapter surface adds:
-
-```text
-sessions index --source cursor
-```
+root attribution, page-level capture scope, textless entry inventory, bounded
+show/export ranges, and Cursor/Codex indexing are current.
 
 Markdown presentation is deferred beyond V1. Any later format must preserve the
 same eligible evidence and digest semantics.
@@ -896,7 +891,7 @@ honest observational conclusion.
 
 - TypeScript ESM in source; compiled ESM JavaScript in the published tarball.
 - Node.js `>=24.16`; native TypeScript is a contributor convenience, never a user requirement.
-- Intended package `@ferueda/sessions`; binary `sessions`. Scope ownership is a release gate.
+- Published package `@ferueda/sessions`; binary `sessions`.
 - A global npm install is the primary V1 channel. `npx` is a trial path for
   help or diagnostics, not the persistent command expected by the Agent Skill.
 - The package allowlists compiled output, the packaged skill, README, and license.
@@ -936,7 +931,8 @@ support evidence shows that Node or global npm is a recurring adoption blocker.
 
 ## Harness relationship
 
-During bootstrap, the existing Harness skill remains untouched and usable. The repositories do not share writable state or implementation files.
+Until M13 parity and cutover, the existing Harness skill remains untouched and
+usable. The repositories do not share writable state or implementation files.
 
 After standalone parity:
 
@@ -1071,10 +1067,10 @@ detection of arbitrary external edits on every writer open would require keeping
 the measured full scan and its scale-dependent cost.
 
 The change is internal to SQLite schema and writer lifecycle. It adds no public
-CLI, application, adapter, query, JSON/JSONL, or provider behavior. Because the
-project is pre-launch, it replaces the single current baseline and checksum with
-no compatibility migration; older development libraries fail closed and require
-a fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
+CLI, application, adapter, query, JSON/JSONL, or provider behavior. Before
+supported `0.1.0`, it replaced the development baseline and checksum without a
+compatibility migration. Older development libraries fail closed and require a
+fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
 reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.767
 ms writer open / 264.666 ms total. The authorized read-only real Codex
 120-session exact-cohort proof measured 3.262 ms / 366.055 ms with zero changed
@@ -1088,12 +1084,12 @@ adapter-version replacement decision prevents reduced evidence from replacing a
 rich last-good snapshot. Domain, storage, query, export, and CLI behavior remain
 provider-neutral.
 
-### Phase 8 — Public release and parity
+### Phase 8 — Public release complete; parity next
 
-Release automation and qualification are checked in. Maintainers must qualify
-and seed `0.0.0`, configure the GitHub App, environment, and trusted publisher,
-then publish and verify `0.1.0`. M13 establishes parity and switches Harness to
-a pinned one-way integration.
+Release automation, trusted publishing, and cross-platform qualification are
+live. `0.1.0` established the supported baseline and `0.1.1` verified the routine
+release path. M13 establishes parity and switches Harness to a pinned one-way
+integration.
 
 ## V1 acceptance criteria
 
@@ -1151,14 +1147,10 @@ automated changes, raw provider backup, immutable history for every provider
 revision, library import/restore, and destination-provider delivery. Each
 requires a separate intent and privacy review.
 
-## Remaining release rollout gates
+## Release status
 
-- Confirm ownership and public publishing rights for the intended npm scope.
-- Run the exact-artifact `0.0.0` bootstrap with maintainer 2FA.
-- Configure the GitHub App, protected npm environment, and trusted publisher,
-  then enable automation.
-- Publish and verify supported `0.1.0` before calling the public route current.
-
-These account-owned operations are outside repository tests. See
-[releasing](contributing/releasing.md) and
+The npm scope, GitHub App, protected environment, and trusted publisher are
+configured. Supported releases `0.1.0` and `0.1.1` were qualified, published,
+installed from the public registry, and verified for integrity and provenance.
+See [releasing](contributing/releasing.md) and
 [ADR 0009](decisions/0009-establish-the-supported-release-baseline.md).

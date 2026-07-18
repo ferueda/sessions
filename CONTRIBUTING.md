@@ -1,6 +1,7 @@
 # Contributing
 
-Sessions is pre-alpha. Small vertical slices, explicit contracts, and evidence-backed changes are preferred over speculative framework work.
+Sessions is supported software with a compatibility-bearing data and CLI
+baseline. Prefer small, evidence-backed changes over speculative framework work.
 
 ## Setup
 

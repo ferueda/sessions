@@ -35,11 +35,12 @@ receive read-time staging. Sessions never reuses or migrates the pre-public
 cache. Paths, ownership, capture behavior, and deletion limits are governed by
 [privacy](../privacy.md).
 
-Pre-alpha builds recognize only the current storage baseline. When that baseline
-changes, use a fresh `SESSIONS_DATA_DIR` or manually remove the old Sessions-owned
-directory and index again; provider data is never part of that cleanup. Ordered,
-data-preserving forward migrations become supported with `0.1.0`. The
-unsupported `0.0.0` package seed has no migration promise.
+Development builds before `0.1.0` used unsupported storage baselines. Reset those
+with a fresh `SESSIONS_DATA_DIR` or by manually removing only the old
+Sessions-owned directory, then index again. Provider data is never part of that
+cleanup. Supported releases beginning with `0.1.0` use ordered,
+data-preserving forward migrations. The unsupported `0.0.0` package seed has no
+migration promise.
 
 The Cursor and Codex adapters resolve their default local installations. Tests
 use only generated stores, state databases, and plain/Zstandard rollouts under

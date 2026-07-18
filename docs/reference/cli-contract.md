@@ -1,14 +1,13 @@
 # CLI contract
 
-- Status: current behavior plus accepted later-V1 semantics
-- Last updated: 2026-07-17
+- Status: current supported behavior
+- Last updated: 2026-07-18
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
 
-Development schemas may reset before supported `0.1.0`. The unsupported `0.0.0`
-bootstrap seed establishes no CLI contract. Compatibility begins with the
-`0.1.0` CLI; no earlier development contract is supported.
+Development schemas from before `0.1.0` are unsupported. The `0.0.0` bootstrap
+seed establishes no CLI contract. Compatibility begins with the `0.1.0` CLI.
 
 ## Current commands
 
@@ -294,7 +293,7 @@ uninitialized library, remain sanitized not-found operational failures.
 
 ## Current operational JSON
 
-The current pre-alpha operational reports are exact test-backed contracts. The
+The current operational reports are exact test-backed contracts. The
 separate [structured output contract](structured-output.md) owns
 transcript-bearing list/search/entries/show/export JSON and JSONL.
 
@@ -546,10 +545,11 @@ Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
 
-Pre-alpha schema 1 has one current checksum that includes the writer clean-seal
-state. There is no compatibility migration from earlier development checksums;
-they fail closed and require the documented fresh data-directory or exact
-Sessions-owned-directory reset and reindex.
+Supported schema 1 includes the writer clean-seal state. There is no
+compatibility migration from earlier development checksums; they fail closed
+and require the documented fresh data-directory or exact Sessions-owned-directory
+reset and reindex. Supported releases beginning with `0.1.0` use ordered,
+data-preserving migrations.
 
 ## Current query contract
 

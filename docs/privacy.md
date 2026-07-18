@@ -1,7 +1,7 @@
 # Privacy contract
 
-- Status: current behavior plus explicit later-V1 boundaries
-- Last updated: 2026-07-17
+- Status: current supported behavior
+- Last updated: 2026-07-18
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -58,13 +58,12 @@ proof, recognized bounded proof residue, and the exact ephemeral `.scratch`
 workspace. Sessions does not read, migrate, or delete the pre-public cache
 database or legacy Harness JSONL cache.
 
-Development builds before supported `0.1.0` recognize one current
-Sessions-owned database baseline. Earlier development databases are neither
-upgraded nor deleted automatically. A user may select a fresh
-`SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
+Development builds before `0.1.0` used unsupported database baselines. Those
+databases are neither upgraded nor deleted automatically. A user may select a
+fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
 directory and index again; provider histories remain untouched. The unsupported
-`0.0.0` npm bootstrap seed changes none of this. Data-preserving migration
-support begins with the first supported `0.1.0` release.
+`0.0.0` npm bootstrap seed changes none of this. Supported releases beginning
+with `0.1.0` use data-preserving migrations.
 
 `sessions paths` reports these owned paths without creating them. It also reports
 sanitized registered-source roots; it does not enumerate transcript files or
@@ -105,10 +104,10 @@ clean writer open.
 The persisted public-document digest is canonical state, not a rebuildable FTS
 projection. A missing, malformed, unknown-scheme, or mismatching digest makes the
 canonical library unhealthy and fails full document reads. FTS rebuild and
-orphan maintenance cannot repair it. The schema addition changes the one current
-pre-launch checksum. The clean-writer fields change that baseline checksum again,
-so an earlier development database follows the fresh data
-directory/manual Sessions-owned-directory reset path above.
+orphan maintenance cannot repair it. Development databases created before the
+supported `0.1.0` baseline follow the fresh data-directory or exact
+Sessions-owned-directory reset path above. Supported releases use ordered,
+data-preserving migrations.
 
 ## Codex capture
 
@@ -266,7 +265,7 @@ snapshots, swap, and storage hardware can retain
 copies. Users requiring stronger protection should use full-disk encryption and
 manage backups according to their threat model.
 
-## Later V1 boundaries
+## Portable output and analysis
 
 JSON/JSONL portable export reads only the canonical library, excludes diagnostic
 locators and private path metadata, labels history as untrusted, and never
