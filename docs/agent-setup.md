@@ -2,7 +2,7 @@
 
 - Status: planned while the release manifest is `0.0.0`
 
-Supported CLI/skill release: 0.0.0 <!-- x-release-please-version -->
+Supported CLI/skill release: 0.1.0 <!-- x-release-please-version -->
 
 The public npm and immutable-tag routes below become current with the first
 supported release, `0.1.0`. Do not install the unsupported `0.0.0` bootstrap
