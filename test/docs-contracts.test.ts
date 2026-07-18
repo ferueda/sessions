@@ -133,8 +133,9 @@ function assertSupportedOnboarding(documents: OnboardingDocuments): void {
   expect(documents.agentSkill).not.toContain("public release route is planned");
   expect(documents.agentSkill).not.toMatch(/From a Sessions source\s+checkout/u);
   expect(documents.security).toContain(
-    `Security fixes target supported Sessions releases beginning with \`${documents.version}\``,
+    "Security fixes target supported Sessions releases beginning with `0.1.0`",
   );
+  expect(documents.security).toContain(`Current supported release: ${documents.version}`);
   expect(documents.security).not.toContain("target the current `main` branch");
 }
 

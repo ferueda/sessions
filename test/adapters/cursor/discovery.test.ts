@@ -147,7 +147,7 @@ describe("Cursor filesystem inventory", () => {
     await expect(
       consumeStableCursorFile(root, components, expected, async (source) => {
         for await (const _chunk of source) {
-          await writeFile(file, '{"record":2}\n');
+          await writeFile(file, '{"record":22}\n');
           throw new Error("synthetic parser failure");
         }
       }),
