@@ -21,6 +21,7 @@ describe("Release Please configuration", () => {
     expect(manifest).toEqual({ ".": "0.0.0" });
     expect(config["bootstrap-sha"]).toBe("601f92462ba24b9529cb90fda342344a22508a90");
     expect(rootPackage["release-type"]).toBe("node");
+    expect(rootPackage["initial-version"]).toBe("0.1.0");
     expect(rootPackage["package-name"]).toBe("@ferueda/sessions");
     expect(rootPackage["changelog-path"]).toBe("CHANGELOG.md");
     expect(rootPackage["include-v-in-tag"]).toBe(true);

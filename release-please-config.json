@@ -4,6 +4,7 @@
   "packages": {
     ".": {
       "release-type": "node",
+      "initial-version": "0.1.0",
       "package-name": "@ferueda/sessions",
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,

@@ -54,6 +54,10 @@ publish public packages under `@ferueda`, and `@ferueda/sessions` is still
 available for this bootstrap. If the package already exists, inspect it and
 follow the recovery rules instead of replacing or rebuilding the artifact.
 
+The npm-only seed has no GitHub release or tag. The Release Please
+`initial-version` setting therefore pins the first release pull request to
+`0.1.0`; the `0.0.0` manifest seed does not set that first-release version.
+
 After the seed exists:
 
 1. Create the repository GitHub App and store only its App ID and private key in
