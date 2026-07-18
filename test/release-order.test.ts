@@ -72,6 +72,28 @@ describe("release event routing", () => {
     });
   });
 
+  test("routes a manual retry for an already-qualified supported release", () => {
+    expect(
+      classifyReleaseRoute({
+        eventName: "workflow_dispatch",
+        ref: "refs/heads/main",
+        bootstrapRequested: false,
+        retryReleaseRequested: true,
+        previousManifestVersion: "0.0.0",
+        currentManifestVersion: "0.1.0",
+        packageVersion: "0.1.0",
+        changelog: "# Changelog\n\n## 0.1.0 (2026-07-18)\n",
+      }),
+    ).toEqual({
+      qualify: false,
+      releaseTarget: true,
+      mode: "supported",
+      version: "0.1.0",
+      parentVersion: "0.0.0",
+      reason: "release-retry",
+    });
+  });
+
   test("rejects manual, version, and changelog drift", () => {
     expect(() =>
       classifyReleaseRoute({
@@ -84,6 +106,18 @@ describe("release event routing", () => {
         changelog: "# Changelog\n",
       }),
     ).toThrow("main branch");
+    expect(() =>
+      classifyReleaseRoute({
+        eventName: "workflow_dispatch",
+        ref: "refs/heads/main",
+        bootstrapRequested: true,
+        retryReleaseRequested: true,
+        previousManifestVersion: "0.0.0",
+        currentManifestVersion: "0.1.0",
+        packageVersion: "0.1.0",
+        changelog: "# Changelog\n\n## 0.1.0\n",
+      }),
+    ).toThrow("exclusive");
     expect(() =>
       classifyReleaseRoute({
         eventName: "push",
@@ -111,25 +145,21 @@ describe("release event routing", () => {
 
 describe("npm release ordering", () => {
   test("accepts the one bootstrap-to-supported transition", () => {
-    expect(
-      decideReleaseOrder({
-        parentVersion: "0.0.0",
-        targetVersion: "0.1.0",
-        latestVersion: null,
-        bootstrapVersion: "0.0.0",
-        targetIntegrity: null,
-        qualifiedIntegrity: integrity,
-      }),
-    ).toEqual({ action: "publish" });
+    for (const latestVersion of [null, "0.0.0"] as const) {
+      expect(
+        decideReleaseOrder({
+          parentVersion: "0.0.0",
+          targetVersion: "0.1.0",
+          latestVersion,
+          bootstrapVersion: "0.0.0",
+          targetIntegrity: null,
+          qualifiedIntegrity: integrity,
+        }),
+      ).toEqual({ action: "publish" });
+    }
   });
 
   test.each([
-    {
-      name: "bootstrap seed was assigned latest",
-      targetVersion: "0.1.0",
-      latestVersion: "0.0.0",
-      bootstrapVersion: "0.0.0",
-    },
     {
       name: "bootstrap tag is missing",
       targetVersion: "0.1.0",
@@ -155,6 +185,19 @@ describe("npm release ordering", () => {
         targetVersion: state.targetVersion,
         latestVersion: state.latestVersion,
         bootstrapVersion: state.bootstrapVersion,
+        targetIntegrity: null,
+        qualifiedIntegrity: integrity,
+      }),
+    ).toThrow("first supported release requires");
+  });
+
+  test("rejects a first-release latest tag that does not point to the bootstrap seed", () => {
+    expect(() =>
+      decideReleaseOrder({
+        parentVersion: "0.0.0",
+        targetVersion: "0.1.0",
+        latestVersion: "0.0.1",
+        bootstrapVersion: "0.0.0",
         targetIntegrity: null,
         qualifiedIntegrity: integrity,
       }),

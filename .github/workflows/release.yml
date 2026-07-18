@@ -10,6 +10,18 @@ on:
         description: Qualify the unsupported 0.0.0 bootstrap artifact
         required: true
         type: boolean
+      retry_release:
+        description: Retry a tagged supported release with its qualified artifact
+        required: true
+        type: boolean
+      artifact_run_id:
+        description: Original qualifying workflow run ID for a supported-release retry
+        required: false
+        type: string
+      artifact_sha256:
+        description: Qualified tarball SHA-256 for a supported-release retry
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
@@ -29,6 +41,7 @@ jobs:
       mode: ${{ steps.route.outputs.mode }}
       version: ${{ steps.route.outputs.version }}
       parent_version: ${{ steps.route.outputs.parent_version }}
+      release_sha: ${{ steps.route.outputs.release_sha }}
 
     steps:
       - name: Checkout the triggering revision
@@ -48,6 +61,7 @@ jobs:
         id: route
         env:
           BOOTSTRAP_REQUESTED: ${{ inputs.bootstrap || false }}
+          RETRY_RELEASE_REQUESTED: ${{ inputs.retry_release || false }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BEFORE: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
           EVENT_REF: ${{ github.ref }}
@@ -58,6 +72,7 @@ jobs:
           --event "$EVENT_NAME"
           --ref "$EVENT_REF"
           --bootstrap "$BOOTSTRAP_REQUESTED"
+          --retry-release "$RETRY_RELEASE_REQUESTED"
           --before-sha "$EVENT_BEFORE"
           --head-sha "$RELEASE_SHA"
 
@@ -316,9 +331,24 @@ jobs:
       - smoke-release
       - create-release
     if: >-
-      github.event_name == 'push' &&
-      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
-      needs.route.outputs.release_target == 'true'
+      always() &&
+      needs.route.result == 'success' &&
+      needs.route.outputs.release_target == 'true' &&
+      (
+        (
+          github.event_name == 'push' &&
+          vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+          needs.qualify.result == 'success' &&
+          needs.smoke-release.result == 'success' &&
+          needs.create-release.result == 'success'
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          inputs.retry_release == true &&
+          inputs.artifact_run_id != '' &&
+          inputs.artifact_sha256 != ''
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -327,6 +357,7 @@ jobs:
       group: npm-${{ needs.route.outputs.version }}
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       id-token: write
 
@@ -336,7 +367,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ needs.route.outputs.release_sha }}
+
+      - name: Checkout the current release automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
           ref: ${{ github.sha }}
+          path: .release-automation
 
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -351,18 +390,20 @@ jobs:
       - name: Download the qualified artifact
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: sessions-${{ needs.qualify.outputs.version }}
+          name: sessions-${{ needs.route.outputs.version }}
           path: ${{ runner.temp }}/sessions-release-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.retry_release && inputs.artifact_run_id || github.run_id }}
 
       - name: Decide registry ordering before mutation
         id: order
         env:
           PARENT_VERSION: ${{ needs.route.outputs.parent_version }}
-          QUALIFIED_SHA256: ${{ needs.qualify.outputs.sha256 }}
+          QUALIFIED_SHA256: ${{ inputs.retry_release && inputs.artifact_sha256 || needs.qualify.outputs.sha256 }}
           RELEASE_VERSION: ${{ needs.route.outputs.version }}
-          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/ferueda-sessions-${{ needs.route.outputs.version }}.tgz
         run: >
-          node scripts/release-order.ts prepublish
+          node .release-automation/scripts/release-order.ts prepublish
           --package @ferueda/sessions
           --target "$RELEASE_VERSION"
           --parent "$PARENT_VERSION"
@@ -372,17 +413,17 @@ jobs:
       - name: Publish through npm trusted publishing
         if: steps.order.outputs.action == 'publish'
         env:
-          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/ferueda-sessions-${{ needs.route.outputs.version }}.tgz
         run: npm publish "$TARBALL" --access public
 
       - name: Verify registry metadata and integrity
         env:
           PARENT_VERSION: ${{ needs.route.outputs.parent_version }}
-          QUALIFIED_SHA256: ${{ needs.qualify.outputs.sha256 }}
+          QUALIFIED_SHA256: ${{ inputs.retry_release && inputs.artifact_sha256 || needs.qualify.outputs.sha256 }}
           RELEASE_VERSION: ${{ needs.route.outputs.version }}
-          TARBALL: ${{ runner.temp }}/sessions-release-artifact/${{ needs.qualify.outputs.filename }}
+          TARBALL: ${{ runner.temp }}/sessions-release-artifact/ferueda-sessions-${{ needs.route.outputs.version }}.tgz
         run: >
-          node scripts/release-order.ts verify-registry
+          node .release-automation/scripts/release-order.ts verify-registry
           --package @ferueda/sessions
           --target "$RELEASE_VERSION"
           --parent "$PARENT_VERSION"
