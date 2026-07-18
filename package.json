@@ -80,11 +80,11 @@
   },
   "lint-staged": {
     "{src,scripts,test}/**/*.{ts,js,mjs,cjs,json}": [
-      "pnpm exec oxfmt --write",
+      "pnpm exec oxfmt --write --no-error-on-unmatched-pattern",
       "pnpm exec oxlint -c .oxlintrc.json --fix"
     ],
-    "{docs,dev,.github,skills}/**/*.{md,json,yml,yaml}": "pnpm exec oxfmt --write",
-    "*.{md,json,yml,yaml}": "pnpm exec oxfmt --write"
+    "{docs,dev,.github,skills}/**/*.{md,json,yml,yaml}": "pnpm exec oxfmt --write --no-error-on-unmatched-pattern",
+    "*.{md,json,yml,yaml}": "pnpm exec oxfmt --write --no-error-on-unmatched-pattern"
   },
   "engines": {
     "node": ">=24.16.0"

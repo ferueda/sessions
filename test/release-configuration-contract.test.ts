@@ -35,6 +35,17 @@ describe("Release Please configuration", () => {
     expect(changelog).toContain("unsupported npm bootstrap seed");
     expect(changelog).not.toMatch(/^## (?:\[)?0\.0\.0(?:\]|\s)/mu);
     expect(formatter.ignorePatterns).toEqual(expect.arrayContaining(["CHANGELOG.md"]));
+
+    const stagedCommands = Object.values(asRecord(packageManifest["lint-staged"])).flatMap(
+      (command) => (Array.isArray(command) ? command : [command]),
+    );
+    const stagedFormatterCommands = stagedCommands.filter(
+      (command): command is string => typeof command === "string" && command.includes("oxfmt"),
+    );
+    expect(stagedFormatterCommands).not.toHaveLength(0);
+    expect(stagedFormatterCommands).toEqual(
+      stagedFormatterCommands.map(() => "pnpm exec oxfmt --write --no-error-on-unmatched-pattern"),
+    );
   });
 
   test("keeps every public release marker aligned with the manifest", async () => {
