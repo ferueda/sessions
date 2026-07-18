@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/ferueda/sessions/compare/v0.1.0...v0.1.1) (2026-07-18)
+
+
+### Bug Fixes
+
+* recover first supported release ([b16e5e1](https://github.com/ferueda/sessions/commit/b16e5e1ceadfac947f6330694e3cb83400432ae5))
+* retry npm attestation verification ([097b997](https://github.com/ferueda/sessions/commit/097b997641a9c1159d19702a1d470942c1848417))
+
 ## 0.1.0 (2026-07-18)
 
 
