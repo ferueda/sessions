@@ -332,7 +332,9 @@ describe("Cursor durable vertical slice", () => {
   });
 
   test("recovers one first-read source change through bounded fresh discovery", async () => {
-    fixture = await createCursorSourceFixture();
+    fixture = await createCursorSourceFixture({ ready: false });
+    await fixture.writeChatMetadata();
+    fixture.writeChatStore();
     const paths = indexPaths(fixture.root);
     const lifecycle = createSqliteIndexLifecycle({
       now: monotonicNow("2026-07-16T14:00:00.000Z", 100),
@@ -364,9 +366,9 @@ describe("Cursor durable vertical slice", () => {
     expect(injectChange).toBe(false);
     expect(first).toMatchObject({
       counts: {
-        discovered: 2,
+        discovered: 1,
         unchanged: 0,
-        updated: 2,
+        updated: 1,
         failed: 0,
         missing: 0,
         stale: 0,
