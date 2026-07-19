@@ -1,6 +1,16 @@
-# Sessions
+<h1 align="center">Sessions</h1>
 
-Local-first search and analysis for Cursor and Codex session history.
+<p align="center">
+  <strong>Local-first search and analysis for your AI-agent history.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ferueda/sessions/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ferueda/sessions/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ferueda/sessions/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/ferueda/sessions?label=release"></a>
+  <a href="https://www.npmjs.com/package/@ferueda/sessions"><img alt="npm" src="https://img.shields.io/npm/v/%40ferueda%2Fsessions?color=cb3837"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-0a84ff">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
+</p>
 
 Sessions reads provider histories without modifying them, stores normalized
 snapshots in a private local SQLite library, and provides one query and export
@@ -10,6 +20,32 @@ and workflow discovery.
 
 > **Status: supported.** The current release supports Cursor and Codex indexing,
 > retained search, JSON/JSONL export, maintenance, and the packaged Agent Skill.
+
+## How it works
+
+```text
+Codex history                       Cursor history
+      └──────────── read only ────────────┘
+                         │
+                         ▼
+          ┌──────────────────────────────┐
+          │ sessions index               │
+          │ discover → stable read       │
+          │ normalize → retain           │
+          └──────────────┬───────────────┘
+                         ▼
+          ┌──────────────────────────────┐
+          │ private local SQLite library │
+          │ snapshots + full-text search │
+          └──────────────┬───────────────┘
+                         ▼
+       list · search · entries · show · export
+                         │
+                  humans and agents
+```
+
+Provider files stay read-only. After indexing, queries use retained snapshots
+without reopening provider history.
 
 ## Install
 
