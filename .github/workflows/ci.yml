@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -57,7 +57,7 @@ jobs:
 
       - name: Checkout
         if: needs.changes.outputs.docs_only != 'true' || matrix.os == 'ubuntu-latest'
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup pnpm
         if: needs.changes.outputs.docs_only != 'true' || matrix.os == 'ubuntu-latest'
