@@ -136,7 +136,7 @@ describe("release workflow contract", () => {
     const publish = jobBlock("publish");
 
     expect(qualify).toContain(
-      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
     );
     expect(smoke).toContain("name: sessions-${{ needs.qualify.outputs.version }}");
     expect(publish).toContain("name: sessions-${{ needs.route.outputs.version }}");
