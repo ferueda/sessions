@@ -72,11 +72,16 @@ describe("release workflow contract", () => {
   });
 
   test("uses separate least-privilege GitHub App tokens", () => {
+    const appTokenPins = new Set<string>();
+
     for (const job of ["release-pr", "create-release"] as const) {
       const block = jobBlock(job);
-      expect(block).toContain(
-        "actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0",
-      );
+      const appTokenPin = block.match(
+        /^\s*uses: actions\/create-github-app-token@([0-9a-f]{40})(?:\s|$)/mu,
+      )?.[1];
+
+      expect(appTokenPin).toBeDefined();
+      appTokenPins.add(appTokenPin ?? "");
       expect(block).toContain("app-id: ${{ vars.RELEASE_APP_ID }}");
       expect(block).toContain("private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}");
       expect(block).toContain("owner: ${{ github.repository_owner }}");
@@ -85,6 +90,7 @@ describe("release workflow contract", () => {
       expect(block).toContain("permission-pull-requests: write");
       expect(block).toContain("permission-issues: write");
     }
+    expect(appTokenPins.size).toBe(1);
     expect(jobBlock("release-pr")).toContain("skip-github-release: true");
     expect(jobBlock("create-release")).toContain("skip-github-pull-request: true");
     expect(jobBlock("create-release")).toContain(
