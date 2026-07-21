@@ -981,15 +981,14 @@ Do not transplant:
 
 ## Roadmap
 
-The phase scopes below remain accepted. Phases 0 through 7 are implemented.
-Codex is the first vertical slice because
+The V1 phase scopes below remain accepted and are complete. Codex was the first
+vertical slice because
 its state database, rich tool identity, non-text records, and lineage exercise the
 canonical model early. The provider-neutral query, export, and Agent Skill
 workflow completed over Codex first; M10 settled capture truth, bounded recovery,
 and routine indexing cost before Cursor became the second-adapter proof. The
-[V1 implementation roadmap](../dev/plans/260713-v1-implementation-roadmap.md)
-supersedes the earlier phase ordering and refines it into dependency-ordered,
-independently reviewable milestones with explicit exit gates.
+ordered [post-V1 roadmap](#post-v1-roadmap) follows the completed acceptance
+criteria.
 
 ### Phase 0 — Foundation (complete)
 
@@ -1102,7 +1101,7 @@ adapter-version replacement decision prevents reduced evidence from replacing a
 rich last-good snapshot. Domain, storage, query, export, and CLI behavior remain
 provider-neutral.
 
-### Phase 8 — Public release and standalone acceptance complete
+### Phase 8 — Public release and standalone acceptance (complete)
 
 Release automation, trusted publishing, and cross-platform qualification are
 live. `0.1.0` established the supported baseline and `0.1.1` verified the routine
@@ -1110,7 +1109,8 @@ release path. M13.1 established standalone parity through the shared provider
 workflow, a test-only third adapter, authorized live cohorts, the frozen Harness
 baseline, and the published package/skill. Agent hosts consume the CLI and
 matching skill directly from one immutable Sessions release; no downstream
-repository wrapper remains. M13.3 qualifies the final release and closes V1.
+repository wrapper remains. `0.2.0` passed the protected final release and local
+installation gates and closed V1.
 
 ## V1 acceptance criteria
 
@@ -1146,32 +1146,78 @@ repository wrapper remains. M13.3 qualifies the final release and closes V1.
   adherence and observed outcomes, honest unknowns, and no causal or
   auto-mutation claims.
 
-## Deferred directions
+## Post-V1 roadmap
 
-The preferred evidence-first core direction after V1 is provider-neutral
-related-session traversal, literal metadata discovery, explicit multi-session
-JSON/JSONL bundles with reproducibility manifests, exact named-unit facets,
-deterministic comparison/timelines, machine-readable capabilities, and a
-canonical archive whose import/restore contract is designed separately. These
-features retrieve, group, count, and package facts; the Agent Skill still owns
-relevance, causality, success/failure, drift, and recommendations.
+Post-V1 work improves Sessions as a provider-neutral local evidence interface,
+independent of any one consumer. Sessions owns what was retained, where it sits
+in canonical order, and the snapshot identity needed to verify whether separate
+reads still address the same retained evidence. The Agent Skill and other
+consumers still own relevance, meaning, causality, outcomes, drift, and
+recommendations.
 
-Tokenizer phrase search, smaller search/entries title bounds, and exact locator
-string interning are nearer candidates but remain evidence-gated. Phrase means
-adjacent tokenizer terms rather than byte-exact containment; title changes must
-show representative encoded-output savings; locator interning must show material
-size reduction without provider assumptions or orphaned private metadata.
+### 1. Revision manifests
 
-After V1 evidence: semantic search, an external plugin ABI, cloud/team indexes,
-native binaries, Homebrew, TUI/watch mode, orchestration integrations, opt-in
-automated changes, raw provider backup, immutable history for every provider
-revision, library import/restore, and destination-provider delivery. Each
-requires a separate intent and privacy review.
+Add an atomic, transcript-free manifest for a fixed, ordered cohort selected
+from one library generation. The versioned JSON/JSONL result binds explicit
+selection bounds to canonical session IDs and document digests, and carries the
+capture scope, source state, counts, and lineage needed to interpret and repeat
+the selection without exposing diagnostic paths. A manifest does not retain an
+older document body. Until guarded reads ship, a consumer hydrating a manifest
+must compare each returned document digest and retry or re-key on mismatch.
+
+### 2. Digest-guarded coordinate reads
+
+Add exact entry-coordinate and bounded range reads conditioned on the caller's
+expected canonical document digest. A read returns evidence only from the
+matching retained snapshot and fails distinctly if a later index changed it.
+The first gate is contract correctness and stable structured behavior. Avoid
+promising cheaper physical reads until measurement shows that full-document
+reconstruction is a real bottleneck and an optimization preserves the existing
+canonical digest proof.
+
+### 3. Related evidence and privacy-safe project facets
+
+Add provider-neutral traversal over retained session relations, then literal
+local project and execution facets through a separate, explicit local-context
+projection. Project identity uses a keyed, library-scoped opaque reference, not
+a plain path hash. The local-context projection has its own digest and does not
+enter portable export by default. Missing or partial relations and facets remain
+honest coverage, never inferred facts.
+
+### Cross-cutting maintenance
+
+Measured indexing and query work may proceed alongside the ordered milestones
+when it preserves evidence semantics. Current priorities are faster read-only
+`doctor` and dirty/recovery validation, clear progress and recovery status for
+long operations, and lower routine storage cost. Performance work must preserve
+canonical equality, capture scope, failure truth, and provider-read-only
+behavior; it must not weaken integrity checks merely to meet a time budget.
+
+### Evidence-gated candidates
+
+Historical revision pinning and archive/import semantics, canonical schema or
+tool-structure expansion, machine-readable coverage and capability negotiation,
+stable public error codes, and chunked or streamed full export require measured
+consumer need plus separate contract and privacy review. Exact named-unit
+facets, deterministic comparison/timelines, tokenizer phrase search, smaller
+search/entries titles, exact locator interning, and Markdown presentation remain
+unsequenced until evidence gives them priority.
+
+Semantic search, an external plugin ABI, cloud/team indexes, native binaries,
+Homebrew, TUI/watch mode, orchestration integrations, opt-in automated changes,
+raw provider backup, destination-provider delivery, and automatic project edits
+remain outside this roadmap. Each requires a separate intent and privacy review.
 
 ## Release status
 
 The npm scope, GitHub App, protected environment, and trusted publisher are
-configured. Supported releases `0.1.0` and `0.1.1` were qualified, published,
-installed from the public registry, and verified for integrity and provenance.
-See [releasing](contributing/releasing.md) and
+configured. Supported release `0.2.0` at commit
+`568c1e7b29f6d3ed825d21d8d64788e5391cbd26` completed the protected workflow.
+The one qualified and published tarball has SHA-256
+`5a14be5603578d2e3980a6c503e15adaf704b5356760e0363229853a17d7ef28`;
+npm reports the matching registry integrity, signature, `latest` tag, and SLSA
+provenance. The globally installed CLI, immutable `v0.2.0` skill tag, local
+skill lock, and exact ten-file copied skill agree on `0.2.0`. See
+[V1 standalone acceptance](contributing/v1-acceptance.md),
+[releasing](contributing/releasing.md), and
 [ADR 0009](decisions/0009-establish-the-supported-release-baseline.md).

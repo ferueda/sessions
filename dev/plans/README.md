@@ -7,13 +7,12 @@ This directory holds the repository's active implementation plans.
 - Keep plans aligned with the current codebase; update them when scope changes.
 - Remove completed plans. Git history remains the archive.
 
-Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-roadmap.md).
+The durable product roadmap lives in the
+[architecture memo](../../docs/architecture-memo.md#post-v1-roadmap).
 
-Active executor plan:
+There are no active executor plans. V1 is complete, and finished plans remain in
+Git history.
 
-- [M13.3 standalone V1 release and closure](260721-m13-v1-closure.md)
-
-M13.1 standalone acceptance is complete. The planned Harness repository
-integration is superseded; M13.3 releases standalone Sessions and closes V1.
-
-Markdown presentation remains deferred beyond V1.
+The next plan to shape is the revision-manifest milestone. Do not begin later
+roadmap work until its predecessor's contract and acceptance evidence are
+settled.
