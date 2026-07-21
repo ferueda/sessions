@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/ferueda/sessions/compare/v0.1.1...v0.2.0) (2026-07-21)
+
+
+### Features
+
+* add harness configuration file ([b7e0f0e](https://github.com/ferueda/sessions/commit/b7e0f0efe26f015ee7c6989cfb90c034b8fa396d))
+
+
+### Bug Fixes
+
+* harden index recovery ([591e641](https://github.com/ferueda/sessions/commit/591e64154c5f94eb97437ee15b79baef92e0d500))
+* make index recovery observable and interruption-safe ([24f42b9](https://github.com/ferueda/sessions/commit/24f42b99e2cd3528eb479b71d4db9cd822ec80b3))
+
 ## [0.1.1](https://github.com/ferueda/sessions/compare/v0.1.0...v0.1.1) (2026-07-18)
 
 
