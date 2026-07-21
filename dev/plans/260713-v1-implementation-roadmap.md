@@ -18,7 +18,7 @@ Completed implementation detail stays available in Git history and the
 
 ## Current state
 
-M0 through M12 are complete.
+M0 through M12 and M13.1 are complete.
 
 Sessions now provides:
 
@@ -32,6 +32,9 @@ Sessions now provides:
 - scoped deletion, orphan repair, page compaction, and safe whole-library clear;
 - a packaged Agent Skill with evidence-first analysis playbooks;
 - qualified cross-platform releases through GitHub and npm trusted publishing.
+- standalone acceptance across Cursor, Codex, a synthetic third adapter,
+  authorized live cohorts, the frozen legacy Harness baseline, and the
+  published CLI/Agent Skill.
 
 `0.1.0` established the supported data and CLI compatibility baseline. `0.1.1`
 verified the routine release and recovery path. Markdown output remains deferred;
@@ -59,7 +62,10 @@ Outcome: standalone Sessions becomes the sole general implementation, while
 Harness keeps a thin, pinned Sessions skill entry and its Harness-specific
 analysis guidance.
 
-### 1. Standalone acceptance
+### 1. Standalone acceptance (complete)
+
+The durable outcome matrix and aggregate evidence are recorded in
+[V1 standalone acceptance](../../docs/contributing/v1-acceptance.md).
 
 - Compare Cursor and Codex through the same index, list, search, entries, show,
   and export outcome matrix.
@@ -74,6 +80,11 @@ analysis guidance.
   matrix.
 
 ### 2. Harness cutover
+
+Harness merge `cbaa5bc9` removed the legacy implementation before this planned
+step and currently links to standalone Sessions without a pinned skill entry.
+M13.2 must reconcile that current state with the accepted pinned-consumer and
+rollback target; it must not restore the duplicated implementation or cache.
 
 - Keep `harness/skills/sessions` as the user-facing Harness entry.
 - Pin an exact published `@ferueda/sessions` version and integrity.
@@ -110,12 +121,14 @@ analysis guidance.
 M13 is cross-repository and should use one reviewed plan with independently
 reviewable changes:
 
-1. Sessions parity and acceptance evidence.
+1. Sessions parity and acceptance evidence. **Complete.**
 2. Harness pinned-consumer cutover.
 3. Final Sessions release and V1 documentation closure.
 
-Do not remove the Harness implementation before the pinned replacement and
-rollback route work. Do not combine post-V1 features with the cutover.
+The Harness implementation was removed before the planned replacement gate.
+Preserve that current one-way ownership while M13.2 adds or explicitly revises
+the pinned entry and rollback route. Do not combine post-V1 features with the
+cutover.
 
 ## After V1
 

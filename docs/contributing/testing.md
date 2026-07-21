@@ -37,20 +37,20 @@ link here. [`package.json`](../../package.json) owns executable commands, and
 All current Vitest suites live under `test/`; `vitest.config.ts` also permits
 `src/**/*.test.ts`. Smokes live in `scripts/`, outside default discovery.
 
-| Layer                 | Current placement                                                               | Proves                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Domain/module         | `test/domain/**`, focused pure application tests                                | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds                     |
-| Application workflow  | `test/application/**` with injected ports/fakes                                 | Discovery, index/reconciliation, retention, list/search/entries/show/export/forget/repair, selection, failures   |
-| Adapter/conformance   | `test/adapters/{cursor,codex}/**`, source contracts/fixtures                    | `probe`/`discover`/`read`, replacement guards, fingerprints, normalization, safe failures, provider non-mutation |
-| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                        | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows               |
-| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests | Literal FTS, textless entries, filters, rank/ties, cursors, context, lineage, support units                      |
-| CLI/process           | `test/cli*.test.ts`, focused root process tests                                 | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects                         |
-| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                    | Dependency direction, CI classification, docs routes/links, private-path exclusion                               |
-| Agent Skill contract  | `test/skill-contracts.test.ts`, evaluator-owned forward cases                   | Exact layout/metadata/routes, shared evidence rules, shipped CLI use, safety limits, and seven prompt rubrics    |
-| Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                | Compiled binary plus synthetic indexing/query/entries/show/export, orphan repair, compaction, deletion           |
-| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                             | Offline-installed CLI journey plus the exact independent ten-file skill tree and resolvable references           |
-| Release qualification | One hashed tarball plus Linux/macOS/Windows release smokes                      | Normal global npm install, shim, pinned `npx`, skill, metadata, and the shared synthetic workflow                |
-| Agent forward eval    | Fresh agents over an isolated generic retained corpus                           | Route choice, facts-first evidence, provenance, privacy, bounded output, honest unknowns, and no auto-mutation   |
+| Layer                 | Current placement                                                                | Proves                                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Domain/module         | `test/domain/**`, focused pure application tests                                 | Canonical validation, public projection/JCS digests, query values, identity, parsing, bounds                     |
+| Application workflow  | `test/application/**` with injected ports/fakes and the shared provider workflow | Discovery, index/reconciliation, retention, list/search/entries/show/export/forget/repair, selection, failures   |
+| Adapter/conformance   | `test/adapters/{cursor,codex}/**`, source contracts/fixtures                     | `probe`/`discover`/`read`, replacement guards, fingerprints, normalization, safe failures, provider non-mutation |
+| SQLite/filesystem     | `test/infrastructure/**`, application `*.sqlite.test.ts`                         | Migrations, document digests, FTS5, transactions, permissions, leases, WAL, cleanup, retained rows               |
+| Query corpus/contract | `test/fixtures/session-query-corpus.ts`, query contracts and SQLite query tests  | Literal FTS, textless entries, filters, rank/ties, cursors, context, lineage, support units                      |
+| CLI/process           | `test/cli*.test.ts`, focused root process tests                                  | Grammar, exact JSON/JSONL DTOs, rendering; composition, streams, exits, and side effects                         |
+| Repository contract   | `test/{architecture,ci-change-scope,docs-contracts}.test.ts`                     | Dependency direction, CI classification, docs routes/links, private-path exclusion                               |
+| Agent Skill contract  | `test/skill-contracts.test.ts`, evaluator-owned forward cases                    | Exact layout/metadata/routes, shared evidence rules, shipped CLI use, safety limits, and seven prompt rubrics    |
+| Distribution smoke    | `scripts/smoke-dist.ts` plus the shared workflow                                 | Compiled binary plus synthetic indexing/query/entries/show/export, orphan repair, compaction, deletion           |
+| Package smoke         | `scripts/smoke-package.ts` plus the shared workflow                              | Offline-installed CLI journey plus the exact independent ten-file skill tree and resolvable references           |
+| Release qualification | One hashed tarball plus Linux/macOS/Windows release smokes                       | Normal global npm install, shim, pinned `npx`, skill, metadata, and the shared synthetic workflow                |
+| Agent forward eval    | Fresh agents over an isolated generic retained corpus                            | Route choice, facts-first evidence, provenance, privacy, bounded output, honest unknowns, and no auto-mutation   |
 
 There is no separate E2E framework, system-smoke lane, networked provider test,
 or authenticated live command today. JSON/JSONL delivery, Cursor/Codex indexing,
@@ -168,17 +168,17 @@ and local fakes; isolate any repositories, stores, roots, ports, and fake
 credentials. Clean on success and keep failure output bounded, or retain one
 bounded diagnostic root with an explicit cleanup protocol.
 
-No authenticated live protocol exists today. A future one must be opt-in and
-document authority, credential names/source (never values), disposable targets,
-stop conditions, redaction, and cleanup. Keep it outside Vitest, pre-commit,
-`pnpm check`, and routine CI. Live results are operational evidence, not
-deterministic regression coverage.
+No authenticated or networked live protocol exists today. The two local
+provider-read measurements are opt-in, credential-free, use disposable targets,
+redact output to aggregates, and clean up owned state. Keep them outside Vitest,
+pre-commit, `pnpm check`, and routine CI. Live results are operational evidence,
+not deterministic regression coverage.
 
 `pnpm measure:indexing` is the deterministic, provider-free stable-index
 baseline. It compares control and timed runs from the same generic seeded
 library, requires exact semantic equality, and prints aggregate timings only.
 
-`pnpm measure:indexing:codex -- --allow-provider-read` is the sole current local
+`pnpm measure:indexing:codex -- --allow-provider-read` is the Codex local
 provider-read measurement. It is macOS/Linux-only and fails before provider
 resolution elsewhere. It uses the production Codex adapter, exhausts its full
 discovery generation, indexes only a fixed 120-candidate cohort into a mode-0700
@@ -196,6 +196,19 @@ process or machine failure can leave sensitive temporary Sessions data. Run it
 only with explicit live-data authority and outside routine gates. It is the M11a
 operational exit gate after focused tests and `pnpm check`; deterministic tests
 remain authoritative for forced staging, cleanup, rollback, and lease failures.
+
+`pnpm measure:indexing:cursor -- --allow-provider-read` applies the same
+authority, temporary-state, workspace-delivery, aggregate-output, and cleanup
+rules to the production Cursor adapter. It sorts the complete discovery
+generation by native ID, preflights supported candidates, and refuses a cohort
+smaller than 120. The seed run must update all 120 and the stable run must report
+all 120 unchanged with no changed reads or other outcomes. Selected chat,
+agent-store/catalog, or JSONL physical inputs are resolved from the production
+inventory and hashed with no-follow stable open/stat checks at seed discovery,
+after seed, stable discovery, and final verification. Any candidate-signature or
+byte drift fails the check. Output contains only aggregate preflight failures,
+counts, selected file/byte totals, health, clean-writer state, workspace
+delivery, and timings.
 
 ## Verification
 

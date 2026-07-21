@@ -110,10 +110,11 @@ async function main(): Promise<void> {
 }
 
 function admitInvocation(argv: readonly string[]): Invocation {
+  const admitted = argv[0] === "--" ? argv.slice(1) : argv;
   const values = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
-    const option = argv[index];
-    const value = argv[index + 1];
+  for (let index = 0; index < admitted.length; index += 2) {
+    const option = admitted[index];
+    const value = admitted[index + 1];
     if (option === undefined || value === undefined || !option.startsWith("--")) {
       throw new TypeError("release package smoke options require --name value pairs");
     }

@@ -941,10 +941,13 @@ support evidence shows that Node or global npm is a recurring adoption blocker.
 
 ## Harness relationship
 
-Until M13 parity and cutover, the existing Harness skill remains untouched and
-usable. The repositories do not share writable state or implementation files.
+Harness removed its legacy Sessions implementation in merge `cbaa5bc9` before
+the planned M13 pinned-entry cutover and now points users to standalone
+Sessions. M13.1 compares user outcomes against the immutable pre-removal
+baseline `7ac1839f`; it does not restore the implementation or its cache. The
+repositories do not share writable state or implementation files.
 
-After standalone parity:
+Standalone parity is complete. The accepted one-way integration target remains:
 
 1. Standalone Sessions becomes the sole implementation upstream.
 2. Harness retains `skills/sessions` as either a thin pinned wrapper around a released package or an immutable vendored release snapshot.
@@ -1098,12 +1101,15 @@ adapter-version replacement decision prevents reduced evidence from replacing a
 rich last-good snapshot. Domain, storage, query, export, and CLI behavior remain
 provider-neutral.
 
-### Phase 8 — Public release complete; parity next
+### Phase 8 — Public release and standalone acceptance complete
 
 Release automation, trusted publishing, and cross-platform qualification are
 live. `0.1.0` established the supported baseline and `0.1.1` verified the routine
-release path. M13 establishes parity and switches Harness to a pinned one-way
-integration.
+release path. M13.1 established standalone parity through the shared provider
+workflow, a test-only third adapter, authorized live cohorts, the frozen Harness
+baseline, and the published package/skill. M13.2 must reconcile Harness's
+already-removed legacy implementation with the pinned one-way integration and
+rollback target before the final release closes V1.
 
 ## V1 acceptance criteria
 
