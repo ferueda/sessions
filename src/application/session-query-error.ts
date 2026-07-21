@@ -12,15 +12,24 @@ export class SessionQueryUsageError extends Error {
   }
 }
 
-export type SessionQueryOperationalErrorCode = "stale-cursor";
+export type SessionQueryOperationalErrorCode = "manifest-too-large" | "stale-cursor";
 
 export class SessionQueryOperationalError extends Error {
   readonly code: SessionQueryOperationalErrorCode;
 
   constructor(code: SessionQueryOperationalErrorCode, options?: { readonly cause?: unknown }) {
-    super("Session query cursor is stale", options);
+    super(operationalMessage(code), options);
     this.name = "SessionQueryOperationalError";
     this.code = code;
+  }
+}
+
+function operationalMessage(code: SessionQueryOperationalErrorCode): string {
+  switch (code) {
+    case "manifest-too-large":
+      return "Session manifest matches more than 10,000 revisions; narrow the selection";
+    case "stale-cursor":
+      return "Session query cursor is stale";
   }
 }
 

@@ -395,6 +395,9 @@ function createReader(snapshot: SqliteReadSnapshot, state: ReadyIndexState): Sql
     list(input) {
       return snapshot.run((database) => createSqliteSessionQuery(database).list(input));
     },
+    manifest(input) {
+      return snapshot.run((database) => createSqliteSessionQuery(database).manifest(input));
+    },
     search(input) {
       return snapshot.run((database) => createSqliteSessionQuery(database).search(input));
     },

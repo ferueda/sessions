@@ -2,27 +2,38 @@ import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, test } from "vitest";
 
+import { hashContent } from "../../src/domain/content-hash.ts";
 import {
   applyMigrations,
   readMigrationHistory,
+  sqliteMigrations,
 } from "../../src/infrastructure/sqlite/migrations.ts";
-import { SESSION_DOCUMENT_DIGEST_SCHEME } from "../../src/domain/public-session-document.ts";
+import {
+  digestPublicSessionDocument,
+  projectPublicSessionDocument,
+  SESSION_DOCUMENT_DIGEST_SCHEME,
+} from "../../src/domain/public-session-document.ts";
+import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
+import { encodeSqliteDocumentDigest } from "../../src/infrastructure/sqlite/sqlite-document-digest.ts";
+import { readCanonicalDocumentRecord } from "../../src/infrastructure/sqlite/sqlite-session-document.ts";
 
 const DIGEST = "a".repeat(64);
 
 describe("canonical SQLite baseline", () => {
-  test("bootstraps the complete current schema in one migration", () => {
+  test("applies the complete current schema through the canonical catalog", () => {
     const database = openDatabase();
     try {
       const history = applyMigrations(database);
 
-      expect(history).toMatchObject({ currentVersion: 1, pending: [] });
+      expect(history).toMatchObject({ currentVersion: 2, pending: [] });
       expect(history.applied.map(({ version, name }) => ({ version, name }))).toEqual([
         { version: 1, name: "bootstrap" },
+        { version: 2, name: "session-document-metrics" },
       ]);
-      expect(readMigrationHistory(database).currentVersion).toBe(1);
+      expect(readMigrationHistory(database).currentVersion).toBe(2);
       expect(strictApplicationTables(database)).toEqual([
+        "sessions_canonical_document_metrics",
         "sessions_canonical_sessions",
         "sessions_content_occurrences",
         "sessions_content_values",
@@ -51,6 +62,14 @@ describe("canonical SQLite baseline", () => {
         "updated_at",
         "document_digest_scheme",
         "document_digest",
+      ]);
+      expect(tableColumns(database, "sessions_canonical_document_metrics")).toEqual([
+        "session_id",
+        "relation_count",
+        "entry_count",
+        "segment_count",
+        "omitted_segment_count",
+        "text_utf8_bytes",
       ]);
       expect(tableColumns(database, "sessions_content_values")).toEqual([
         "content_id",
@@ -140,6 +159,90 @@ describe("canonical SQLite baseline", () => {
     }
   });
 
+  test("backfills exact occurrence metrics without changing schema-1 canonical evidence", () => {
+    const database = openDatabase();
+    try {
+      applyMigrations(database, [sqliteMigrations[0]!]);
+      const fixture = seedSchemaOneCanonicalDocument(database);
+      const before = canonicalEvidenceSnapshot(database);
+
+      const history = applyMigrations(database);
+
+      expect(history.currentVersion).toBe(2);
+      expect(canonicalEvidenceSnapshot(database)).toEqual(before);
+      expect(
+        database
+          .prepare(
+            `SELECT relation_count, entry_count, segment_count,
+                    omitted_segment_count, text_utf8_bytes
+             FROM sessions_canonical_document_metrics
+             WHERE session_id = ?`,
+          )
+          .get(fixture.sessionId),
+      ).toEqual({
+        relation_count: 1,
+        entry_count: 2,
+        segment_count: 3,
+        omitted_segment_count: 1,
+        text_utf8_bytes: Buffer.byteLength(fixture.text, "utf8") * 2,
+      });
+      expect(readCanonicalDocumentRecord(database, fixture.identity, fixture.sessionId)).toEqual({
+        document: fixture.document,
+        documentDigest: fixture.documentDigest,
+        documentMetrics: {
+          relationCount: 1,
+          entryCount: 2,
+          segmentCount: 3,
+          omittedSegmentCount: 1,
+          textUtf8Bytes: Buffer.byteLength(fixture.text, "utf8") * 2,
+        },
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back the metrics table and history when backfill cannot be exact", () => {
+    const database = openDatabase();
+    try {
+      applyMigrations(database, [sqliteMigrations[0]!]);
+      const { sessionId } = insertTrackedSession(database);
+      database
+        .prepare(
+          `INSERT INTO sessions_entries (
+             session_id, ordinal, kind, actor, source_locator_uri
+           ) VALUES (?, 0, 'message', 'human', 'memory://generic/entry')`,
+        )
+        .run(sessionId);
+      database.exec("PRAGMA foreign_keys = OFF");
+      database
+        .prepare(
+          `INSERT INTO sessions_content_occurrences (
+             session_id, entry_ordinal, segment_ordinal, content_id,
+             origin, confidence, source_metadata_json
+           ) VALUES (?, 0, 0, 999, 'human', 'high', '{}')`,
+        )
+        .run(sessionId);
+      database.exec("PRAGMA foreign_keys = ON");
+
+      expect(() => applyMigrations(database)).toThrow(/CHECK constraint failed/u);
+      expect(readMigrationHistory(database).currentVersion).toBe(1);
+      expect(
+        database
+          .prepare(
+            `SELECT name
+             FROM sqlite_schema
+             WHERE name = 'sessions_canonical_document_metrics'`,
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(rowCount(database, "sessions_canonical_sessions")).toBe(1);
+      expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
   test("keeps collision tuples distinct and synchronizes immutable external-content FTS", () => {
     const database = migratedDatabase();
     try {
@@ -176,6 +279,60 @@ describe("canonical SQLite baseline", () => {
       expect(ftsMatches(database, "alpha")).toEqual([]);
       expect(ftsMatches(database, "beta")).toEqual([betaId]);
       expectFtsIntegrity(database);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("enforces one exact non-negative safe metrics row per canonical document", () => {
+    const database = migratedDatabase();
+    try {
+      const { sessionId } = insertTrackedSession(database);
+      for (const column of [
+        "relation_count",
+        "entry_count",
+        "segment_count",
+        "omitted_segment_count",
+        "text_utf8_bytes",
+      ] as const) {
+        expect(() =>
+          database
+            .prepare(
+              `UPDATE sessions_canonical_document_metrics
+               SET ${column} = -1
+               WHERE session_id = ?`,
+            )
+            .run(sessionId),
+        ).toThrow(/CHECK constraint failed/u);
+        expect(() =>
+          database
+            .prepare(
+              `UPDATE sessions_canonical_document_metrics
+               SET ${column} = 9007199254740992
+               WHERE session_id = ?`,
+            )
+            .run(sessionId),
+        ).toThrow(/CHECK constraint failed/u);
+      }
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE sessions_canonical_document_metrics
+             SET omitted_segment_count = 1
+             WHERE session_id = ?`,
+          )
+          .run(sessionId),
+      ).toThrow(/CHECK constraint failed/u);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO sessions_canonical_document_metrics (
+               session_id, relation_count, entry_count, segment_count,
+               omitted_segment_count, text_utf8_bytes
+             ) VALUES (?, 0, 0, 0, 0, 0)`,
+          )
+          .run(sessionId),
+      ).toThrow(/UNIQUE constraint failed/u);
     } finally {
       database.close();
     }
@@ -249,6 +406,7 @@ describe("canonical SQLite baseline", () => {
       database
         .prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?")
         .run(sessionId);
+      expect(rowCount(database, "sessions_canonical_document_metrics")).toBe(0);
       expect(rowCount(database, "sessions_relations")).toBe(0);
       expect(rowCount(database, "sessions_entries")).toBe(0);
       expect(rowCount(database, "sessions_content_occurrences")).toBe(0);
@@ -541,7 +699,228 @@ function insertTrackedSession(database: DatabaseSync): { readonly sessionId: num
        ) VALUES (?, 'complete', 'Proof', ?, ?)`,
     )
     .run(sessionId, SESSION_DOCUMENT_DIGEST_SCHEME, new Uint8Array(32));
+  if (tableExists(database, "sessions_canonical_document_metrics")) {
+    database
+      .prepare(
+        `INSERT INTO sessions_canonical_document_metrics (
+           session_id, relation_count, entry_count, segment_count,
+           omitted_segment_count, text_utf8_bytes
+         ) VALUES (?, 0, 0, 0, 0, 0)`,
+      )
+      .run(sessionId);
+  }
   return { sessionId };
+}
+
+interface SchemaOneCanonicalFixture {
+  readonly document: SessionDocument;
+  readonly documentDigest: ReturnType<typeof digestPublicSessionDocument>;
+  readonly identity: SessionIdentity;
+  readonly sessionId: number;
+  readonly text: string;
+}
+
+function seedSchemaOneCanonicalDocument(database: DatabaseSync): SchemaOneCanonicalFixture {
+  const identity: SessionIdentity = {
+    source: { kind: "synthetic", instanceId: "migration-profile" },
+    nativeId: "migration-session",
+  };
+  const text = "repeated migration café 🌍";
+  const contentHash = hashContent(text);
+  const document: SessionDocument = {
+    identity,
+    title: "Excluded title bytes",
+    workspace: "/generic/workspace",
+    createdAt: "2026-07-20T10:00:00.000Z",
+    updatedAt: "2026-07-20T10:01:00.000Z",
+    lineageCoverage: "complete",
+    relations: [
+      {
+        kind: "parent",
+        target: {
+          source: { kind: "synthetic", instanceId: "migration-profile" },
+          nativeId: "parent-session",
+        },
+        confidence: "high",
+      },
+    ],
+    entries: [
+      {
+        ordinal: 0,
+        kind: "message",
+        actor: "human",
+        timestamp: "2026-07-20T10:00:00.000Z",
+        sourceLocator: { uri: "memory://generic/migration/0" },
+        content: [
+          {
+            kind: "text",
+            ordinal: 0,
+            text,
+            contentHash,
+            origin: "human",
+            originConfidence: "high",
+            sourceMetadata: {},
+          },
+          {
+            kind: "omitted",
+            ordinal: 1,
+            contentClass: "resource",
+            sourceType: "generic-resource",
+            origin: "injected",
+            originConfidence: "medium",
+            sourceMetadata: {},
+          },
+        ],
+      },
+      {
+        ordinal: 1,
+        kind: "message",
+        actor: "model",
+        timestamp: "2026-07-20T10:01:00.000Z",
+        sourceLocator: { uri: "memory://generic/migration/1" },
+        content: [
+          {
+            kind: "text",
+            ordinal: 0,
+            text,
+            contentHash,
+            origin: "model",
+            originConfidence: "high",
+            sourceMetadata: {},
+          },
+        ],
+      },
+    ],
+  };
+  const documentDigest = digestPublicSessionDocument(projectPublicSessionDocument(document));
+  const storedDigest = encodeSqliteDocumentDigest(documentDigest);
+  const sourceId = database
+    .prepare(
+      `INSERT INTO sessions_source_instances (kind, instance_id)
+       VALUES (?, ?)
+       RETURNING source_instance_id`,
+    )
+    .get(identity.source.kind, identity.source.instanceId) as {
+    readonly source_instance_id: number | bigint;
+  };
+  const tracking = database
+    .prepare(
+      `INSERT INTO sessions_session_tracking (
+         source_instance_id, native_id,
+         last_good_fingerprint_scheme, last_good_fingerprint_digest,
+         last_good_adapter_version, latest_fingerprint_scheme,
+         latest_fingerprint_digest, latest_adapter_version, latest_outcome,
+         presence_observed_at, captured_at, last_seen_at
+       ) VALUES (?, ?, 'sha256-json-v1', ?, 'fixture-v1',
+                 'sha256-json-v1', ?, 'fixture-v1', 'indexed', ?, ?, ?)
+       RETURNING session_id`,
+    )
+    .get(
+      sourceId.source_instance_id,
+      identity.nativeId,
+      DIGEST,
+      DIGEST,
+      "2026-07-20T10:02:00.000Z",
+      "2026-07-20T10:02:00.000Z",
+      "2026-07-20T10:02:00.000Z",
+    ) as { readonly session_id: number | bigint };
+  const sessionId = Number(tracking.session_id);
+  database
+    .prepare(
+      `INSERT INTO sessions_canonical_sessions (
+         session_id, lineage_coverage, title, workspace, created_at, updated_at,
+         document_digest_scheme, document_digest
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      sessionId,
+      document.lineageCoverage,
+      document.title ?? null,
+      document.workspace ?? null,
+      document.createdAt ?? null,
+      document.updatedAt ?? null,
+      storedDigest.scheme,
+      storedDigest.bytes,
+    );
+  database
+    .prepare(
+      `INSERT INTO sessions_relations (
+         session_id, ordinal, kind, target_kind, target_instance_id,
+         target_native_id, confidence
+       ) VALUES (?, 0, 'parent', 'synthetic', 'migration-profile', 'parent-session', 'high')`,
+    )
+    .run(sessionId);
+  const insertEntry = database.prepare(
+    `INSERT INTO sessions_entries (
+       session_id, ordinal, kind, actor, timestamp, source_locator_uri
+     ) VALUES (?, ?, 'message', ?, ?, ?)`,
+  );
+  insertEntry.run(
+    sessionId,
+    0,
+    "human",
+    "2026-07-20T10:00:00.000Z",
+    "memory://generic/migration/0",
+  );
+  insertEntry.run(
+    sessionId,
+    1,
+    "model",
+    "2026-07-20T10:01:00.000Z",
+    "memory://generic/migration/1",
+  );
+  const contentId = database
+    .prepare(
+      `INSERT INTO sessions_content_values (digest, text)
+       VALUES (?, ?)
+       RETURNING content_id`,
+    )
+    .get(encodeSqliteContentDigest(contentHash.digest), text) as {
+    readonly content_id: number | bigint;
+  };
+  const insertText = database.prepare(
+    `INSERT INTO sessions_content_occurrences (
+       session_id, entry_ordinal, segment_ordinal, content_id,
+       origin, confidence, source_metadata_json
+     ) VALUES (?, ?, ?, ?, ?, 'high', '{}')`,
+  );
+  insertText.run(sessionId, 0, 0, contentId.content_id, "human");
+  insertText.run(sessionId, 1, 0, contentId.content_id, "model");
+  database
+    .prepare(
+      `INSERT INTO sessions_content_occurrences (
+         session_id, entry_ordinal, segment_ordinal, content_class, source_type,
+         origin, confidence, source_metadata_json
+       ) VALUES (?, 0, 1, 'resource', 'generic-resource', 'injected', 'medium', '{}')`,
+    )
+    .run(sessionId);
+  return { document, documentDigest, identity, sessionId, text };
+}
+
+function canonicalEvidenceSnapshot(database: DatabaseSync): Readonly<Record<string, unknown>> {
+  return {
+    canonical: database
+      .prepare("SELECT * FROM sessions_canonical_sessions ORDER BY session_id")
+      .all(),
+    relations: database
+      .prepare("SELECT * FROM sessions_relations ORDER BY session_id, ordinal")
+      .all(),
+    entries: database.prepare("SELECT * FROM sessions_entries ORDER BY session_id, ordinal").all(),
+    occurrences: database
+      .prepare(
+        `SELECT * FROM sessions_content_occurrences
+         ORDER BY session_id, entry_ordinal, segment_ordinal`,
+      )
+      .all(),
+    content: database.prepare("SELECT * FROM sessions_content_values ORDER BY content_id").all(),
+  };
+}
+
+function tableExists(database: DatabaseSync, table: string): boolean {
+  return (
+    database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table) !==
+    undefined
+  );
 }
 
 function insertContent(database: DatabaseSync, digest: string, text: string): number {

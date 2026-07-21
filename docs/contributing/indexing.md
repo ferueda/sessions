@@ -23,8 +23,8 @@ never writes to the provider.
    adapter version and aggregate input fingerprint match the last good revision
    is recorded as unchanged without reading its transcript again.
 5. Read and validate each changed candidate. Replace its canonical document,
-   public-document digest, tracking state, interned text, and FTS rows in one
-   leased transaction. Record ordinary typed failures immediately, but hold a
+   public-document digest, exact document metrics, tracking state, interned text,
+   and FTS rows in one leased transaction. Record ordinary typed failures immediately, but hold a
    first-attempt `source-changed` outcome until the primary pass finishes.
 6. If any source-change outcomes were held, perform one fresh complete
    rediscovery for that source and retry only those original identities, in
@@ -76,8 +76,8 @@ unknown coverage.
   structure checks. Missing, stale, malformed, or unsafe proof disables only
   this optimization.
 - Recovery, migration, maintenance, abandoned work, or failed cleanup keeps the
-  generation dirty and uses the existing full canonical, foreign-key, and FTS
-  validation/repair path.
+  generation dirty and uses the existing full canonical document/digest/metrics,
+  foreign-key, and FTS validation/repair path.
 - The first foreground `SIGINT` or `SIGTERM` requests cooperative cancellation
   and maps a successfully cleaned stop to exit `130` or `143`. Operation and
   cleanup errors keep their existing precedence. A crash, `SIGKILL`, or failed

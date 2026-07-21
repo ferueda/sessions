@@ -37,13 +37,12 @@ portable historical context. Markdown presentation remains post-V1 work.
 
 ## Post-V1 direction
 
-Sessions will next make multi-step retained evidence reads coherent and
-verifiable under change: first through atomic, transcript-free revision
-manifests; then through digest-guarded coordinate reads; then through
-provider-neutral related-session traversal and an explicit privacy-safe local
-project-context projection. Sessions remains the local evidence layer that
-records what was retained and where. The Agent Skill and other consumers own
-meaning, causality, outcomes, and recommendations.
+Sessions now makes batch selection coherent through atomic, transcript-free
+revision manifests. The next ordered work is digest-guarded coordinate reads,
+then provider-neutral related-session traversal and an explicit privacy-safe
+local project-context projection. Sessions remains the local evidence layer
+that records what was retained and where. The Agent Skill and other consumers
+own meaning, causality, outcomes, and recommendations.
 
 Historical revision pinning or archives, canonical schema and coverage
 expansion, and chunked or streamed full export remain evidence-gated. Each must
@@ -103,6 +102,8 @@ an implementation plan.
 - Portable exports never expose diagnostic source locators or local paths by
   default and frame transcript instructions as untrusted historical data.
 - Structured output is versioned. Stdout carries requested data; stderr carries diagnostics.
+- A successful revision manifest is one complete ordered cohort from one
+  retained-library snapshot; bounds fail rather than truncate or page it.
 - Empty results are successful. Usage errors and operational failures have different exit codes.
 - Published users execute compiled JavaScript and do not need pnpm or TypeScript.
 - Durable docs, examples, tests, and fixtures contain no private downstream-repository assumptions.

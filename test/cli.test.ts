@@ -129,6 +129,7 @@ describe("sessions CLI", () => {
     for (const command of [
       "index",
       "list",
+      "manifest",
       "entries",
       "search",
       "show",
@@ -328,6 +329,146 @@ describe("sessions CLI", () => {
     ).toBe(true);
   });
 
+  test("requires a machine format and excludes unsafe or truncating manifest options", async () => {
+    const manifest = vi.fn<ProgramOptions["manifest"]>(async () => emptyManifest());
+
+    const missingFormat = await invoke(["manifest"], { manifest });
+    const human = await invoke(["manifest", "--format", "human"], { manifest });
+    const workspace = await invoke(
+      ["manifest", "--format", "json", "--workspace", "/private/repo"],
+      { manifest },
+    );
+    const limit = await invoke(["manifest", "--format", "json", "--limit", "1"], {
+      manifest,
+    });
+    const cursor = await invoke(["manifest", "--format", "json", "--cursor", "opaque"], {
+      manifest,
+    });
+
+    expect(
+      [missingFormat, human, workspace, limit, cursor].map(({ exitCode }) => exitCode),
+    ).toEqual([2, 2, 2, 2, 2]);
+    expect(manifest).not.toHaveBeenCalled();
+
+    const help = await invoke(["manifest", "--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("--format <format>");
+    expect(help.stdout).not.toContain("--workspace");
+    expect(help.stdout).not.toContain("--limit");
+    expect(help.stdout).not.toContain("--cursor");
+  });
+
+  test("forwards every safe manifest filter without pagination controls", async () => {
+    const manifest = vi.fn<ProgramOptions["manifest"]>(async () => emptyManifest());
+    const invocation = await invoke(
+      [
+        "manifest",
+        "--format",
+        "json",
+        "--source",
+        "synthetic",
+        "--instance",
+        "local",
+        "--native-id",
+        "provider-thread",
+        "--source-state",
+        "missing",
+        "--activity-after",
+        "2026-07-13T23:00:00.000Z",
+        "--activity-before",
+        "2026-07-15T01:00:00.000Z",
+        "--captured-after",
+        "2026-07-14T00:00:00.000Z",
+        "--captured-before",
+        "2026-07-15T00:00:00.000Z",
+        "--observed-after",
+        "2026-07-14T01:00:00.000Z",
+        "--observed-before",
+        "2026-07-14T23:00:00.000Z",
+        "--session",
+        "synthetic@one:session",
+      ],
+      { manifest },
+    );
+
+    expect(invocation.exitCode).toBe(0);
+    expect(manifest).toHaveBeenCalledExactlyOnceWith({
+      filter: {
+        source: "synthetic",
+        instance: "local",
+        nativeId: "provider-thread",
+        sourceState: "missing",
+        activityAfter: "2026-07-13T23:00:00.000Z",
+        activityBefore: "2026-07-15T01:00:00.000Z",
+        capturedAfter: "2026-07-14T00:00:00.000Z",
+        capturedBefore: "2026-07-15T00:00:00.000Z",
+        observedAfter: "2026-07-14T01:00:00.000Z",
+        observedBefore: "2026-07-14T23:00:00.000Z",
+        session: {
+          source: { kind: "synthetic", instanceId: "one" },
+          nativeId: "session",
+        },
+      },
+    });
+  });
+
+  test("renders exact empty and equivalent nonempty manifest JSON and JSONL", async () => {
+    const emptyJson = await invoke(["manifest", "--format", "json"]);
+    const emptyJsonl = await invoke(["manifest", "--format", "jsonl"]);
+    const result = attributedManifest();
+    const manifest = vi.fn<ProgramOptions["manifest"]>(async () => result);
+    const json = await invoke(["manifest", "--format", "json"], { manifest });
+    const jsonl = await invoke(["manifest", "--format", "jsonl"], { manifest });
+
+    const emptyBundle = JSON.parse(emptyJson.stdout);
+    const emptyRecords = emptyJsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(emptyBundle).toEqual({
+      schemaVersion: 1,
+      command: "manifest",
+      type: "manifest",
+      disposition: "untrusted-history",
+      revisionCount: 0,
+      selection: emptyManifest().selection,
+      captureScope: uninitializedCaptureScope,
+      revisions: [],
+    });
+    expect(emptyRecords).toEqual([
+      {
+        schemaVersion: 1,
+        command: "manifest",
+        type: "manifest",
+        disposition: "untrusted-history",
+        revisionCount: 0,
+        selection: emptyBundle.selection,
+        captureScope: emptyBundle.captureScope,
+      },
+    ]);
+
+    const bundle = JSON.parse(json.stdout);
+    const records = jsonl.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect([json.exitCode, jsonl.exitCode]).toEqual([0, 0]);
+    expect(bundle.revisionCount).toBe(1);
+    expect(records.map(({ type }) => type)).toEqual(["manifest", "revision"]);
+    expect(records[0]).toEqual({
+      schemaVersion: 1,
+      command: "manifest",
+      type: "manifest",
+      disposition: "untrusted-history",
+      revisionCount: 1,
+      selection: bundle.selection,
+      captureScope: bundle.captureScope,
+    });
+    expect(records[1].revision).toEqual(bundle.revisions[0]);
+    expect(bundle.revisions[0]).not.toHaveProperty("title");
+    expect(bundle.revisions[0]).not.toHaveProperty("workspace");
+  });
+
   test("renders equivalent show JSON and attributable JSONL", async () => {
     const result = selectedSnapshot();
     const show = vi.fn<ProgramOptions["show"]>(async () => result);
@@ -490,6 +631,11 @@ describe("sessions CLI", () => {
         throw new StructuredOutputTooLargeError();
       },
     });
+    const manifestOverflow = await invoke(["manifest", "--format", "json"], {
+      manifest: async () => {
+        throw new StructuredOutputTooLargeError();
+      },
+    });
 
     expect(invalidDoctor.exitCode).toBe(2);
     expect(invalidList.exitCode).toBe(2);
@@ -497,9 +643,10 @@ describe("sessions CLI", () => {
       exitCode: 1,
       stdout: "",
       stderr:
-        "sessions: structured-output-too-large: narrow list/search/entries or use export --full\n",
+        "sessions: structured-output-too-large: narrow list/search/entries/manifest or use export --full\n",
     });
     expect(entriesOverflow).toEqual(overflow);
+    expect(manifestOverflow).toEqual(overflow);
   });
 
   test("requires the option delimiter for leading-dash search text", async () => {
@@ -915,6 +1062,21 @@ describe("sessions CLI", () => {
     });
   });
 
+  test("emits no partial manifest when the complete cohort is too large", async () => {
+    const invocation = await invoke(["manifest", "--format", "json"], {
+      manifest: async () => {
+        throw new SessionQueryOperationalError("manifest-too-large");
+      },
+    });
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr:
+        "sessions: Session manifest matches more than 10,000 revisions; narrow the selection\n",
+    });
+  });
+
   test("validates identity and show context before calling handlers", async () => {
     const show = vi.fn<ProgramOptions["show"]>();
     const invalidIdentity = await invoke(["show", "not-an-id"], { show });
@@ -1186,6 +1348,7 @@ async function invoke(
     indexSources: ["codex"],
     index: async () => indexReport(false),
     list: async () => ({ sessions: [], captureScope: uninitializedCaptureScope }),
+    manifest: async () => emptyManifest(),
     entries: async () => ({ entries: [], captureScope: uninitializedCaptureScope }),
     search: async () => emptySearch(),
     show: async () => {
@@ -1284,6 +1447,52 @@ function attributedListResult(): ListSessionsResult {
         adapterVersion: snapshot.adapterVersion,
         freshness: snapshot.freshness,
         root: { kind: "unknown" },
+      },
+    ],
+  };
+}
+
+function emptyManifest(): Awaited<ReturnType<ProgramOptions["manifest"]>> {
+  return {
+    selection: {
+      order: "canonical-identity-v1",
+      maximumRevisions: 10_000,
+      filters: {},
+    },
+    captureScope: uninitializedCaptureScope,
+    revisions: [],
+  };
+}
+
+function attributedManifest(): Awaited<ReturnType<ProgramOptions["manifest"]>> {
+  const snapshot = selectedSnapshot().snapshot;
+  return {
+    selection: {
+      order: "canonical-identity-v1",
+      maximumRevisions: 10_000,
+      filters: { source: "synthetic" },
+    },
+    captureScope: completeCaptureScope,
+    revisions: [
+      {
+        session: snapshot.identity,
+        documentDigest: snapshot.documentDigest,
+        ...(snapshot.createdAt === undefined ? {} : { createdAt: snapshot.createdAt }),
+        ...(snapshot.updatedAt === undefined ? {} : { updatedAt: snapshot.updatedAt }),
+        capturedAt: snapshot.capturedAt,
+        sourceObservedAt: snapshot.sourceObservedAt,
+        sourceState: snapshot.sourceState,
+        freshness: snapshot.freshness,
+        adapterVersion: snapshot.adapterVersion,
+        lineageCoverage: snapshot.lineageCoverage,
+        root: { kind: "unknown" },
+        counts: {
+          relations: 1,
+          entries: 1,
+          segments: 1,
+          omittedSegments: 0,
+          textUtf8Bytes: Buffer.byteLength("Synthetic body", "utf8"),
+        },
       },
     ],
   };

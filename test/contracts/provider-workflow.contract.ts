@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { exportSession } from "../../src/application/export-session.ts";
+import { createSessionManifest } from "../../src/application/create-session-manifest.ts";
 import { listSessionEntries } from "../../src/application/list-session-entries.ts";
 import { listSessions } from "../../src/application/list-sessions.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
@@ -119,6 +120,26 @@ async function exerciseProviderWorkflow(fixture: ProviderWorkflowFixture): Promi
   );
   expect(completeList.sessions).toEqual(repeatedList.sessions);
   expect(canonicalIds(completeList.sessions)).toEqual(expectedSessionOrder);
+
+  const manifest = json(
+    await invokeReadOnly(fixture, invoke, ["manifest", ...sourceFilter, "--format", "json"]),
+  );
+  expect(manifest.revisionCount).toBe(2);
+  expect(canonicalIds(manifest.revisions)).toEqual(expectedSessionOrder);
+  expect(manifest.revisions.find((revision) => canonicalId(revision) === targetId)).toMatchObject({
+    documentDigest: {
+      scheme: DOCUMENT_DIGEST_SCHEME,
+      digest: fixture.expectedDocumentDigests.initial,
+    },
+    freshness: "current",
+    sourceState: "present",
+  });
+  expect(JSON.stringify(manifest.revisions)).not.toContain(SHARED_TEXT);
+  for (const revision of manifest.revisions) {
+    expect(revision).not.toHaveProperty("title");
+    expect(revision).not.toHaveProperty("workspace");
+    expect(revision).not.toHaveProperty("entries");
+  }
 
   const listed = json(
     await invokeReadOnly(fixture, invoke, ["list", ...targetFilter, "--format", "json"]),
@@ -373,6 +394,7 @@ function createInvocation(
     index: async () =>
       runIndex({ paths, sources: [selected], sourceSelection: "required", lifecycle, clock }),
     list: (input) => listSessions({ paths, lifecycle, ...input }),
+    manifest: (input) => createSessionManifest({ paths, lifecycle, ...input }),
     entries: (input) => listSessionEntries({ paths, lifecycle, ...input }),
     search: (input) => searchSessions({ paths, lifecycle, ...input }),
     show: (input) => showSession({ paths, lifecycle, ...input }),
@@ -430,6 +452,10 @@ async function invokeReadOnly(
 }
 
 interface AcceptanceJson {
+  readonly revisionCount: number;
+  readonly revisions: readonly (Record<string, unknown> & {
+    readonly session: Record<string, unknown>;
+  })[];
   readonly counts: Record<CountName, number>;
   readonly sessions: readonly Record<string, unknown>[];
   readonly captureScope: Record<string, unknown>;

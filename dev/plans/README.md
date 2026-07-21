@@ -10,9 +10,9 @@ This directory holds the repository's active implementation plans.
 The durable product roadmap lives in the
 [architecture memo](../../docs/architecture-memo.md#post-v1-roadmap).
 
-There are no active executor plans. V1 is complete, and finished plans remain in
-Git history.
+There are no active executor plans. V1 and atomic revision manifests are
+complete, and finished plans remain in Git history.
 
-The next plan to shape is the revision-manifest milestone. Do not begin later
+The next plan to shape is digest-guarded coordinate reads. Do not begin later
 roadmap work until its predecessor's contract and acceptance evidence are
 settled.

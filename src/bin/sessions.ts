@@ -7,6 +7,7 @@ import { createCodexSource } from "../adapters/codex/source.ts";
 import { createCursorSource } from "../adapters/cursor/source.ts";
 import { clearData } from "../application/clear-index.ts";
 import { compactIndex } from "../application/compact-index.ts";
+import { createSessionManifest } from "../application/create-session-manifest.ts";
 import { exportSession } from "../application/export-session.ts";
 import { repairOrphanedContent } from "../application/repair-orphaned-content.ts";
 import { forgetSession } from "../application/forget-session.ts";
@@ -146,6 +147,12 @@ const exitCode = await runCli(process.argv.slice(2), {
       ...(filter === undefined ? {} : { filter }),
       ...(limit === undefined ? {} : { limit }),
       ...(cursor === undefined ? {} : { cursor }),
+    }),
+  manifest: ({ filter }) =>
+    createSessionManifest({
+      paths: resolvePaths(),
+      lifecycle: indexLifecycle,
+      ...(filter === undefined ? {} : { filter }),
     }),
   entries: ({ filter, selection, limit, cursor }) =>
     listSessionEntries({

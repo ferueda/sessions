@@ -10,7 +10,12 @@
 Sessions is a standalone local-first product. The legacy Harness implementation
 served as design evidence rather than a codebase to clean up in place.
 
-The core owns a provider-neutral session model, durable capture lifecycle, SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future adapters only probe, discover, read, and normalize their sources. The CLI and Agent Skill consume the same application services. Provider histories remain read-only; after explicit indexing, the durable canonical library is the only source for list, search, entries, show, analysis, and export.
+The core owns a provider-neutral session model, durable capture lifecycle,
+SQLite/FTS5 storage, and structured query semantics. Cursor, Codex, and future
+adapters only probe, discover, read, and normalize their sources. The CLI and
+Agent Skill consume the same application services. Provider histories remain
+read-only; after explicit indexing, the durable canonical library is the only
+source for list, search, entries, manifest, show, analysis, and export.
 
 Public delivery is the npm package `@ferueda/sessions` with a
 `sessions` binary, compiled JavaScript, Node.js 24.16 or newer, one exact
@@ -382,8 +387,8 @@ content hash, or lease token.
 
 A ready, no-sidecar, current-schema open with both the clean seal and matching
 proof uses constant-size schema and FTS structure checks. Dirty, recovery,
-migration, maintenance, or failed-cleanup state uses the existing full
-canonical, foreign-key, and FTS validation/repair path. Missing or rejected proof
+migration, maintenance, or failed-cleanup state uses the existing full canonical
+document/digest/metrics, foreign-key, and FTS validation/repair path. Missing or rejected proof
 only disables the optimization. Direct SQLite edits are unsupported; automatic
 detection of arbitrary same-schema out-of-band changes on every clean open is
 not a contract.
@@ -409,8 +414,8 @@ committed replacements and untouched last-good documents, and exits `130` or
 `143`. Cleanup uncertainty, crash, or `SIGKILL` remains dirty and forces the
 next full validation.
 
-List, search, and entries are self-describing about capture scope. One
-page-level aggregate reports tracked, retained-current, retained-stale,
+List, search, entries, and manifest are self-describing about capture scope. One
+page- or cohort-level aggregate reports tracked, retained-current, retained-stale,
 unindexed, source-state, coverage, and latest-failure counts. It identifies
 which source/tracking filters it can evaluate and never treats missing canonical
 metadata or text as a match or non-match. Doctor exposes the same global facts as
@@ -422,9 +427,9 @@ corruption.
 SQLite is the durable canonical local library. FTS5 supplies lexical search. One
 database contains two explicit lifecycles: retained canonical sessions/capture
 state and rebuildable FTS/query projections plus bounded operational diagnostics.
-The schema separates source instances, sessions, source observations, relations,
-entries, content values, occurrences, index runs, migration metadata, library
-identity, and writer coordination.
+The schema separates source instances, sessions, exact canonical document
+metrics, source observations, relations, entries, content values, occurrences,
+index runs, migration metadata, library identity, and writer coordination.
 
 The supported storage baseline selects SQLite incremental auto-vacuum before WAL
 or schema creation and rejects existing databases in another mode. Explicit
@@ -451,8 +456,9 @@ bounded keyset batches into one contentless, memory-only TEMP expected FTS index
 then compares exact terms, positions, and docsize in both directions. The clean
 writer fast path does not weaken this explicit full-library check.
 
-The application exposes immutable provider-neutral list/search/entries query values and
-one query repository beside canonical reconstruction on each read snapshot.
+The application exposes immutable provider-neutral list/search/entries/manifest
+query values and one query repository beside canonical reconstruction on each
+read snapshot.
 Shared filters cover exact source/instance, exact opaque provider-native ID,
 effective source state, workspace, exclusive activity/capture/source-observation
 bounds, and canonical identity. Activity uses `updatedAt`, falling back to
@@ -465,8 +471,8 @@ effective observation time is the source coverage observation while coverage is
 unknown and the session presence observation otherwise; it never falls back to
 last-seen or provider activity time.
 
-List, search, and entries also read one capture-scope aggregate inside that same
-immutable snapshot. It counts tracked current, stale, and unindexed sessions;
+List, search, entries, and manifest also read one capture-scope aggregate inside
+that same immutable snapshot. It counts tracked current, stale, and unindexed sessions;
 effective present, missing, and unknown state; registered-source complete and
 unknown coverage; and latest failures. It applies only filters provable from
 source/tracking identity. Active canonical metadata, entry, and search-text
@@ -486,7 +492,7 @@ relevance.
 Every hit reports exact unique matched terms in first-query order. `any` derives
 them with page-bounded candidate probes; `all` reuses the query's unique terms.
 One query-scoped root resolver supplies support plus a known retained root or
-`unknown` on every list result, search hit, and entry result. Root attribution
+`unknown` on every list result, search hit, entry result, and manifest revision. Root attribution
 can point outside current filters and does not enter documents, digests, show, or
 export.
 
@@ -512,6 +518,13 @@ Malformed/query-mismatched cursors are usage failures; recreated-library or
 later-generation cursors are stale operational failures. Every admitted writer
 may conservatively stale cursors.
 
+Manifest deliberately has no continuation cursor. It first selects canonical
+identities in binary source/instance/native order, admits at most 10,000 as one
+complete cohort, then left-joins stored document metrics so a missing derivative
+fails instead of omitting evidence. Capture scope, revision metadata, exact
+counts, and whole-library root resolution remain inside one immutable snapshot.
+The normal query does not read transcript text or hydrate documents per session.
+
 FTS structure and rebuild logic are shared by bootstrap and projection repair. A
 dirty or recovery-required leased index-writer open first distinguishes canonical
 corruption from FTS-only damage, then rebuilds only the projection from canonical
@@ -522,17 +535,18 @@ candidates whose derived row is missing. Show and export reconstruct canonical
 sessions directly rather than routing through search, including retained
 sessions whose latest source state is missing or unknown.
 
-A missing, malformed, unknown-scheme, or mismatching public-document digest is
-canonical corruption. It fails full document reads and the semantic health walk;
+A missing, malformed, unknown-scheme, or mismatching public-document digest or
+document-metrics derivative is canonical corruption. It fails full document
+reads and the semantic health walk;
 FTS rebuild and orphan maintenance cannot recreate or repair it. Document and
 digest replacement share the existing leased immediate transaction, so any later
 write failure rolls both back to the last-good pair.
 
 Databases from development builds before `0.1.0` are unsupported and fail closed
 without migration or deletion; users can select a fresh Sessions data directory
-and index again. The clean-writer state and persisted document digest define the
-supported schema-1 baseline checksum. `data clear` does not claim an incompatible
-earlier database; reset with a fresh `SESSIONS_DATA_DIR` or manual removal of
+and index again. The clean-writer state, persisted document digest, and schema-2
+document metrics define the supported storage baseline. `data clear` does not
+claim an incompatible earlier database; reset with a fresh `SESSIONS_DATA_DIR` or manual removal of
 only the exact obsolete Sessions-owned directory followed by reindexing.
 Compatibility begins with supported `0.1.0`; the unsupported `0.0.0` bootstrap
 seed has no migration promise. From `0.1.0`, SQLite
@@ -604,6 +618,7 @@ sessions doctor [--format human|json]
 sessions paths [--format human|json]
 sessions index [--source codex|cursor] [--format human|json]
 sessions list [filters] [--limit N] [--cursor TOKEN] [--format human|json|jsonl]
+sessions manifest [safe-session-filters] --format json|jsonl
 sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
                        [--cursor TOKEN] [--format human|json|jsonl]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
@@ -618,33 +633,35 @@ sessions data compact [--format human|json]
 sessions data clear --yes [--format human|json]
 ```
 
-Literal all/any search, per-hit matched terms, activity bounds, list/search/entry
-root attribution, page-level capture scope, textless entry inventory, bounded
-show/export ranges, and Cursor/Codex indexing are current.
+Literal all/any search, per-hit matched terms, activity bounds,
+list/search/entry/manifest root attribution, page- or cohort-level capture
+scope, textless entry inventory, complete transcript-free revision manifests,
+bounded show/export ranges, and Cursor/Codex indexing are current.
 
 Markdown presentation is deferred beyond V1. Any later format must preserve the
 same eligible evidence and digest semantics.
 
 Behavioral rules:
 
-- Human-readable output is the list/search/entries/show default; export requires JSON or
-  JSONL explicitly.
+- Human-readable output is the list/search/entries/show default; manifest and
+  export require JSON or JSONL explicitly.
 - JSON/JSONL are explicit and schema-versioned.
 - Stdout carries requested results; stderr carries warnings, progress, and errors.
 - Exit `0` means successful execution, including no matches; `1` means operational failure; `2` means invalid usage.
-- A fresh uninitialized library lists as a successful empty result with an
+- A fresh uninitialized library lists or manifests as a successful empty result with an
   explicit all-zero `uninitialized` capture scope, without creating storage or
   probing a provider. Cursor-free search and entries behave the same;
   show/export of an absent identity remains an operational not-found result.
 - Unknown flags and invalid values fail; they are not ignored.
-- Potentially large output is bounded by default. Only export accepts explicit
-  `--full`.
+- Potentially large output is bounded by default. Manifest fails instead of
+  truncating above its complete-result bounds. Only export accepts explicit `--full`.
 - Color is optional and honors `NO_COLOR`.
 - Filters have the same meaning for every source.
-- List/search/entries/show use one shared selection for human, JSON, and JSONL. Export
-  uses the same snapshot selection and emits JSON or JSONL.
-- List/search/entries JSON includes capture scope once on the page; JSONL carries
-  it only on the page record. Human output warns for `uninitialized` or
+- List/search/entries/show use one shared selection for human, JSON, and JSONL.
+  Manifest and export use the same snapshot selection and emit JSON or JSONL.
+- List/search/entries JSON includes capture scope once on the page; manifest
+  includes it once on the complete cohort. JSONL carries it only on the page or
+  manifest envelope. Human output warns for `uninitialized` or
   `incomplete` scope and remains quiet for `complete` scope.
 - `index` durably retains the latest successful normalized snapshot. A complete
   later scan can change its source state to missing but cannot delete it.
@@ -1062,8 +1079,8 @@ the schema cookie and current baseline agree, no migration ran or is pending, no
 recovery sidecars or expired owner require recovery, and constant-size pragma,
 schema, and FTS object/trigger checks pass. Any crash, abandoned owner,
 migration, setup failure, heartbeat/ownership loss, recovery evidence, or failed
-cleanup keeps the library dirty and forces the existing full canonical, foreign
-key, and FTS validation/repair path on the next writer.
+cleanup keeps the library dirty and forces the existing full canonical
+document/digest/metrics, foreign-key, and FTS validation/repair path on the next writer.
 
 Clean completion requires proportional proof of the writes performed during the
 generation. Canonical replacement must reconstruct and digest-check each changed
@@ -1155,9 +1172,9 @@ reads still address the same retained evidence. The Agent Skill and other
 consumers still own relevance, meaning, causality, outcomes, drift, and
 recommendations.
 
-### 1. Revision manifests
+### 1. Revision manifests — current
 
-Add an atomic, transcript-free manifest for a fixed, ordered cohort selected
+An atomic, transcript-free manifest returns a fixed, ordered cohort selected
 from one library generation. The versioned JSON/JSONL result binds explicit
 selection bounds to canonical session IDs and document digests, and carries the
 capture scope, source state, counts, and lineage needed to interpret and repeat

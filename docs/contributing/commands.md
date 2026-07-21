@@ -14,6 +14,7 @@
 | `pnpm measure:query-lineage`                            | Compare repeated and query-scoped lineage resolution                    | No                                 | No                                  |
 | `pnpm measure:entry-query`                              | Measure fixed textless entry queries through production SQLite seams    | In-memory database, removed        | No                                  |
 | `pnpm measure:search-query`                             | Measure a fixed broad first-page search through production SQLite seams | In-memory database, removed        | No                                  |
+| `pnpm measure:manifest`                                 | Measure a complete 2,000-revision manifest through production SQLite    | In-memory database, removed        | No                                  |
 | `pnpm measure:indexing`                                 | Compare control and timed stable indexing over a fixed generic corpus   | Temporary directory, removed       | No                                  |
 | `pnpm measure:indexing:codex -- --allow-provider-read`  | Measure a bounded real Codex cohort through production discovery        | Temporary private library, removed | No                                  |
 | `pnpm measure:indexing:cursor -- --allow-provider-read` | Measure a bounded real Cursor cohort through production discovery       | Temporary private library, removed | No                                  |
@@ -60,6 +61,16 @@ runs broad first-page `all` and `any` queries twice through the production query
 seam. Exact order, roots, matched terms, support counts, snippets, continuation,
 and repeated output are required; aggregate elapsed time is report-only and
 varies by machine and runtime.
+
+`pnpm measure:manifest` is opt-in and outside `pnpm check`. It indexes 2,000
+generic revisions across three source instances through the production SQLite
+storage seam, then reads the complete manifest twice. Exact result equality,
+binary identity order, capture scope, roots, stored document metrics, and the
+16 MiB encoded-output bound are required. A SQLite authorizer denies transcript
+table reads and writes while bounding the set-based query shape. Output contains
+only aggregate corpus, access, byte, and elapsed-time values; timings are
+report-only and vary by machine and runtime. The script constructs no provider
+adapter and never opens the ordinary Sessions library.
 
 `pnpm measure:indexing` is opt-in and outside `pnpm check`. It seeds one fixed
 generic file-backed corpus, clones the clean library, and compares ordinary and

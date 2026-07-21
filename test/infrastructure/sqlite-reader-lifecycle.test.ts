@@ -20,6 +20,8 @@ import {
 import { createSqliteReadSnapshot } from "../../src/infrastructure/sqlite/read-snapshot.ts";
 import { counts, finishCompleted, replacement } from "../contracts/session-index.contract.ts";
 import { createTestDocument, createTestIdentity } from "../fixtures/session.ts";
+import { createSessionManifestQuery } from "../../src/domain/session-manifest.ts";
+import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -141,14 +143,18 @@ describe("SQLite reader lifecycle", () => {
     const futureLifecycle = createSqliteIndexLifecycle({
       migrations: [
         ...sqliteMigrations,
-        { version: 2, name: "future_marker", sql: "CREATE TABLE future_marker (id INTEGER);" },
+        {
+          version: CURRENT_INDEX_SCHEMA_VERSION + 1,
+          name: "future_marker",
+          sql: "CREATE TABLE future_marker (id INTEGER);",
+        },
       ],
     });
     await expect(futureLifecycle.openReader(baselinePaths)).rejects.toMatchObject({
       state: {
         status: "migration-required",
         schemaVersion: 1,
-        supportedSchemaVersion: 2,
+        supportedSchemaVersion: CURRENT_INDEX_SCHEMA_VERSION + 1,
       },
     });
     expect(await readFile(baselinePaths.database)).toEqual(beforeBytes);
@@ -206,6 +212,48 @@ describe("SQLite reader lifecycle", () => {
             .run("2026-07-14T00:00:00.000Z");
         });
         return "must be discarded";
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(readFailure).toBeInstanceOf(SqliteIndexLifecycleError);
+    expect(readFailure).toMatchObject({
+      state: { status: "incompatible", reason: "concurrent-change" },
+    });
+    await snapshot.close();
+  });
+
+  test("discards a complete manifest when the main database changes during its snapshot", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const identity = createTestIdentity("manifest-snapshot");
+    const writer = await lifecycle.openWriter(paths);
+    const run = await writer.sessions.startRun({
+      source: identity.source,
+      startedAt: "2026-07-15T12:00:00.000Z",
+    });
+    await writer.sessions.replaceSession(
+      run,
+      replacement(identity, "manifest-snapshot-revision", createTestDocument({ identity })),
+    );
+    await finishCompleted(writer.sessions, run, counts({ discovered: 1, updated: 1 }));
+    await writer.close();
+    const snapshot = createSqliteReadSnapshot(paths);
+
+    const readFailure = await snapshot
+      .run(async (database) => {
+        const complete = await createSqliteSessionQuery(database).manifest(
+          createSessionManifestQuery(),
+        );
+        expect(complete.revisions).toHaveLength(1);
+        mutateDatabase(paths.database, (mutable) => {
+          mutable
+            .prepare("UPDATE sessions_schema_migrations SET applied_at = ? WHERE version = 1")
+            .run("2026-07-14T00:00:00.000Z");
+        });
+        return complete;
       })
       .then(
         () => undefined,

@@ -43,6 +43,7 @@ import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
 import { readSessionSummary } from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 import { listSqliteSessionEntries } from "./sqlite-session-entry-query.ts";
+import { readSqliteSessionManifest } from "./sqlite-session-manifest.ts";
 
 const ORIGINS = new Set<ContentOrigin>([
   "human",
@@ -63,6 +64,9 @@ export function createSqliteSessionQuery(database: DatabaseSync): SessionQueryRe
     },
     async list(query) {
       return listSessions(database, query);
+    },
+    async manifest(query) {
+      return readSqliteSessionManifest(database, query);
     },
     async search(query) {
       return searchSessions(database, query);

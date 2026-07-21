@@ -1,14 +1,15 @@
 # Structured output contract
 
 - Status: current schema 1 behavior
-- Last updated: 2026-07-18
+- Last updated: 2026-07-21
 
 This reference owns the machine-readable output of `sessions list`,
-`sessions search`, `sessions entries`, `sessions show`, and `sessions export`. JSON is one bundle.
-JSONL is one compact JSON object per physical line, with one trailing newline per
-record. Embedded newlines are JSON escapes, so they never split a JSONL record.
-For a command result, JSON and JSONL encode the same eligible evidence, selection,
-persisted document digest, and page-level capture scope.
+`sessions search`, `sessions entries`, `sessions manifest`, `sessions show`, and
+`sessions export`. JSON is one bundle. JSONL is one compact JSON object per
+physical line, with one trailing newline per record. Embedded newlines are JSON
+escapes, so they never split a JSONL record. For a command result, JSON and JSONL
+encode the same eligible evidence, selection, persisted document digest, and
+applicable page- or cohort-level capture scope.
 
 Development schemas from before `0.1.0` are unsupported. The `0.0.0` bootstrap
 seed establishes no structured-output contract. Compatibility starts with
@@ -24,15 +25,16 @@ sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
                        [--cursor TOKEN] [--format human|json|jsonl]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
                            [--format human|json|jsonl]
+sessions manifest [session filters except workspace] --format json|jsonl
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
                                [--full | --from-entry N --to-entry N]
 ```
 
-List, search, entries, and show default to `human`. Export requires `--format json` or
-`--format jsonl`; omitting it is invalid usage. `md`, YAML, unsupported formats,
-unknown flags, and invalid option combinations exit `2`.
+List, search, entries, and show default to `human`. Manifest and export require
+`--format json` or `--format jsonl`; omitting it is invalid usage. `md`, YAML,
+unsupported formats, unknown flags, and invalid option combinations exit `2`.
 
 Every structured record has `schemaVersion: 1`, a command, a record type, and
 `disposition: "untrusted-history"`. Transcript text is faithful historical data,
@@ -44,8 +46,9 @@ faithfully retained transcript text.
 These commands read only the Sessions-owned canonical library. They do not
 resolve, probe, or reopen an adapter; contact a provider; follow relation targets;
 import an artifact; write a destination; use the clipboard or another app; or
-infer lineage from equal text or equal digests. Export reads one retained
-snapshot. A retained `missing` or `unknown` source state does not prevent export.
+infer lineage from equal text or equal digests. Manifest and export each read one
+retained snapshot. A retained `missing` or `unknown` source state does not
+prevent either result. Manifest has no cursor and reads no transcript body.
 Export has no cursor, does not auto-expand linked calls/results, and never reads
 a related session body. Show has no `--full`; it always uses bounded selection.
 
@@ -66,12 +69,13 @@ JSONL is independently parseable, but schema 1 does not promise low-memory
 streaming. Canonical show/export reads already materialize one retained document,
 and Sessions validates and encodes the complete result before stdout.
 
-Every JSON/JSONL list, search, entries, show, and default export result has an exact
+Every JSON/JSONL list, search, entries, manifest, show, and default export result has an exact
 16 MiB (`16 * 1024 * 1024` UTF-8 bytes) encoded-output limit. Measurement covers
 the complete serialized JSON or joined JSONL records, including escaping,
 formatting, record newlines, and truncation metadata. A result at the limit
 succeeds. One byte over fails with `structured-output-too-large`, exits `1`,
-writes no stdout, and advises narrowing list/search/entries or using `export --full`.
+writes no stdout, and advises narrowing list/search/entries/manifest or using
+`export --full`.
 Structural strings are never shortened to fit the limit.
 
 `export --full` is the only structured route exempt from this presentation cap.
@@ -80,15 +84,25 @@ provider data. It cannot recover hidden reasoning, omitted media or references,
 related-session bodies, earlier provider revisions, or evidence the adapter did
 not retain.
 
-Format does not enter list/search/entries query fingerprints. The same opaque cursor can
-continue the same query in human, JSON, or JSONL format. An empty list, search, or entries result
-still emits a page record and exits `0`. An absent show or export exits `1`.
+Format does not enter list/search/entries query fingerprints. The same opaque
+cursor can continue the same query in human, JSON, or JSONL format. An empty
+list, search, or entries result still emits a page record and exits `0`; an empty
+manifest emits one manifest envelope and exits `0`. An absent show or export
+exits `1`.
 
 ## Selection and bounds
 
 Selection happens once before human, JSON, or JSONL rendering. Array order and
 JSONL record order are semantic. Object-key order is deterministic but is not
 semantic.
+
+Manifest selection echoes its normalized active source, instance, native-ID,
+source-state, activity/capture/observation time, and canonical-session filter
+values under `filters`. It also fixes `order: "canonical-identity-v1"` and
+`maximumRevisions: 10000`. Workspace is neither accepted nor emitted. A
+successful manifest contains every matching retained canonical revision in
+binary source-kind, source-instance, and native-ID order. It is never paged or
+truncated; more than 10,000 matches fail before output.
 
 Titles use `SelectedTextV1`. A present bounded title is truncated at a
 well-formed Unicode code-point boundary to at most 8 KiB of raw UTF-8 and always
@@ -141,11 +155,12 @@ complete canonical entries or segments. Each primary hit includes the full
 canonical content hash of its matched segment, the exact terms that matched that
 entry, and a query-derived root.
 
-List, search, and entries include a query-derived known retained root or
-`unknown`. Show and export do not. Root attribution does not alter the complete
-document projection or digest.
+List, search, entries, and manifest revisions include a query-derived known
+retained root or `unknown`. Show and export do not. Root attribution does not
+alter the complete document projection or digest.
 
-List, search, and entries also include one page-level `captureScope`. It reports
+List, search, and entries include one page-level `captureScope`; manifest
+includes one cohort-level `captureScope`. It reports
 aggregate evidence availability from registered sources and tracking state, not
 another set of retained matches. Source, instance, native-ID, source-state, and
 canonical-session filters can be applied to tracking evidence. Active canonical
@@ -164,7 +179,7 @@ The following closed types are authoritative. A field marked `?` is omitted when
 absent. No other field may be omitted or serialized as `null`.
 
 ```ts
-type StructuredCommandV1 = "list" | "search" | "entries" | "show" | "export";
+type StructuredCommandV1 = "list" | "search" | "entries" | "manifest" | "show" | "export";
 
 interface StructuredHeaderV1<Command extends StructuredCommandV1, Type extends string> {
   readonly schemaVersion: 1;
@@ -209,6 +224,47 @@ type PublicSessionRootV1 =
 
 interface PublicListSessionV1 extends PublicSessionSummaryV1 {
   readonly root: PublicSessionRootV1;
+}
+
+interface ManifestSelectionV1 {
+  readonly order: "canonical-identity-v1";
+  readonly maximumRevisions: 10000;
+  readonly filters: {
+    readonly source?: string;
+    readonly instance?: string;
+    readonly nativeId?: string;
+    readonly sourceState?: "present" | "missing" | "unknown";
+    readonly activityAfter?: string;
+    readonly activityBefore?: string;
+    readonly capturedAfter?: string;
+    readonly capturedBefore?: string;
+    readonly observedAfter?: string;
+    readonly observedBefore?: string;
+    readonly session?: SessionRefV1;
+  };
+}
+
+interface ManifestCountsV1 {
+  readonly relations: number;
+  readonly entries: number;
+  readonly segments: number;
+  readonly omittedSegments: number;
+  readonly textUtf8Bytes: number;
+}
+
+interface PublicSessionRevisionV1 {
+  readonly session: SessionRefV1;
+  readonly documentDigest: SessionDocumentDigestV1;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly capturedAt: string;
+  readonly sourceObservedAt: string;
+  readonly sourceState: "present" | "missing" | "unknown";
+  readonly freshness: "current" | "stale";
+  readonly adapterVersion: string;
+  readonly lineageCoverage: "complete" | "unknown";
+  readonly root: PublicSessionRootV1;
+  readonly counts: ManifestCountsV1;
 }
 
 interface CountSelectionV1 {
@@ -450,6 +506,13 @@ type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly entries: readonly PublicEntryInventoryV1[];
 };
 
+type ManifestJsonV1 = StructuredHeaderV1<"manifest", "manifest"> & {
+  readonly revisionCount: number;
+  readonly selection: ManifestSelectionV1;
+  readonly captureScope: SessionCaptureScopeV1;
+  readonly revisions: readonly PublicSessionRevisionV1[];
+};
+
 type ShowJsonV1 = StructuredHeaderV1<"show", "snapshot"> & {
   readonly snapshot: PublicSessionSnapshotV1;
   readonly relations: readonly PublicRelationV1[];
@@ -494,6 +557,15 @@ type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
   readonly entry: PublicEntryInventoryV1;
 };
 
+type ManifestJsonlV1 = StructuredHeaderV1<"manifest", "manifest"> & {
+  readonly revisionCount: number;
+  readonly selection: ManifestSelectionV1;
+  readonly captureScope: SessionCaptureScopeV1;
+};
+type ManifestRevisionJsonlV1 = StructuredHeaderV1<"manifest", "revision"> & {
+  readonly revision: PublicSessionRevisionV1;
+};
+
 type SnapshotSessionJsonlV1<Command extends "show" | "export"> = StructuredHeaderV1<
   Command,
   "session"
@@ -521,9 +593,9 @@ type SnapshotEntryJsonlV1<Command extends "show" | "export"> = StructuredHeaderV
 ## Nulls, omissions, counts, and order
 
 `nextCursor`, `firstOrdinal`, and `lastOrdinal` are the only nullable members and
-are always present. Optional title/provider timestamp/tool/preview fields are omitted
-when absent. All other members are required. Counts and byte totals are
-non-negative safe integers.
+are always present. Optional title/provider timestamp/tool/preview fields and
+optional manifest filter values are omitted when absent. All other members are
+required. Counts and byte totals are non-negative safe integers.
 
 Capture-scope counts obey three exact partitions:
 `trackedSessions = retainedSessions.current + retainedSessions.stale +
@@ -536,7 +608,8 @@ coverage, and no stale or unindexed session in the assessed tracking scope.
 `unassessedFilters` are disjoint, use the union's canonical order, and contain no
 filter values.
 
-Roots are required on list sessions, search hits, and entry records. Search
+Roots are required on list sessions, search hits, entry records, and manifest
+revisions. Search
 `matchedTerms` is required, non-empty, unique, in first-query order, and contains
 at most 32 exact query terms.
 
@@ -545,17 +618,27 @@ JSONL order is exactly:
 - list: one `page`, then ordered `session` records;
 - search: one `page`, then ordered `hit` records;
 - entries: one `page`, then ordered `entry` records;
+- manifest: one `manifest` envelope, then ordered `revision` records;
 - show/export: one `session` envelope, then ordered `relation` records, then
   ordered `entry` records.
 
-Empty arrays remain present in JSON. Empty list/search/entries emits one JSONL page. An
-empty show/export snapshot emits one JSONL session envelope. Each JSONL
+Empty arrays remain present in JSON. Empty list/search/entries emits one JSONL
+page; an empty manifest emits one JSONL manifest envelope. An empty show/export
+snapshot emits one JSONL session envelope. Each JSONL
 relation/entry repeats the session reference and document digest, so it remains
 attributable without prior lines. Nested JSON relations/entries inherit the one
 snapshot identity and digest.
 
-Capture scope appears once in a JSON page bundle and once in the JSONL page
-record. It never repeats on a session, hit, or entry record.
+Capture scope appears once in a JSON page/manifest bundle and once in the JSONL
+page/manifest envelope. It never repeats on a session, hit, entry, or revision
+record.
+
+Manifest counts describe the complete canonical document, not a presentation
+window: `relations`, `entries`, and `segments` count canonical occurrences;
+`omittedSegments` counts omitted segment occurrences; and `textUtf8Bytes` counts
+raw UTF-8 bytes for every text occurrence, excluding title. They are stored
+derivatives verified by canonical reads and health, not a fresh transcript scan
+performed by manifest.
 
 `segments.total` and `segmentText.originalUtf8Bytes` cover all canonical
 segments/text in the selected entry window before global segment/text limits.
@@ -604,6 +687,42 @@ The equivalent JSONL result is one independently parseable line:
 {"schemaVersion":1,"command":"list","type":"page","disposition":"untrusted-history","sessionCount":0,"nextCursor":null,"captureScope":{"status":"uninitialized","trackedSessions":0,"retainedSessions":{"current":0,"stale":0},"unindexedSessions":0,"sourceState":{"present":0,"missing":0,"unknown":0},"sourceCoverage":{"complete":0,"unknown":0},"latestFailures":{"unavailable":0,"unreadable":0,"malformed":0,"sourceChanged":0,"unsupportedFormat":0,"repositoryWrite":0},"appliedFilters":[],"unassessedFilters":[]}}
 ```
 
+An empty manifest JSON result still binds its complete selection:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "manifest",
+  "type": "manifest",
+  "disposition": "untrusted-history",
+  "revisionCount": 0,
+  "selection": {
+    "order": "canonical-identity-v1",
+    "maximumRevisions": 10000,
+    "filters": {}
+  },
+  "captureScope": {
+    "status": "uninitialized",
+    "trackedSessions": 0,
+    "retainedSessions": { "current": 0, "stale": 0 },
+    "unindexedSessions": 0,
+    "sourceState": { "present": 0, "missing": 0, "unknown": 0 },
+    "sourceCoverage": { "complete": 0, "unknown": 0 },
+    "latestFailures": {
+      "unavailable": 0,
+      "unreadable": 0,
+      "malformed": 0,
+      "sourceChanged": 0,
+      "unsupportedFormat": 0,
+      "repositoryWrite": 0
+    },
+    "appliedFilters": [],
+    "unassessedFilters": []
+  },
+  "revisions": []
+}
+```
+
 An empty entries JSONL result is also one page:
 
 ```text
@@ -621,6 +740,12 @@ or SQLite values. Workspace, diagnostic/source/input locators, provider
 roots, source metadata, attachment paths, private media references, capture
 internals, and raw omitted payloads are excluded as metadata. Omitted non-text
 content exposes only its admitted class and source-type token.
+
+Manifest additionally excludes title, transcript/excerpts, content hashes, raw
+relations, library identity, writer generation, leases, and source
+fingerprints. Its normalized selection values are intentionally limited to the
+safe non-workspace filter allowlist. The command writes only stdout; durable
+artifact storage is the caller's separately authorized responsibility.
 
 List, search, and entry inventory include only a query-derived known root session
 reference or an explicit unknown value. They do not expose root workspace or

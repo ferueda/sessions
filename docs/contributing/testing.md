@@ -178,6 +178,17 @@ not deterministic regression coverage.
 baseline. It compares control and timed runs from the same generic seeded
 library, requires exact semantic equality, and prints aggregate timings only.
 
+`pnpm measure:manifest` is the deterministic, provider-free manifest baseline.
+It indexes 2,000 generic revisions across three source instances through the
+production SQLite writer, then reads the complete cohort twice through the
+production query repository. The run requires exact repeated equality, binary
+identity order, capture scope, roots, occurrence-based metrics, and a bounded
+encoded result. During both reads a SQLite authorizer denies transcript-table
+access and writes, and a fixed upper bound on select authorization guards the
+set-based query shape from N+1 drift. It constructs no provider adapter, prints
+only aggregate counts and timings, has no timed threshold, and stays outside
+`pnpm check`.
+
 `pnpm measure:indexing:codex -- --allow-provider-read` is the Codex local
 provider-read measurement. It is macOS/Linux-only and fails before provider
 resolution elsewhere. It uses the production Codex adapter, exhausts its full

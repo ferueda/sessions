@@ -134,6 +134,19 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
     assert.equal(freshList.stdout, UNINITIALIZED_LIST_OUTPUT);
     assert.equal(existsSync(dataDirectory), false, "fresh list created Sessions state");
 
+    const freshManifest = await stableProviderCommand(options, fixture.codexHome, environment, [
+      "manifest",
+      "--format",
+      "json",
+    ]);
+    assertCommand(freshManifest, 0, "fresh manifest");
+    const freshManifestReport = parseJson(freshManifest.stdout);
+    assertStructuredHeader(freshManifestReport, "manifest", "manifest");
+    assert.equal(freshManifestReport.revisionCount, 0);
+    assert.deepEqual(freshManifestReport.revisions, []);
+    assert.equal(readObject(freshManifestReport.captureScope).status, "uninitialized");
+    assert.equal(existsSync(dataDirectory), false, "fresh manifest created Sessions state");
+
     const doctor = await stableProviderCommand(options, fixture.codexHome, environment, [
       "doctor",
       "--format",
@@ -339,6 +352,49 @@ export async function runSmokeWorkflow(options: SmokeWorkflowOptions): Promise<v
         nativeId: structuredSession.nativeId,
       },
     });
+
+    const structuredManifest = await stableProviderCommand(
+      options,
+      fixture.codexHome,
+      environment,
+      ["manifest", "--native-id", NATIVE_ID, "--format", "json"],
+    );
+    assertCommand(structuredManifest, 0, "structured manifest");
+    assertNoPrivateFixtureMarkers(structuredManifest.stdout, "structured manifest");
+    assert.doesNotMatch(structuredManifest.stdout, new RegExp(escapePattern(MESSAGE), "u"));
+    assert.doesNotMatch(structuredManifest.stdout, new RegExp(escapePattern(TOOL_MENTION), "u"));
+    const structuredManifestReport = parseJson(structuredManifest.stdout);
+    assertStructuredHeader(structuredManifestReport, "manifest", "manifest");
+    assert.equal(structuredManifestReport.revisionCount, 1);
+    assert.deepEqual(readObject(structuredManifestReport.selection), {
+      order: "canonical-identity-v1",
+      maximumRevisions: 10_000,
+      filters: { nativeId: NATIVE_ID },
+    });
+    assert.equal(readObject(structuredManifestReport.captureScope).status, "complete");
+    const structuredRevision = readObject(readArray(structuredManifestReport, "revisions")[0]);
+    assert.equal(readObject(structuredRevision.session).canonicalId, canonicalId);
+    assert.deepEqual(readObject(structuredRevision.documentDigest), structuredDigest);
+    assert.deepEqual(readObject(structuredRevision.root), structuredRoot);
+    const manifestCounts = readObject(structuredRevision.counts);
+    assert.equal(readNonNegativeSafeInteger(manifestCounts.entries, "manifest entries"), 6);
+    for (const key of ["relations", "segments", "omittedSegments", "textUtf8Bytes"] as const) {
+      readNonNegativeSafeInteger(manifestCounts[key], `manifest ${key}`);
+    }
+
+    const structuredManifestJsonl = await stableProviderCommand(
+      options,
+      fixture.codexHome,
+      environment,
+      ["manifest", "--native-id", NATIVE_ID, "--format", "jsonl"],
+    );
+    assertCommand(structuredManifestJsonl, 0, "structured manifest JSONL");
+    assertNoPrivateFixtureMarkers(structuredManifestJsonl.stdout, "structured manifest JSONL");
+    const manifestRecords = parseJsonLines(structuredManifestJsonl.stdout);
+    assert.equal(manifestRecords.length, 2);
+    assertStructuredHeader(manifestRecords[0]!, "manifest", "manifest");
+    assertStructuredHeader(manifestRecords[1]!, "manifest", "revision");
+    assert.deepEqual(readObject(manifestRecords[1]!.revision), structuredRevision);
 
     const structuredEntries = await stableProviderCommand(options, fixture.codexHome, environment, [
       "entries",
@@ -1251,7 +1307,7 @@ function parseJsonLines(output: string): readonly Record<string, unknown>[] {
 
 function assertStructuredHeader(
   record: Record<string, unknown>,
-  command: "list" | "search" | "entries" | "show" | "export",
+  command: "list" | "search" | "entries" | "manifest" | "show" | "export",
   type: string,
 ): void {
   assert.equal(record.schemaVersion, 1);

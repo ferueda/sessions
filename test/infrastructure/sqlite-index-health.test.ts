@@ -379,6 +379,28 @@ describe("SQLite ready-index health", () => {
     await expectCanonicalIntegrityFailure(paths);
   });
 
+  test("detects a canonical document without stored metrics", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      seedValidEmptyCanonicalSession(database);
+      database.prepare("DELETE FROM sessions_canonical_document_metrics").run();
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test("detects stored metrics that disagree with the canonical document", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      seedValidEmptyCanonicalSession(database);
+      database.prepare("UPDATE sessions_canonical_document_metrics SET entry_count = 1").run();
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
   test.each([
     "coverage_observed_at",
     "presence_observed_at",
@@ -564,6 +586,14 @@ describe("SQLite ready-index health", () => {
            ) VALUES (?, 0, 0, ?, 'human', 'high', '{}')`,
         )
         .run(fixture.sessionId, inserted.content_id);
+      database
+        .prepare(
+          `INSERT INTO sessions_canonical_document_metrics (
+             session_id, relation_count, entry_count, segment_count,
+             omitted_segment_count, text_utf8_bytes
+           ) VALUES (?, 0, 1, 1, 0, ?)`,
+        )
+        .run(fixture.sessionId, Buffer.byteLength("canonical text", "utf8"));
     });
 
     await expectCanonicalIntegrityFailure(paths);
@@ -777,6 +807,14 @@ function attachEmptyCanonical(
        ) VALUES (?, 'unknown', ?, ?)`,
     )
     .run(fixture.sessionId, digest.scheme, stored);
+  database
+    .prepare(
+      `INSERT INTO sessions_canonical_document_metrics (
+         session_id, relation_count, entry_count, segment_count,
+         omitted_segment_count, text_utf8_bytes
+       ) VALUES (?, 0, 0, 0, 0, 0)`,
+    )
+    .run(fixture.sessionId);
 }
 
 function corruptObservationTimestamp(
