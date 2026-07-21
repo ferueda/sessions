@@ -161,7 +161,7 @@ for storage, deletion, and threat boundaries.
 - [Project intent](docs/project-intent.md)
 - [Architecture](docs/architecture-memo.md)
 - [Decisions](docs/decisions/README.md)
-- [Roadmap](dev/plans/260713-v1-implementation-roadmap.md)
+- [Roadmap](docs/architecture-memo.md#post-v1-roadmap)
 - [Contributing](CONTRIBUTING.md)
 
 ## License

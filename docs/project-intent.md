@@ -1,7 +1,7 @@
 # Project intent
 
 - Status: accepted product baseline
-- Last updated: 2026-07-18
+- Last updated: 2026-07-21
 
 ## Purpose
 
@@ -27,7 +27,28 @@ It turns provider-specific histories into one faithful, queryable local library 
 
 ## V1 outcome
 
-V1 supports Cursor and Codex histories with equivalent index, list, search, show, and export behavior. Explicit indexing creates a durable normalized local copy, is incremental, idempotent, and transactional, and preserves the latest successful snapshot when refresh fails or a complete later scan no longer observes the provider session. Human-readable output works interactively, while versioned JSON and JSONL support scripts, agents, and portable historical context. Markdown presentation remains post-V1 work.
+V1 is complete in `0.2.0`. It supports Cursor and Codex histories with equivalent
+index, list, search, show, and export behavior. Explicit indexing creates a
+durable normalized local copy, is incremental, idempotent, and transactional,
+and preserves the latest successful snapshot when refresh fails or a complete
+later scan no longer observes the provider session. Human-readable output works
+interactively, while versioned JSON and JSONL support scripts, agents, and
+portable historical context. Markdown presentation remains post-V1 work.
+
+## Post-V1 direction
+
+Sessions will next make multi-step retained evidence reads coherent and
+verifiable under change: first through atomic, transcript-free revision
+manifests; then through digest-guarded coordinate reads; then through
+provider-neutral related-session traversal and an explicit privacy-safe local
+project-context projection. Sessions remains the local evidence layer that
+records what was retained and where. The Agent Skill and other consumers own
+meaning, causality, outcomes, and recommendations.
+
+Historical revision pinning or archives, canonical schema and coverage
+expansion, and chunked or streamed full export remain evidence-gated. Each must
+show a real need and pass a separate privacy and contract review before entering
+an implementation plan.
 
 ## Non-goals for V1
 

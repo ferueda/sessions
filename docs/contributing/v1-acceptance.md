@@ -1,9 +1,9 @@
 # V1 standalone acceptance
 
-This ledger records M13.1 acceptance for standalone Sessions. It separates
+This ledger records completed standalone Sessions V1 acceptance. It separates
 deterministic regression proof, privacy-safe local dogfood, the frozen legacy
-comparison, and published-package qualification. It does not replace the final
-standalone release and local installation gate in M13.3.
+comparison, published-package qualification, and the final standalone release
+and local installation gate.
 
 ## Outcome matrix
 
@@ -71,16 +71,29 @@ synthetic Cursor/Codex CLI workflow. Release qualification repeats one hashed
 artifact through ordinary global npm install, the installed shim, pinned `npx`,
 and Linux/macOS/Windows jobs.
 
-The published `@ferueda/sessions@0.1.1` artifact was rechecked on 2026-07-20
-against its matching immutable release revision `58bc0ef` (`v0.1.1`). SHA-256
-`82fc9e9fddb8eba75f89f66d2be2c95400811cc8b27d631dc8683701ac6049ac`
-passed the release-package smoke, including the installed CLI workflow and exact
-bundled Agent Skill. Current source has stricter post-release recovery timing
-proof; the final M13 release must qualify those current bytes again rather than
-claiming this branch is already published.
+The protected Release workflow completed on 2026-07-21 for immutable tag
+`v0.2.0` at commit `568c1e7b29f6d3ed825d21d8d64788e5391cbd26`.
+One qualified tarball passed the Linux, macOS, and Windows release smokes before
+publication. Its exact SHA-256 is
+`5a14be5603578d2e3980a6c503e15adaf704b5356760e0363229853a17d7ef28`.
+The public registry reports `0.2.0` as `latest`, SHA-512 integrity
+`sha512-jXUhQJYNDsMQ7dBoPd026bRFg3jM+4iz0jVrrIXgtNmXm54IOoP9Vlk8lZFQlN3bI/OaVTYmD/DqioHt2rWH9A==`,
+a registry signature, and SLSA provenance. A clean registry install and the
+published tarball matched the qualified bytes.
 
-## Remaining V1 gates
+The same day, the ordinary global CLI was upgraded to `0.2.0` and the copied
+Agent Skill was upgraded directly from immutable tag `v0.2.0`. The local skill
+lock records source `ferueda/sessions`, ref `v0.2.0`, and the packaged skill
+path. The release tag, globally installed npm package, and copied local skill
+have exact byte equality across the same ten regular files. Read-only `paths`
+reported a ready schema-1 library and ready Codex and Cursor probes. Full
+`doctor` passed the runtime, SQLite/FTS5, library, and both source checks; on the
+2.6 GB local library its whole-library validation took about eight minutes. Its
+incomplete-evidence summary is an expected capture warning, not a failed health
+check. No indexing ran as part of release acceptance.
 
-- M13.3 must publish and verify the exact final Sessions artifact, upgrade the
-  local CLI and directly installed same-tag Agent Skill, update finished-V1
-  docs, and close the roadmap.
+## V1 closure
+
+There are no remaining V1 gates. `0.2.0` is the supported standalone release,
+and the finished implementation roadmap and M13.3 executor plan remain in Git
+history rather than the active plan directory.
