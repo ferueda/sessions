@@ -1,7 +1,8 @@
 # 0005 — Keep one-way ownership with Harness
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-13
+- Superseded by: [0010 — Install Sessions directly into local agent hosts](0010-install-sessions-directly-into-local-agent-hosts.md)
 
 ## Context
 

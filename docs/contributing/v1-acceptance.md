@@ -3,7 +3,7 @@
 This ledger records M13.1 acceptance for standalone Sessions. It separates
 deterministic regression proof, privacy-safe local dogfood, the frozen legacy
 comparison, and published-package qualification. It does not replace the final
-release and Harness integration gates in M13.2–M13.3.
+standalone release and local installation gate in M13.3.
 
 ## Outcome matrix
 
@@ -22,9 +22,9 @@ level:
 The legacy suite passed at the frozen baseline on 2026-07-20: 21 test files and
 135 tests, including CLI, Cursor, Codex, cache, filters, transcript search,
 show/export, and analysis behavior. Current Harness merge `cbaa5bc9` has already
-removed that implementation and points users to standalone Sessions. A pinned
-Harness entry and rollback route remain M13.2 work; M13.1 does not restore the
-legacy code or cache.
+removed that implementation. It remains historical comparison evidence only;
+the accepted product has no Harness repository wrapper, pin, cache, or rollback
+route.
 
 ## Deterministic provider proof
 
@@ -81,7 +81,6 @@ claiming this branch is already published.
 
 ## Remaining V1 gates
 
-- M13.2 must reconcile the already-removed Harness implementation with the
-  accepted one-way pinned-entry and rollback target.
-- M13.3 must publish and verify the exact final Sessions artifact used by that
-  integration, update finished-V1 docs, and close the roadmap.
+- M13.3 must publish and verify the exact final Sessions artifact, upgrade the
+  local CLI and directly installed same-tag Agent Skill, update finished-V1
+  docs, and close the roadmap.
