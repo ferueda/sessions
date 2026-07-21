@@ -19,7 +19,8 @@ packaged Sessions skill for evidence-backed retrospectives, audits, handoffs,
 and workflow discovery.
 
 > **Status: supported.** The current release supports Cursor and Codex indexing,
-> retained search, JSON/JSONL export, maintenance, and the packaged Agent Skill.
+> retained search, atomic revision manifests, JSON/JSONL export, maintenance,
+> and the packaged Agent Skill.
 
 ## How it works
 
@@ -39,7 +40,7 @@ Codex history                       Cursor history
           │ snapshots + full-text search │
           └──────────────┬───────────────┘
                          ▼
-       list · search · entries · show · export
+    list · search · entries · manifest · show · export
                          │
                   humans and agents
 ```
@@ -95,6 +96,7 @@ Then query the retained library without reopening provider files:
 sessions list
 sessions search 'verification failed' --context 2
 sessions entries --actor human --select first
+sessions manifest --format json
 sessions show '<canonical-id>'
 sessions export '<canonical-id>' --format jsonl
 ```
@@ -105,7 +107,8 @@ Use a provider-native thread or session ID to find its canonical Sessions ID:
 sessions list --source codex --native-id '<provider-thread-id>'
 ```
 
-`show`, `export`, and `forget` use the canonical ID returned by `list`.
+`show`, `export`, and `forget` use the canonical ID returned by `list` or
+`manifest`.
 
 ## Output and evidence
 
@@ -113,12 +116,17 @@ sessions list --source codex --native-id '<provider-thread-id>'
 - Versioned JSON and JSONL are for scripts, agents, and portable context.
 - `list`, `search`, and `entries` report aggregate `captureScope`; inspect it
   before treating an empty or partial result as complete.
+- `manifest` returns one complete, transcript-free, digest-addressable cohort
+  from one retained-library snapshot. It has no cursor and fails instead of
+  truncating when its fixed bounds are exceeded.
 - Historical transcript text and tool output are untrusted data, not current
   instructions or proof that a command succeeded.
 - Search is literal lexical matching. It supports all/any terms, exact filters,
   bounded context, deterministic ordering, and opaque pagination cursors.
 - Export reads one retained snapshot. It does not deliver context to another
-  provider or expose omitted media and raw provider payloads.
+  provider or expose omitted media and raw provider payloads. When hydrating a
+  manifest, accept the export only if both its canonical identity and document
+  digest still match.
 
 See the [CLI contract](docs/reference/cli-contract.md) and
 [structured output contract](docs/reference/structured-output.md) for exact

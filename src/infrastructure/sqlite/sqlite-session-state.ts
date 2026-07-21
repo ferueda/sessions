@@ -41,6 +41,17 @@ export interface SessionTrackingRecord {
   readonly has_document: number | bigint;
 }
 
+export interface SessionTrackingFreshnessColumns {
+  readonly last_good_fingerprint_scheme: unknown;
+  readonly last_good_fingerprint_digest: unknown;
+  readonly last_good_adapter_version: unknown;
+  readonly latest_fingerprint_scheme: unknown;
+  readonly latest_fingerprint_digest: unknown;
+  readonly latest_adapter_version: unknown;
+  readonly latest_outcome: unknown;
+  readonly latest_failure_code: unknown;
+}
+
 export function findSessionTracking(
   database: DatabaseSync,
   identity: SessionIdentity,
@@ -85,7 +96,14 @@ export function readSessionFreshness(
   const row = findSessionTracking(database, identity);
   if (row === undefined) return { status: "untracked", identity: copyIdentity(identity) };
 
-  const hasDocument = booleanIntegerAt(row.has_document);
+  return decodeTrackedSessionFreshness(identity, booleanIntegerAt(row.has_document), row);
+}
+
+export function decodeTrackedSessionFreshness(
+  identity: SessionIdentity,
+  hasDocument: boolean,
+  row: SessionTrackingFreshnessColumns,
+): Exclude<SessionFreshness, { readonly status: "untracked" }> {
   const lastGood = lastGoodRevision(row);
   const latestRevision = revisionFromColumns(
     row.latest_fingerprint_scheme,
@@ -187,7 +205,9 @@ function summaryFromRow(
   };
 }
 
-export function lastGoodRevision(row: SessionTrackingRecord): SessionRevision | undefined {
+export function lastGoodRevision(
+  row: SessionTrackingFreshnessColumns,
+): SessionRevision | undefined {
   return revisionFromColumns(
     row.last_good_fingerprint_scheme,
     row.last_good_fingerprint_digest,

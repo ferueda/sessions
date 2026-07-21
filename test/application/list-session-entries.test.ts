@@ -142,6 +142,7 @@ function lifecycleWith(page: SessionEntryPage, state: "ready" | "uninitialized" 
       sessions: [],
       captureScope: emptyCompleteCaptureScope,
     })),
+    manifest: vi.fn<SessionQueryRepository["manifest"]>(),
     search: vi.fn<SessionQueryRepository["search"]>(async () => ({
       hits: [],
       support: {

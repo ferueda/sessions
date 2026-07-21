@@ -1,6 +1,6 @@
 # Current architecture
 
-Status: M11c Cursor rich-store and JSONL fallback capture is complete over the
+Status: the post-V1 revision-manifest milestone is complete over the
 provider-neutral library, query, export, and maintenance contracts.
 
 This map describes code that exists now. The
@@ -29,15 +29,16 @@ index
   -> src/infrastructure/sqlite/sqlite-session-index.ts
   -> optional aggregate timing at existing application/port boundaries
 
-list / search / entries / show / export
-  -> src/application/{list-sessions,search-sessions,list-session-entries,show-session,export-session}.ts
+list / search / entries / manifest / show / export
+  -> src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session,export-session}.ts
   -> shared application selection and truncation
   -> immutable library reader (no adapter)
   -> src/infrastructure/sqlite/sqlite-session-query.ts (list/search/entries)
   -> src/infrastructure/sqlite/sqlite-session-entry-query.ts (entries only)
-  -> one same-snapshot capture scope on list/search/entries pages
+  -> src/infrastructure/sqlite/sqlite-session-manifest.ts (manifest only)
+  -> one same-snapshot capture scope on list/search/entries pages and manifest
 
-structured query/export output
+structured query/manifest/export output
   -> src/cli/structured-output.ts
   -> src/cli/{encode-json-output,encode-jsonl-output,structured-output-encoding}.ts
   -> JSON bundle or independently attributable JSONL records
@@ -49,44 +50,45 @@ forget / data repair-orphans / data compact / data clear
 ```
 
 The composition root is the only production module that imports both a concrete
-adapter and infrastructure. It resolves Cursor and Codex lazily: help, version, list,
-search, entries, show, export, forget, data repair-orphans, data compact, and data clear
-do not resolve provider configuration.
+adapter and infrastructure. It resolves Cursor and Codex lazily: help, version,
+list, search, entries, manifest, show, export, forget, data repair-orphans, data
+compact, and data clear do not resolve provider configuration.
 Index, paths, and doctor resolve registered sources. Implicit indexing skips
 only valid unavailable sources; explicit selection and all other probe failures
 remain strict.
 
 ## Ownership
 
-| Path                                                                                   | Owner                                                                                               |
-| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `src/domain/`                                                                          | Canonical values, public projection/JCS digest, identity, provenance, capture scope, and validation |
-| `src/application/ports/`                                                               | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts                    |
-| `src/application/source-*.ts`                                                          | Complete input fingerprints and typed source failures                                               |
-| `src/application/validate-session.ts`                                                  | Immutable adapter-read admission                                                                    |
-| `src/application/discover-sessions.ts`                                                 | Complete discovery admission, duplicate policy, and deterministic ordering                          |
-| `src/application/run-index.ts`                                                         | Provider-neutral incremental capture and source-presence reconciliation                             |
-| `src/application/index-timing.ts`                                                      | Optional best-effort measurement around existing indexing operations                                |
-| `src/application/{list-sessions,search-sessions,list-session-entries,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                                   |
-| `src/application/export-session.ts`                                                    | Provider-free one-snapshot export and bounded/full selection                                        |
-| `src/application/session-presentation.ts`                                              | Shared title, relation, entry, segment, and UTF-8 text selection                                    |
-| `src/application/session-root-presentation.ts`                                         | Query-derived known/unknown root copying                                                            |
-| `src/application/*report.ts`                                                           | Versioned provider-neutral operational reports                                                      |
-| `src/adapters/cursor/`                                                                 | Cursor path/store discovery and canonical normalization                                             |
-| `src/adapters/codex/`                                                                  | Codex path/state/rollout discovery and canonical normalization                                      |
-| `src/infrastructure/state/`                                                            | Application-data paths, state inspection, and leased ephemeral capture workspace                    |
-| `src/infrastructure/sqlite/`                                                           | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance     |
-| `src/infrastructure/runtime/index-timings.ts`                                          | In-memory allowlisted indexing timing aggregation                                                   |
-| `src/cli/structured-output.ts`                                                         | Closed schema-1 DTO construction, recursive validation, and freezing                                |
-| `src/cli/*structured*`, `encode-*-output.ts`                                           | JSON/JSONL encoding and aggregate output admission                                                  |
-| `src/cli/`                                                                             | Command grammar, terminal-safe rendering, streams, and exit behavior                                |
-| `src/bin/`                                                                             | Sole concrete composition root                                                                      |
-| `skills/sessions/`                                                                     | Model-invoked routing plus evidence-first analysis playbooks over the public CLI                    |
-| `scripts/`                                                                             | Build and delivery smoke helpers; not published runtime                                             |
-| `test/`                                                                                | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence              |
+| Path                                                                                                           | Owner                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/domain/`                                                                                                  | Canonical values, public projection/JCS digest, document metrics, manifest/query values, identity, provenance, capture scope, and validation |
+| `src/application/ports/`                                                                                       | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts                                                             |
+| `src/application/source-*.ts`                                                                                  | Complete input fingerprints and typed source failures                                                                                        |
+| `src/application/validate-session.ts`                                                                          | Immutable adapter-read admission                                                                                                             |
+| `src/application/discover-sessions.ts`                                                                         | Complete discovery admission, duplicate policy, and deterministic ordering                                                                   |
+| `src/application/run-index.ts`                                                                                 | Provider-neutral incremental capture and source-presence reconciliation                                                                      |
+| `src/application/index-timing.ts`                                                                              | Optional best-effort measurement around existing indexing operations                                                                         |
+| `src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                                                                            |
+| `src/application/export-session.ts`                                                                            | Provider-free one-snapshot export and bounded/full selection                                                                                 |
+| `src/application/session-presentation.ts`                                                                      | Shared title, relation, entry, segment, and UTF-8 text selection                                                                             |
+| `src/application/session-root-presentation.ts`                                                                 | Query-derived known/unknown root copying                                                                                                     |
+| `src/application/*report.ts`                                                                                   | Versioned provider-neutral operational reports                                                                                               |
+| `src/adapters/cursor/`                                                                                         | Cursor path/store discovery and canonical normalization                                                                                      |
+| `src/adapters/codex/`                                                                                          | Codex path/state/rollout discovery and canonical normalization                                                                               |
+| `src/infrastructure/state/`                                                                                    | Application-data paths, state inspection, and leased ephemeral capture workspace                                                             |
+| `src/infrastructure/sqlite/`                                                                                   | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance                                              |
+| `src/infrastructure/runtime/index-timings.ts`                                                                  | In-memory allowlisted indexing timing aggregation                                                                                            |
+| `src/cli/structured-output.ts`                                                                                 | Closed schema-1 DTO construction, recursive validation, and freezing                                                                         |
+| `src/cli/*structured*`, `encode-*-output.ts`                                                                   | JSON/JSONL encoding and aggregate output admission                                                                                           |
+| `src/cli/`                                                                                                     | Command grammar, terminal-safe rendering, streams, and exit behavior                                                                         |
+| `src/bin/`                                                                                                     | Sole concrete composition root                                                                                                               |
+| `skills/sessions/`                                                                                             | Model-invoked routing plus evidence-first analysis playbooks over the public CLI                                                             |
+| `scripts/`                                                                                                     | Build and delivery smoke helpers; not published runtime                                                                                      |
+| `test/`                                                                                                        | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence                                                       |
 
-Portable JSON/JSONL export and transcript-bearing JSON/JSONL list/search/entries/show
-exist. Agent-efficient corpus selection works across retained Cursor and Codex
+Portable JSON/JSONL export, transcript-free JSON/JSONL manifest, and
+transcript-bearing JSON/JSONL list/search/entries/show exist. Agent-efficient
+corpus selection works across retained Cursor and Codex
 sessions; the packaged Agent Skill routes seven analysis playbooks over that
 surface. A public adapter ABI does not exist yet. M7 owns one closed public
 document projection, its deterministic digest, retained
@@ -253,14 +255,16 @@ derived FTS from healthy canonical content.
 
 Immutable readers expose separate `sessions` reconstruction and provider-neutral
 `query` ports. List/search/entries use one SQLite snapshot for complete pages,
-capture scope, context, and support; show/export reconstruct the exact canonical
-document. Retained summaries
+capture scope, context, and support; manifest uses one snapshot for its complete
+bounded cohort, capture scope, stored metrics, and whole-library root
+resolution; show/export reconstruct the exact canonical document. Retained summaries
 include successful capture time, effective source-observation time, last-good
 adapter version, and the stored document digest. Show/export read summary and body
 from one immutable snapshot and requires their stored digests to agree. Full
 document reads reconstruct the closed public projection and verify the persisted
-digest; a mismatch is canonical corruption, not FTS damage. List/search read the
-stored digest directly and do not reconstruct every document. None resolve or
+digest plus stored document metrics; a mismatch is canonical corruption, not
+FTS damage. List/search/manifest read the stored digest directly and do not
+reconstruct every document. None resolve or
 reopen a provider, so retained content remains usable after provider disappearance.
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content. Doctor
@@ -271,7 +275,10 @@ rows in bounded keyset batches, then compares exact terms, positions, and
 docsize. Incomplete capture evidence produces an `ok: true` warning; failed
 health remains a failure. Direct out-of-band SQLite edits are unsupported; the
 clean fast open does not replace doctor as the explicit immutable full-library
-check.
+check. Index schema 2 adds one strict, foreign-keyed metrics row per canonical
+session. Replacement writes it atomically with the document; migration backfills
+schema-1 libraries; health requires exact one-to-one coverage and semantic
+equality.
 
 The public document projection is a field-by-field allowlist. It includes title,
 provider timestamps, lineage coverage and ordered relations, ordered entries,
@@ -287,12 +294,15 @@ authenticity result, or a safety signal.
 
 `src/domain/session-query.ts` owns validated immutable filters, term mode,
 activity bounds, limits, context, cursors, pages, hits, matched terms, roots, and
-support values. `src/domain/session-capture-scope.ts` owns the immutable
+support values. `src/domain/session-manifest.ts` owns the workspace-free filter,
+fixed order and 10,000-revision complete-result bound, selection, revisions, and
+counts. `src/domain/session-document-metrics.ts` derives occurrence-based
+canonical counts and logical transcript UTF-8 bytes. `src/domain/session-capture-scope.ts` owns the immutable
 aggregate, filter-name assessment, partitions, and status invariants.
 `src/domain/session-lineage.ts` owns the
 iterative provider-neutral root policy. `src/application/ports/session-query.ts`
-defines the minimal list/search/entries repository; services own defaults and
-fresh-library behavior.
+defines the minimal list/search/entries/manifest repository; services own
+defaults and fresh-library behavior.
 
 SQLite owns literal all/any FTS translation, parameterized filter SQL,
 deterministic rank/order, activity filtering over `updatedAt` with `createdAt`
@@ -311,12 +321,15 @@ attribution. Support remains exact and query-wide rather than being inferred fro
 not import adapters. Adapters supply only source-supported lineage and observed
 tool evidence; they cannot decide roots, counts, filters, ranking, or presentation.
 
-Capture scope is page-level evidence availability, not another search-support
-unit. It does not classify tracking-only rows against unassessed filters and
-never manufactures a retained match. Root attribution is query output only. It
-may point outside current filters and
-does not enter canonical documents, digests, show, or export. M8 changes no
-provider adapter, canonical schema, or storage index.
+Capture scope is page- or manifest-cohort-level evidence availability, not
+another search-support unit. It does not classify tracking-only rows against
+unassessed filters and never manufactures a retained match. Root attribution is
+query output only. It may point outside current filters and does not enter
+canonical documents, digests, show, or export. Manifest changes no provider
+adapter, canonical document projection, or FTS index. It selects
+and bounds canonical identities before left-joining metrics, so a missing
+derivative fails instead of silently omitting a retained revision. It orders by
+binary canonical identity and never uses cursors or per-session hydration.
 
 The application layer performs title/transcript selection once, before choosing
 a human or machine renderer. Show keeps its existing focus/default behavior, and
@@ -325,10 +338,12 @@ or out-of-document ranges are never clamped. Every bounded selection then uses
 the same relation/segment/text limits. The full canonical document is still read
 and verified first, and its digest identifies ranged output. Export full mode
 removes presentation selection only; it does not broaden the public projection. The CLI
-maps these safe values field by field into closed schema-1 DTOs, recursively
+maps these safe values and transcript-free manifest revisions field by field
+into closed schema-1 DTOs, recursively
 validates them, encodes the whole result, and applies the exact 16 MiB bound
 before stdout. JSONL is independently attributable but is not a direct SQLite
-stream. Format never enters list/search/entries query fingerprints.
+stream. Format never enters list/search/entries query fingerprints; manifest has
+no format-neutral continuation state because it never pages.
 
 ## Build
 

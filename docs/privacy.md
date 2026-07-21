@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: current supported behavior
-- Last updated: 2026-07-18
+- Last updated: 2026-07-21
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -13,13 +13,13 @@ not a best-effort feature.
   network requests, telemetry, or uploads.
 - A successful index stores an independent durable normalized copy of the latest
   successfully captured session in Sessions-owned application data. It also
-  stores a digest of the closed public document projection in the same
-  transaction.
+  stores a digest of the closed public document projection and exact derived
+  document metrics in the same transaction.
 - A complete later scan can mark a retained session `missing`; unavailable,
   unreadable, malformed, changing, or incomplete discovery proves no absence.
   Neither case automatically deletes retained content.
-- List, search, entries, show, and export use only the Sessions library after indexing.
-  They never reopen a provider transcript.
+- List, search, entries, manifest, show, and export use only the Sessions library
+  after indexing. They never reopen a provider transcript.
 - No TTL or automatic pruning exists. Only explicit `sessions forget`,
   `sessions data repair-orphans`, or `sessions data clear --yes` removes
   canonical content.
@@ -39,9 +39,10 @@ not a best-effort feature.
   operations. Complete committed replacements remain in the local library;
   partial discovery leaves coverage unknown and never infers missing sessions.
 
-Portable JSON/JSONL export and transcript-bearing JSON/JSONL
-list/search/entries/show are current. Library import/restore and automatic
-analysis are not current commands; Markdown presentation is deferred beyond V1.
+Portable JSON/JSONL export, transcript-free JSON/JSONL manifests, and
+transcript-bearing JSON/JSONL list/search/entries/show are current. Library
+import/restore and automatic analysis are not current commands; Markdown
+presentation is deferred beyond V1.
 
 Installing or upgrading the public CLI uses npm. Installing the release-matched
 Agent Skill also contacts npm and GitHub through the external `skills` installer;
@@ -168,6 +169,15 @@ source type, and provenance. Sessions does not separately open or fetch referenc
 media and does not persist media bytes, data URLs, remote URLs, local attachment
 paths, or serialized opaque objects in omission records.
 
+Index schema 2 stores one exact derivative row per canonical document with
+relation, entry, segment, omitted-segment, and logical transcript UTF-8 byte
+totals. Logical bytes count each retained text-segment occurrence and exclude
+title text. Existing schema-1 libraries compute the same values once during an
+explicit writer-open migration. Complete document reads and health inspection
+verify the derivative against canonical content; a missing or inconsistent row
+is corruption. Manifest reads the stored derivative without reopening or
+reconstructing transcript text.
+
 The implemented public document projection is a field-by-field allowlist. It
 includes title, provider timestamps, lineage coverage/relations, safe ordered
 entry and tool-linkage evidence, exact text/content hashes, segment provenance,
@@ -187,7 +197,7 @@ Retained query attribution now requires successful capture time, effective
 source-observation time, last-good adapter version, source state/freshness, and
 the stored digest. Show reads attribution and the document under one immutable
 library snapshot and verifies the digest before returning canonical content.
-List/search read the stored digest directly and do not reopen providers.
+List/search/entries/manifest read the stored digest directly and do not reopen providers.
 Activity bounds use retained `updatedAt`, falling back to retained `createdAt`;
 they add no provider read or stored field.
 
@@ -201,11 +211,22 @@ syntax control, but they are not redaction. Transcript/title text itself remains
 faithful evidence and is not secret- or path-redacted. Review it before copying
 it elsewhere.
 
+Manifest output is a separate transcript-free allowlist. It includes normalized
+non-workspace selection values, capture scope, canonical identity and document
+digest, retained timestamps/state/freshness/adapter version, known/unknown root,
+lineage coverage, and the exact stored document metrics. It excludes title,
+workspace, transcript/excerpts, content hashes, relation graphs, locators,
+source metadata, provider paths, attachment references, library identity, writer
+generation, leases, and fingerprints. A manifest is not a lease or archive. A
+later show/export must match both canonical identity and document digest or the
+consumer must retry or re-key the work.
+
 Every transcript-bearing JSON/JSONL record is labeled
 `disposition: "untrusted-history"`. This label and JSON escaping do not make
-prompt-like instructions or tool output safe to execute. List, search, entries, show, and
-default export apply bounded raw-text selection and an exact 16 MiB encoded-output
-cap before stdout. Over-cap output fails without a partial stream. Explicit
+prompt-like instructions or tool output safe to execute. List, search, entries,
+manifest, show, and default export apply an exact 16 MiB encoded-output cap
+before stdout; transcript-bearing commands also apply their documented raw-text
+selection. Over-cap output fails without a partial stream. Explicit
 `export --full` removes only those presentation limits for export-eligible fields
 in one retained snapshot. It does not expose raw provider payloads, media bytes or
 references, hidden reasoning, or evidence the adapter did not observe.
@@ -225,6 +246,11 @@ Opaque list/search/entries cursors contain query-binding, library-instance, gene
 and offset data rather than transcript text. They are continuation tokens, not
 secrets or durable capabilities, and become stale after a later admitted writer
 or library recreation.
+
+Manifest has no cursor or pagination and never exposes those private cursor
+components. A successful result is the complete matching canonical cohort from
+one immutable read, up to the documented 10,000-revision and 16 MiB bounds. A
+larger result fails before stdout and requires narrower safe filters.
 
 ## Explicit deletion
 

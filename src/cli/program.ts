@@ -21,6 +21,10 @@ import { MAX_LIST_LIMIT } from "../application/list-sessions.ts";
 import { MAX_SEARCH_CONTEXT, MAX_SEARCH_LIMIT } from "../application/search-sessions.ts";
 import { MAX_SHOW_CONTEXT } from "../application/show-session.ts";
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
+import type {
+  SessionManifestFilterInput,
+  SessionManifestResult,
+} from "../domain/session-manifest.ts";
 import { parseSessionIdentity } from "../domain/session-identity.ts";
 import { canonicalizeSessionSearchText } from "../domain/session-query.ts";
 import type {
@@ -39,6 +43,8 @@ import {
   buildListJsonlV1,
   buildEntriesJsonV1,
   buildEntriesJsonlV1,
+  buildManifestJsonV1,
+  buildManifestJsonlV1,
   buildSearchJsonV1,
   buildSearchJsonlV1,
   buildSnapshotJsonV1,
@@ -82,6 +88,9 @@ export interface ProgramOptions {
     readonly limit?: number;
     readonly cursor?: string;
   }) => Promise<ListSessionsResult>;
+  readonly manifest: (input: {
+    readonly filter?: SessionManifestFilterInput;
+  }) => Promise<SessionManifestResult>;
   readonly entries: (input: {
     readonly filter?: SessionEntryFilterInput;
     readonly selection?: SessionEntrySelection;
@@ -130,7 +139,7 @@ const retainedQueryFormatOption = () =>
     .choices(["human", "json", "jsonl"])
     .default("human");
 
-const exportFormatOption = () =>
+const machineFormatOption = () =>
   new Option("--format <format>", "output format").choices(["json", "jsonl"]).makeOptionMandatory();
 
 const writeLongOperationNotice = (output: CliOutput, message: string): void => {
@@ -247,6 +256,17 @@ export function createProgram(options: ProgramOptions): Command {
       options.output.writeOut(renderListOutput(result, values.format));
     });
 
+  const manifest = program
+    .command("manifest")
+    .description("Inventory retained session revisions from one library snapshot");
+  addManifestFilterOptions(manifest)
+    .addOption(machineFormatOption())
+    .action(async (values: ManifestOptionValues) => {
+      const filter = manifestFilter(values);
+      const result = await options.manifest(filter === undefined ? {} : { filter });
+      options.output.writeOut(renderManifestOutput(result, values.format));
+    });
+
   const search = program.command("search <text>").description("Search retained session evidence");
   addEntryFilterOptions(addSessionFilterOptions(search).addOption(retainedQueryFormatOption()))
     .addOption(
@@ -339,7 +359,7 @@ export function createProgram(options: ProgramOptions): Command {
   const exportCommand = program
     .command("export <canonical-id>")
     .description("Export one retained session as portable structured context")
-    .addOption(exportFormatOption())
+    .addOption(machineFormatOption())
     .option("--full", "include every export-eligible field without presentation bounds");
   addEntryRangeOptions(exportCommand).action(
     async (canonicalId: string, values: ExportOptionValues) => {
@@ -439,6 +459,10 @@ interface ListOptionValues extends SessionOptionValues {
   readonly cursor?: string;
 }
 
+interface ManifestOptionValues extends Omit<SessionOptionValues, "workspace"> {
+  readonly format: ExportOutputFormat;
+}
+
 interface SearchOptionValues extends SessionOptionValues {
   readonly format: RetainedQueryOutputFormat;
   readonly match: SessionSearchTermMode;
@@ -527,6 +551,12 @@ function renderEntriesOutput(
   }
 }
 
+function renderManifestOutput(result: SessionManifestResult, format: ExportOutputFormat): string {
+  return format === "json"
+    ? encodeStructuredJson(buildManifestJsonV1(result))
+    : encodeStructuredJsonl(buildManifestJsonlV1(result));
+}
+
 function renderSnapshotOutput(
   command: "show" | "export",
   result: ShowSessionResult | ExportSessionResult,
@@ -556,14 +586,25 @@ function renderSnapshotOutput(
 }
 
 function addSessionFilterOptions(command: Command): Command {
-  return command
+  return addSessionFilterOptionsInternal(command, true);
+}
+
+function addManifestFilterOptions(command: Command): Command {
+  return addSessionFilterOptionsInternal(command, false);
+}
+
+function addSessionFilterOptionsInternal(command: Command, includeWorkspace: boolean): Command {
+  let configured = command
     .option("--source <source>", "exact source kind", parseSource)
     .option("--instance <instance>", "exact source instance", parseNonEmptyValue)
     .option("--native-id <native-id>", "exact provider-native session ID", parseNonEmptyValue)
     .addOption(
       new Option("--source-state <state>", "effective source state").choices(SOURCE_STATES),
-    )
-    .option("--workspace <workspace>", "exact retained workspace")
+    );
+  if (includeWorkspace) {
+    configured = configured.option("--workspace <workspace>", "exact retained workspace");
+  }
+  return configured
     .option(
       "--captured-after <timestamp>",
       "exclude captures at or before this time",
@@ -595,6 +636,24 @@ function addSessionFilterOptions(command: Command): Command {
       parseTimestamp,
     )
     .option("--session <canonical-id>", "exact canonical session", parseIdentity);
+}
+
+function manifestFilter(values: ManifestOptionValues): SessionManifestFilterInput | undefined {
+  validateSessionFilterValues(values);
+  const filter: SessionManifestFilterInput = {
+    ...(values.source === undefined ? {} : { source: values.source }),
+    ...(values.instance === undefined ? {} : { instance: values.instance }),
+    ...(values.nativeId === undefined ? {} : { nativeId: values.nativeId }),
+    ...(values.sourceState === undefined ? {} : { sourceState: values.sourceState }),
+    ...(values.capturedAfter === undefined ? {} : { capturedAfter: values.capturedAfter }),
+    ...(values.capturedBefore === undefined ? {} : { capturedBefore: values.capturedBefore }),
+    ...(values.observedAfter === undefined ? {} : { observedAfter: values.observedAfter }),
+    ...(values.observedBefore === undefined ? {} : { observedBefore: values.observedBefore }),
+    ...(values.activityAfter === undefined ? {} : { activityAfter: values.activityAfter }),
+    ...(values.activityBefore === undefined ? {} : { activityBefore: values.activityBefore }),
+    ...(values.session === undefined ? {} : { session: values.session }),
+  };
+  return Object.keys(filter).length === 0 ? undefined : filter;
 }
 
 function addEntryFilterOptions(command: Command): Command {
@@ -639,12 +698,7 @@ function entryRangeInput(
 }
 
 function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefined {
-  if (values.instance !== undefined && values.source === undefined) {
-    usage("--instance requires --source");
-  }
-  validateBounds(values.capturedAfter, values.capturedBefore, "capture");
-  validateBounds(values.observedAfter, values.observedBefore, "observation");
-  validateBounds(values.activityAfter, values.activityBefore, "activity");
+  validateSessionFilterValues(values);
   const filter: SessionFilterInput = {
     ...(values.source === undefined ? {} : { source: values.source }),
     ...(values.instance === undefined ? {} : { instance: values.instance }),
@@ -660,6 +714,15 @@ function sessionFilter(values: SessionOptionValues): SessionFilterInput | undefi
     ...(values.session === undefined ? {} : { session: values.session }),
   };
   return Object.keys(filter).length === 0 ? undefined : filter;
+}
+
+function validateSessionFilterValues(values: Omit<SessionOptionValues, "workspace">): void {
+  if (values.instance !== undefined && values.source === undefined) {
+    usage("--instance requires --source");
+  }
+  validateBounds(values.capturedAfter, values.capturedBefore, "capture");
+  validateBounds(values.observedAfter, values.observedBefore, "observation");
+  validateBounds(values.activityAfter, values.activityBefore, "activity");
 }
 
 function searchFilter(values: SearchOptionValues): SessionSearchFilterInput | undefined {

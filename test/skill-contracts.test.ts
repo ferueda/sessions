@@ -72,11 +72,21 @@ describe("Sessions Agent Skill contracts", () => {
       "utf8",
     );
     expect(protocol).toMatch(/sessions doctor --format json/u);
-    expect(protocol).toMatch(/provider-free[\s\S]*source check fails[\s\S]*Continue/u);
+    expect(protocol).toMatch(/provider-free[\s\S]*source check\s+fails[\s\S]*Continue/u);
     expect(protocol).toMatch(
       /explicitly authorizes indexing[\s\S]*reading provider history[\s\S]*writing a durable Sessions-owned copy/u,
     );
     expect(protocol).toMatch(/request for analysis does not authorize indexing/u);
+    expect(protocol).toMatch(
+      /fixed multi-session cohort[\s\S]*sessions manifest --format json\|jsonl[\s\S]*do not use manifest merely to broaden/u,
+    );
+    expect(protocol).toMatch(
+      /active analysis context or evidence\s+ledger by default[\s\S]*durable local manifest artifact only when the user\s+explicitly requests one/u,
+    );
+    expect(protocol).toMatch(
+      /both the canonical identity and complete document digest match[\s\S]*retry the manifest or re-key/u,
+    );
+    expect(protocol).toMatch(/manifest is not a lease or historical pin/u);
     expect(protocol).toMatch(/Do not omit the evidence ledger or\s+limits/u);
     expect(protocol).toMatch(/\*\*Done when:\*\*/u);
 
@@ -177,6 +187,7 @@ function shippedCliSurface(): ReadonlyMap<string, ReadonlySet<string>> {
     indexSources: ["codex"],
     index: unavailable,
     list: unavailable,
+    manifest: unavailable,
     entries: unavailable,
     search: unavailable,
     show: unavailable,

@@ -7,6 +7,8 @@ import {
 } from "../../src/application/session-query-error.ts";
 import { DEFAULT_SEARCH_LIMIT } from "../../src/application/search-sessions.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
+import { createSessionDocumentMetrics } from "../../src/domain/session-document-metrics.ts";
+import { createSessionManifestQuery } from "../../src/domain/session-manifest.ts";
 import {
   createSessionEntryQuery,
   createSessionListQuery,
@@ -21,6 +23,10 @@ import {
 
 export interface SessionQueryContractFixture {
   readonly query: SessionQueryRepository;
+  /** A separate generated 201-session library for the non-paged manifest proof. */
+  readonly largeManifestQuery: SessionQueryRepository;
+  markManifestStale(identity: SessionIdentity): void;
+  removeManifestMetrics(identity: SessionIdentity): void;
   /** Same corpus in a newly initialized library, for library-bound cursor checks. */
   recreateQuery(): Promise<SessionQueryRepository>;
   close(): Promise<void>;
@@ -29,6 +35,217 @@ export interface SessionQueryContractFixture {
 export function runSessionQueryContract(
   createFixture: () => Promise<SessionQueryContractFixture> | SessionQueryContractFixture,
 ): void {
+  test("returns one coherent transcript-free manifest with exact metrics and lineage", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    const document = corpus.inventory.continuation;
+    try {
+      const result = await fixture.query.manifest(
+        createSessionManifestQuery({
+          filter: {
+            source: document.identity.source.kind,
+            instance: document.identity.source.instanceId,
+            nativeId: document.identity.nativeId,
+            sourceState: "present",
+            session: document.identity,
+          },
+        }),
+      );
+
+      expect(result.selection).toEqual({
+        order: "canonical-identity-v1",
+        maximumRevisions: 10_000,
+        filters: {
+          source: document.identity.source.kind,
+          instance: document.identity.source.instanceId,
+          nativeId: document.identity.nativeId,
+          sourceState: "present",
+          session: document.identity,
+        },
+      });
+      expect(result.captureScope).toMatchObject({
+        trackedSessions: 1,
+        retainedSessions: { current: 1, stale: 0 },
+        sourceState: { present: 1, missing: 0, unknown: 0 },
+        appliedFilters: ["source", "instance", "nativeId", "sourceState", "session"],
+        unassessedFilters: [],
+      });
+      expect(result.revisions).toHaveLength(1);
+      expect(result.revisions[0]).toMatchObject({
+        session: document.identity,
+        documentDigest: {
+          scheme: "sha256-sessions-document-jcs-v1",
+          digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+        sourceState: "present",
+        freshness: "current",
+        adapterVersion: "synthetic-v1",
+        lineageCoverage: document.lineageCoverage,
+        root: { kind: "known", root: corpus.inventory.root.identity },
+        counts: manifestCounts(document),
+      });
+      expect(result.revisions[0]).not.toHaveProperty("title");
+      expect(result.revisions[0]).not.toHaveProperty("workspace");
+      expect(result.revisions[0]).not.toHaveProperty("entries");
+      expect(Object.isFrozen(result.revisions[0]?.counts)).toBe(true);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("applies exact activity, capture, observation, state, and identity filters", async () => {
+    const fixture = await createFixture();
+    const target = sessionQueryContractCorpus().present;
+    try {
+      const result = await fixture.query.manifest(
+        createSessionManifestQuery({
+          filter: {
+            source: target.identity.source.kind,
+            instance: target.identity.source.instanceId,
+            nativeId: target.identity.nativeId,
+            sourceState: "present",
+            activityAfter: "2026-07-14T09:29:59.999Z",
+            activityBefore: "2026-07-14T09:30:00.001Z",
+            capturedAfter: before(SESSION_QUERY_CONTRACT_TIMES.present),
+            capturedBefore: after(SESSION_QUERY_CONTRACT_TIMES.present),
+            observedAfter: before(SESSION_QUERY_CONTRACT_TIMES.present),
+            observedBefore: after(SESSION_QUERY_CONTRACT_TIMES.present),
+            session: target.identity,
+          },
+        }),
+      );
+
+      expect(result.revisions.map(({ session }) => key(session))).toEqual([key(target.identity)]);
+      expect(result.captureScope).toMatchObject({
+        appliedFilters: ["source", "instance", "nativeId", "sourceState", "session"],
+        unassessedFilters: [
+          "activityAfter",
+          "activityBefore",
+          "capturedAfter",
+          "capturedBefore",
+          "observedAfter",
+          "observedBefore",
+        ],
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("covers present, missing, and unknown retained source state", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    try {
+      for (const [document, sourceState] of [
+        [corpus.present, "present"],
+        [corpus.missing, "missing"],
+        [corpus.unknown, "unknown"],
+      ] as const) {
+        const result = await fixture.query.manifest(
+          createSessionManifestQuery({
+            filter: { session: document.identity, sourceState },
+          }),
+        );
+        expect(result.revisions).toHaveLength(1);
+        expect(result.revisions[0]).toMatchObject({
+          session: document.identity,
+          sourceState,
+          counts: manifestCounts(document),
+        });
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("reports a retained failed revision as stale from its last good capture", async () => {
+    const fixture = await createFixture();
+    const target = sessionQueryContractCorpus().present.identity;
+    try {
+      fixture.markManifestStale(target);
+      const result = await fixture.query.manifest(
+        createSessionManifestQuery({ filter: { session: target } }),
+      );
+      expect(result.revisions).toHaveLength(1);
+      expect(result.revisions[0]).toMatchObject({
+        session: target,
+        freshness: "stale",
+        adapterVersion: "synthetic-v1",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("uses case-sensitive filters, contradiction-safe matching, and binary identity order", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    try {
+      const ordered = await fixture.query.manifest(
+        createSessionManifestQuery({ filter: { source: "rank-b" } }),
+      );
+      expect(ordered.revisions.map(({ session }) => key(session))).toEqual(
+        corpus.ranking.binaryOrder.slice(1).map(({ identity }) => key(identity)),
+      );
+      await expect(
+        fixture.query.manifest(
+          createSessionManifestQuery({ filter: { source: "rank-b", instance: "a" } }),
+        ),
+      ).resolves.toMatchObject({
+        revisions: [{ session: { nativeId: "A" } }, { session: { nativeId: "a" } }],
+      });
+      await expect(
+        fixture.query.manifest(
+          createSessionManifestQuery({ filter: { source: "rank-b", instance: "A" } }),
+        ),
+      ).resolves.toMatchObject({ revisions: [{ session: { nativeId: "same" } }] });
+      await expect(
+        fixture.query.manifest(
+          createSessionManifestQuery({
+            filter: {
+              nativeId: corpus.missing.identity.nativeId,
+              session: corpus.present.identity,
+            },
+          }),
+        ),
+      ).resolves.toMatchObject({ revisions: [] });
+      await expect(
+        fixture.query.manifest(createSessionManifestQuery({ filter: { nativeId: "Same" } })),
+      ).resolves.toMatchObject({ revisions: [] });
+      await expect(
+        fixture.query.manifest(createSessionManifestQuery({ filter: { source: "rank-b" } })),
+      ).resolves.toEqual(ordered);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("returns all 201 generated revisions without a page cursor", async () => {
+    const fixture = await createFixture();
+    try {
+      const result = await fixture.largeManifestQuery.manifest(createSessionManifestQuery());
+      expect(result.revisions).toHaveLength(201);
+      expect(result.revisions[0]?.session.nativeId).toBe("manifest-000");
+      expect(result.revisions.at(-1)?.session.nativeId).toBe("manifest-200");
+      expect(new Set(result.revisions.map(({ session }) => key(session))).size).toBe(201);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("fails the whole manifest when a selected canonical session lacks metrics", async () => {
+    const fixture = await createFixture();
+    const target = sessionQueryContractCorpus().present.identity;
+    try {
+      fixture.removeManifestMetrics(target);
+      await expect(
+        fixture.query.manifest(createSessionManifestQuery({ filter: { session: target } })),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("lists with every shared exact, time, state, and identity filter", async () => {
     const fixture = await createFixture();
     const corpus = sessionQueryContractCorpus();
@@ -1080,6 +1297,17 @@ function search(query: SessionQueryRepository, text: string, session?: SessionId
       context: 0,
     }),
   );
+}
+
+function manifestCounts(document: Parameters<typeof createSessionDocumentMetrics>[0]) {
+  const metrics = createSessionDocumentMetrics(document);
+  return {
+    relations: metrics.relationCount,
+    entries: metrics.entryCount,
+    segments: metrics.segmentCount,
+    omittedSegments: metrics.omittedSegmentCount,
+    textUtf8Bytes: metrics.textUtf8Bytes,
+  };
 }
 
 function hitKey(hit: {

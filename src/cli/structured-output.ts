@@ -12,7 +12,7 @@ import { formatSessionIdentity, isSessionIdentity } from "../domain/session-iden
 import type { SessionIdentity } from "../domain/session.ts";
 import { splitUnicodeWhitespaceTerms } from "../domain/unicode-whitespace.ts";
 
-export type StructuredCommandV1 = "list" | "search" | "entries" | "show" | "export";
+export type StructuredCommandV1 = "list" | "search" | "entries" | "manifest" | "show" | "export";
 
 export interface StructuredHeaderV1<Command extends StructuredCommandV1, Type extends string> {
   readonly schemaVersion: 1;
@@ -58,6 +58,49 @@ export type PublicSessionRootV1 =
 
 export interface PublicListSessionV1 extends PublicSessionSummaryV1 {
   readonly root: PublicSessionRootV1;
+}
+
+export interface ManifestFilterV1 {
+  readonly source?: string;
+  readonly instance?: string;
+  readonly nativeId?: string;
+  readonly sourceState?: "present" | "missing" | "unknown";
+  readonly activityAfter?: string;
+  readonly activityBefore?: string;
+  readonly capturedAfter?: string;
+  readonly capturedBefore?: string;
+  readonly observedAfter?: string;
+  readonly observedBefore?: string;
+  readonly session?: SessionRefV1;
+}
+
+export interface ManifestSelectionV1 {
+  readonly order: "canonical-identity-v1";
+  readonly maximumRevisions: 10_000;
+  readonly filters: ManifestFilterV1;
+}
+
+export interface ManifestCountsV1 {
+  readonly relations: number;
+  readonly entries: number;
+  readonly segments: number;
+  readonly omittedSegments: number;
+  readonly textUtf8Bytes: number;
+}
+
+export interface PublicSessionRevisionV1 {
+  readonly session: SessionRefV1;
+  readonly documentDigest: SessionDocumentDigestV1;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly capturedAt: string;
+  readonly sourceObservedAt: string;
+  readonly sourceState: "present" | "missing" | "unknown";
+  readonly freshness: "current" | "stale";
+  readonly adapterVersion: string;
+  readonly lineageCoverage: "complete" | "unknown";
+  readonly root: PublicSessionRootV1;
+  readonly counts: ManifestCountsV1;
 }
 
 export interface CountSelectionV1 {
@@ -234,6 +277,13 @@ export type EntriesJsonV1 = StructuredHeaderV1<"entries", "page"> & {
   readonly entries: readonly PublicEntryInventoryV1[];
 };
 
+export type ManifestJsonV1 = StructuredHeaderV1<"manifest", "manifest"> & {
+  readonly revisionCount: number;
+  readonly selection: ManifestSelectionV1;
+  readonly captureScope: CaptureScopeV1;
+  readonly revisions: readonly PublicSessionRevisionV1[];
+};
+
 export type ShowJsonV1 = SnapshotJsonV1<"show">;
 export type ExportJsonV1 = SnapshotJsonV1<"export">;
 
@@ -268,6 +318,16 @@ export type EntriesEntryJsonlV1 = StructuredHeaderV1<"entries", "entry"> & {
   readonly entry: PublicEntryInventoryV1;
 };
 
+export type ManifestJsonlV1 = StructuredHeaderV1<"manifest", "manifest"> & {
+  readonly revisionCount: number;
+  readonly selection: ManifestSelectionV1;
+  readonly captureScope: CaptureScopeV1;
+};
+
+export type ManifestRevisionJsonlV1 = StructuredHeaderV1<"manifest", "revision"> & {
+  readonly revision: PublicSessionRevisionV1;
+};
+
 export type SnapshotSessionJsonlV1<Command extends "show" | "export"> = StructuredHeaderV1<
   Command,
   "session"
@@ -297,6 +357,7 @@ export type StructuredJsonV1 =
   | ListJsonV1
   | SearchJsonV1
   | EntriesJsonV1
+  | ManifestJsonV1
   | ShowJsonV1
   | ExportJsonV1;
 export type StructuredJsonlRecordV1 =
@@ -306,6 +367,8 @@ export type StructuredJsonlRecordV1 =
   | SearchHitJsonlV1
   | EntriesPageJsonlV1
   | EntriesEntryJsonlV1
+  | ManifestJsonlV1
+  | ManifestRevisionJsonlV1
   | SnapshotSessionJsonlV1<"show" | "export">
   | SnapshotRelationJsonlV1<"show" | "export">
   | SnapshotEntryJsonlV1<"show" | "export">;
@@ -371,6 +434,45 @@ export interface StructuredEntriesInputV1 {
   readonly entries: readonly StructuredEntryInventoryInputV1[];
   readonly captureScope: SessionCaptureScope;
   readonly nextCursor?: string;
+}
+
+export interface StructuredManifestInputV1 {
+  readonly selection: StructuredManifestSelectionInputV1;
+  readonly captureScope: SessionCaptureScope;
+  readonly revisions: readonly StructuredManifestRevisionInputV1[];
+}
+
+export interface StructuredManifestSelectionInputV1 {
+  readonly order: "canonical-identity-v1";
+  readonly maximumRevisions: 10_000;
+  readonly filters: {
+    readonly source?: string;
+    readonly instance?: string;
+    readonly nativeId?: string;
+    readonly sourceState?: "present" | "missing" | "unknown";
+    readonly activityAfter?: string;
+    readonly activityBefore?: string;
+    readonly capturedAfter?: string;
+    readonly capturedBefore?: string;
+    readonly observedAfter?: string;
+    readonly observedBefore?: string;
+    readonly session?: SessionIdentity;
+  };
+}
+
+export interface StructuredManifestRevisionInputV1 {
+  readonly session: SessionIdentity;
+  readonly documentDigest: SessionDocumentDigestV1;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly capturedAt: string;
+  readonly sourceObservedAt: string;
+  readonly sourceState: "present" | "missing" | "unknown";
+  readonly freshness: "current" | "stale";
+  readonly adapterVersion: string;
+  readonly lineageCoverage: "complete" | "unknown";
+  readonly root: SessionRootResolution;
+  readonly counts: ManifestCountsV1;
 }
 
 export interface StructuredEntryInventoryInputV1 {
@@ -506,6 +608,35 @@ export function buildEntriesJsonlV1(input: StructuredEntriesInputV1): Structured
   ]);
 }
 
+export function buildManifestJsonV1(input: StructuredManifestInputV1): ManifestJsonV1 {
+  const revisions = input.revisions.map(copyManifestRevision);
+  validateManifestRevisionOrder(revisions);
+  return finalizeStructuredOutput({
+    ...header("manifest", "manifest"),
+    revisionCount: revisions.length,
+    selection: copyManifestSelection(input.selection),
+    captureScope: copyCaptureScope(input.captureScope),
+    revisions,
+  });
+}
+
+export function buildManifestJsonlV1(input: StructuredManifestInputV1): StructuredJsonlV1 {
+  const revisions = input.revisions.map(copyManifestRevision);
+  validateManifestRevisionOrder(revisions);
+  return finalizeStructuredOutput([
+    {
+      ...header("manifest", "manifest"),
+      revisionCount: revisions.length,
+      selection: copyManifestSelection(input.selection),
+      captureScope: copyCaptureScope(input.captureScope),
+    },
+    ...revisions.map((revision) => ({
+      ...header("manifest", "revision"),
+      revision,
+    })),
+  ]);
+}
+
 export function buildSnapshotJsonV1(command: "show", input: StructuredSnapshotInputV1): ShowJsonV1;
 export function buildSnapshotJsonV1(
   command: "export",
@@ -583,6 +714,100 @@ function copySummary(input: StructuredSessionSummaryInputV1): PublicSessionSumma
 
 function copyListSession(input: StructuredListSessionInputV1): PublicListSessionV1 {
   return { ...copySummary(input), root: copyRoot(input.root) };
+}
+
+function copyManifestSelection(input: StructuredManifestSelectionInputV1): ManifestSelectionV1 {
+  if (input.order !== "canonical-identity-v1" || input.maximumRevisions !== 10_000) {
+    throw new TypeError("Structured manifest selection is invalid");
+  }
+  const filters = input.filters;
+  return {
+    order: input.order,
+    maximumRevisions: input.maximumRevisions,
+    filters: {
+      ...(filters.source === undefined ? {} : { source: nonEmptyString(filters.source) }),
+      ...(filters.instance === undefined ? {} : { instance: nonEmptyString(filters.instance) }),
+      ...(filters.nativeId === undefined ? {} : { nativeId: nonEmptyString(filters.nativeId) }),
+      ...(filters.sourceState === undefined
+        ? {}
+        : { sourceState: literal(filters.sourceState, ["present", "missing", "unknown"]) }),
+      ...(filters.activityAfter === undefined
+        ? {}
+        : { activityAfter: timestamp(filters.activityAfter) }),
+      ...(filters.activityBefore === undefined
+        ? {}
+        : { activityBefore: timestamp(filters.activityBefore) }),
+      ...(filters.capturedAfter === undefined
+        ? {}
+        : { capturedAfter: timestamp(filters.capturedAfter) }),
+      ...(filters.capturedBefore === undefined
+        ? {}
+        : { capturedBefore: timestamp(filters.capturedBefore) }),
+      ...(filters.observedAfter === undefined
+        ? {}
+        : { observedAfter: timestamp(filters.observedAfter) }),
+      ...(filters.observedBefore === undefined
+        ? {}
+        : { observedBefore: timestamp(filters.observedBefore) }),
+      ...(filters.session === undefined ? {} : { session: copySessionRef(filters.session) }),
+    },
+  };
+}
+
+function copyManifestRevision(input: StructuredManifestRevisionInputV1): PublicSessionRevisionV1 {
+  const segments = nonNegativeInteger(input.counts.segments);
+  const omittedSegments = nonNegativeInteger(input.counts.omittedSegments);
+  if (omittedSegments > segments) {
+    throw new TypeError("Structured manifest counts are inconsistent");
+  }
+  return {
+    session: copySessionRef(input.session),
+    documentDigest: copyDocumentDigest(input.documentDigest),
+    ...(input.createdAt === undefined ? {} : { createdAt: timestamp(input.createdAt) }),
+    ...(input.updatedAt === undefined ? {} : { updatedAt: timestamp(input.updatedAt) }),
+    capturedAt: timestamp(input.capturedAt),
+    sourceObservedAt: timestamp(input.sourceObservedAt),
+    sourceState: literal(input.sourceState, ["present", "missing", "unknown"]),
+    freshness: literal(input.freshness, ["current", "stale"]),
+    adapterVersion: nonEmptyString(input.adapterVersion),
+    lineageCoverage: literal(input.lineageCoverage, ["complete", "unknown"]),
+    root: copyRoot(input.root),
+    counts: {
+      relations: nonNegativeInteger(input.counts.relations),
+      entries: nonNegativeInteger(input.counts.entries),
+      segments,
+      omittedSegments,
+      textUtf8Bytes: nonNegativeInteger(input.counts.textUtf8Bytes),
+    },
+  };
+}
+
+function validateManifestRevisionOrder(revisions: readonly PublicSessionRevisionV1[]): void {
+  if (revisions.length > 10_000) {
+    throw new TypeError("Structured manifest contains too many revisions");
+  }
+  for (let index = 1; index < revisions.length; index += 1) {
+    const previous = revisions[index - 1]!;
+    const current = revisions[index]!;
+    if (compareSessionRefsBinary(previous.session, current.session) >= 0) {
+      throw new TypeError("Structured manifest revisions are not in canonical identity order");
+    }
+  }
+}
+
+function compareSessionRefsBinary(left: SessionRefV1, right: SessionRefV1): number {
+  for (const [leftPart, rightPart] of [
+    [left.source.kind, right.source.kind],
+    [left.source.instanceId, right.source.instanceId],
+    [left.nativeId, right.nativeId],
+  ] as const) {
+    const comparison = Buffer.compare(
+      Buffer.from(leftPart, "utf8"),
+      Buffer.from(rightPart, "utf8"),
+    );
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
 }
 
 function copySnapshot(input: StructuredSessionSnapshotInputV1): PublicSessionSnapshotV1 {

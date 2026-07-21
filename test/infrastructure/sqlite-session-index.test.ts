@@ -95,6 +95,13 @@ describe("SQLite session index", () => {
 
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(admitted.document);
       expect(storedDocumentDigest(database)).toEqual(admitted.documentDigest);
+      expect(storedDocumentMetrics(database)).toEqual({
+        relationCount: 0,
+        entryCount: 2,
+        segmentCount: 3,
+        omittedSegmentCount: 1,
+        textUtf8Bytes: Buffer.byteLength(firstText, "utf8") + Buffer.byteLength(secondText, "utf8"),
+      });
       expect(rowCount(database, "sessions_content_values")).toBe(2);
       expect(ftsCount(database, "before")).toBe(1);
       expect(ftsCount(database, "input")).toBe(0);
@@ -368,6 +375,7 @@ describe("SQLite session index", () => {
       ).toEqual({ source_metadata_json: '{"10":"ten","2":"two"}' });
       const baselineContentRows = contentRows(database);
       const baselineDocumentDigest = storedDocumentDigest(database);
+      const baselineDocumentMetrics = storedDocumentMetrics(database);
       expect(baselineDocumentDigest).toEqual(baseline.documentDigest);
       await finishCompleted(index, baselineRun, counts({ discovered: 1, updated: 1 }));
 
@@ -394,6 +402,7 @@ describe("SQLite session index", () => {
       );
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(baseline.document);
       expect(storedDocumentDigest(database)).toEqual(baselineDocumentDigest);
+      expect(storedDocumentMetrics(database)).toEqual(baselineDocumentMetrics);
       await expect(index.getFreshness(sessionIdentity)).resolves.toEqual({
         status: "stale",
         identity: sessionIdentity,
@@ -413,6 +422,15 @@ describe("SQLite session index", () => {
       await index.replaceSession(replacementRun, next);
       await expect(index.getDocument(sessionIdentity)).resolves.toEqual(next.document);
       expect(storedDocumentDigest(database)).toEqual(next.documentDigest);
+      expect(storedDocumentMetrics(database)).toEqual({
+        relationCount: 0,
+        entryCount: 2,
+        segmentCount: 2,
+        omittedSegmentCount: 0,
+        textUtf8Bytes:
+          Buffer.byteLength("replacement exclusive token", "utf8") +
+          Buffer.byteLength("second new entry", "utf8"),
+      });
       expect(next.documentDigest).not.toEqual(baselineDocumentDigest);
       expect(ftsCount(database, "old")).toBe(0);
       expect(ftsCount(database, "replacement")).toBe(1);
@@ -449,6 +467,50 @@ describe("SQLite session index", () => {
       await expect(index.getSummary(sessionIdentity)).resolves.toMatchObject({
         documentDigest: { digest: "0".repeat(64) },
       });
+      await expect(index.getDocument(sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+      await expect(index.getSession(sessionIdentity)).rejects.toMatchObject({
+        code: "corrupt-data",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "missing metrics",
+      corrupt(database: DatabaseSync) {
+        database.prepare("DELETE FROM sessions_canonical_document_metrics").run();
+      },
+    },
+    {
+      name: "inconsistent metrics",
+      corrupt(database: DatabaseSync) {
+        database
+          .prepare(
+            `UPDATE sessions_canonical_document_metrics
+             SET text_utf8_bytes = text_utf8_bytes + 1`,
+          )
+          .run();
+      },
+    },
+  ])("fails complete document reads for $name", async ({ corrupt }) => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const sessionIdentity = identity("metrics-corruption-profile", "metrics-session");
+      const run = await index.startRun({
+        source: sessionIdentity.source,
+        startedAt: "2026-07-13T12:00:00.000Z",
+      });
+      await index.replaceSession(
+        run,
+        replacement(sessionIdentity, "revision-a", completeDocument(sessionIdentity)),
+      );
+      corrupt(database);
+
       await expect(index.getDocument(sessionIdentity)).rejects.toMatchObject({
         code: "corrupt-data",
       });
@@ -916,6 +978,32 @@ function storedDocumentDigest(database: DatabaseSync) {
     | { readonly document_digest_scheme?: unknown; readonly document_digest?: unknown }
     | undefined;
   return decodeSqliteDocumentDigest(row?.document_digest_scheme, row?.document_digest);
+}
+
+function storedDocumentMetrics(database: DatabaseSync) {
+  const row = database
+    .prepare(
+      `SELECT relation_count, entry_count, segment_count,
+              omitted_segment_count, text_utf8_bytes
+       FROM sessions_canonical_document_metrics`,
+    )
+    .get() as
+    | {
+        readonly relation_count: number;
+        readonly entry_count: number;
+        readonly segment_count: number;
+        readonly omitted_segment_count: number;
+        readonly text_utf8_bytes: number;
+      }
+    | undefined;
+  if (row === undefined) return undefined;
+  return {
+    relationCount: row.relation_count,
+    entryCount: row.entry_count,
+    segmentCount: row.segment_count,
+    omittedSegmentCount: row.omitted_segment_count,
+    textUtf8Bytes: row.text_utf8_bytes,
+  };
 }
 
 function ftsCount(database: DatabaseSync, query: string): number {

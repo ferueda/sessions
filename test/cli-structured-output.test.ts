@@ -14,12 +14,15 @@ import {
   buildListJsonlV1,
   buildEntriesJsonV1,
   buildEntriesJsonlV1,
+  buildManifestJsonV1,
+  buildManifestJsonlV1,
   buildSearchJsonV1,
   buildSearchJsonlV1,
   buildSnapshotJsonV1,
   buildSnapshotJsonlV1,
   type SelectedTextV1,
   type StructuredListInputV1,
+  type StructuredManifestInputV1,
   type StructuredEntriesInputV1,
   type StructuredSearchInputV1,
   type StructuredSessionSummaryInputV1,
@@ -108,6 +111,82 @@ describe("schema-1 structured output", () => {
         disposition: "untrusted-history",
         sessionCount: 0,
         nextCursor: null,
+        captureScope: uninitializedCaptureScope,
+      },
+    ]);
+  });
+
+  it("builds an exact manifest bundle and equivalent attributable JSONL records", () => {
+    const input = manifestInput();
+    const json = buildManifestJsonV1(input);
+    const jsonl = buildManifestJsonlV1(input);
+
+    expect(json).toEqual({
+      schemaVersion: 1,
+      command: "manifest",
+      type: "manifest",
+      disposition: "untrusted-history",
+      revisionCount: 1,
+      selection: {
+        order: "canonical-identity-v1",
+        maximumRevisions: 10_000,
+        filters: {
+          source: "synthetic",
+          sourceState: "present",
+          activityAfter: "2026-07-15T00:00:00.000Z",
+          session: publicSummary().session,
+        },
+      },
+      captureScope: completeCaptureScope,
+      revisions: [publicManifestRevision()],
+    });
+    expect(jsonl).toEqual([
+      {
+        schemaVersion: 1,
+        command: "manifest",
+        type: "manifest",
+        disposition: "untrusted-history",
+        revisionCount: 1,
+        selection: json.selection,
+        captureScope: completeCaptureScope,
+      },
+      {
+        schemaVersion: 1,
+        command: "manifest",
+        type: "revision",
+        disposition: "untrusted-history",
+        revision: json.revisions[0],
+      },
+    ]);
+    expectRecursivelyFrozen(json);
+    expectRecursivelyFrozen(jsonl);
+  });
+
+  it("emits one explicit manifest envelope for an empty cohort", () => {
+    const input: StructuredManifestInputV1 = {
+      selection: {
+        order: "canonical-identity-v1",
+        maximumRevisions: 10_000,
+        filters: {},
+      },
+      captureScope: uninitializedCaptureScope,
+      revisions: [],
+    };
+
+    expect(buildManifestJsonV1(input)).toMatchObject({
+      revisionCount: 0,
+      revisions: [],
+      selection: input.selection,
+      captureScope: uninitializedCaptureScope,
+    });
+    expect(buildManifestJsonlV1(input)).toEqual([
+      {
+        schemaVersion: 1,
+        command: "manifest",
+        type: "manifest",
+        disposition: "untrusted-history",
+        revisionCount: 0,
+        selection: input.selection,
         captureScope: uninitializedCaptureScope,
       },
     ]);
@@ -396,6 +475,66 @@ describe("schema-1 structured output", () => {
       "appliedFilters",
       "unassessedFilters",
     ]);
+  });
+
+  it("recursively allowlists manifest fields and rejects invalid manifest evidence", () => {
+    const marker = "manifest-private-marker";
+    const base = manifestInput();
+    const unsafe = {
+      ...base,
+      privateLibraryId: marker,
+      selection: {
+        ...base.selection,
+        fingerprint: marker,
+        filters: { ...base.selection.filters, workspace: marker, path: marker },
+      },
+      revisions: base.revisions.map((revision) => ({
+        ...revision,
+        title: marker,
+        transcript: marker,
+        workspace: marker,
+        sourceLocator: marker,
+        contentHash: marker,
+        counts: { ...revision.counts, hidden: marker },
+      })),
+    };
+    const encoded = encodeStructuredJson(buildManifestJsonV1(unsafe));
+
+    expect(encoded).not.toContain(marker);
+    const parsed = JSON.parse(encoded);
+    expect(parsed.selection.filters).not.toHaveProperty("workspace");
+    expect(parsed.revisions[0]).not.toHaveProperty("workspace");
+    expect(Object.keys(parsed.revisions[0])).toEqual([
+      "session",
+      "documentDigest",
+      "createdAt",
+      "updatedAt",
+      "capturedAt",
+      "sourceObservedAt",
+      "sourceState",
+      "freshness",
+      "adapterVersion",
+      "lineageCoverage",
+      "root",
+      "counts",
+    ]);
+    expect(() =>
+      buildManifestJsonV1({
+        ...base,
+        selection: { ...base.selection, maximumRevisions: 9_999 as 10_000 },
+      }),
+    ).toThrow("manifest selection");
+    expect(() =>
+      buildManifestJsonV1({
+        ...base,
+        revisions: [
+          { ...base.revisions[0]!, counts: { ...base.revisions[0]!.counts, entries: -1 } },
+        ],
+      }),
+    ).toThrow("safe integer");
+    expect(() =>
+      buildManifestJsonV1({ ...base, revisions: [base.revisions[0]!, base.revisions[0]!] }),
+    ).toThrow("canonical identity order");
   });
 
   it("defensively copies capture scope and validates its fixed invariants", () => {
@@ -718,6 +857,40 @@ describe("structured encoders", () => {
     expect(captureError(overLimit)).toMatchObject({ code: STRUCTURED_OUTPUT_TOO_LARGE });
   });
 
+  it.each(["json", "jsonl"] as const)(
+    "applies the exact aggregate UTF-8 cap to a %s manifest",
+    (format) => {
+      const value =
+        format === "json"
+          ? buildManifestJsonV1(manifestInput())
+          : buildManifestJsonlV1(manifestInput());
+      const unbounded =
+        format === "json"
+          ? encodeStructuredJson(value as ReturnType<typeof buildManifestJsonV1>)
+          : encodeStructuredJsonl(value as ReturnType<typeof buildManifestJsonlV1>);
+      const bytes = Buffer.byteLength(unbounded, "utf8");
+      const atBoundary =
+        format === "json"
+          ? encodeStructuredJson(value as ReturnType<typeof buildManifestJsonV1>, {
+              maximumBytesForTest: bytes,
+            })
+          : encodeStructuredJsonl(value as ReturnType<typeof buildManifestJsonlV1>, {
+              maximumBytesForTest: bytes,
+            });
+      const overLimit = () =>
+        format === "json"
+          ? encodeStructuredJson(value as ReturnType<typeof buildManifestJsonV1>, {
+              maximumBytesForTest: bytes - 1,
+            })
+          : encodeStructuredJsonl(value as ReturnType<typeof buildManifestJsonlV1>, {
+              maximumBytesForTest: bytes - 1,
+            });
+
+      expect(atBoundary).toBe(unbounded);
+      expect(overLimit).toThrow(StructuredOutputTooLargeError);
+    },
+  );
+
   it("exempts an explicit full export from the aggregate byte cap", () => {
     const value = buildSnapshotJsonV1("export", snapshotInput());
 
@@ -804,6 +977,60 @@ function publicSummary() {
     sourceObservedAt: "2026-07-15T12:00:00.000Z",
     adapterVersion: "synthetic-v1",
     freshness: "current",
+  } as const;
+}
+
+function manifestInput(): StructuredManifestInputV1 {
+  return {
+    selection: {
+      order: "canonical-identity-v1",
+      maximumRevisions: 10_000,
+      filters: {
+        source: "synthetic",
+        sourceState: "present",
+        activityAfter: "2026-07-15T00:00:00.000Z",
+        session: identity,
+      },
+    },
+    captureScope: completeCaptureScope,
+    revisions: [
+      {
+        session: identity,
+        documentDigest,
+        createdAt: "2026-07-15T10:00:00.000Z",
+        updatedAt: "2026-07-15T11:00:00.000Z",
+        capturedAt: "2026-07-15T12:00:00.000Z",
+        sourceObservedAt: "2026-07-15T12:00:00.000Z",
+        sourceState: "present",
+        freshness: "current",
+        adapterVersion: "synthetic-v1",
+        lineageCoverage: "complete",
+        root: knownRoot(),
+        counts: {
+          relations: 1,
+          entries: 2,
+          segments: 3,
+          omittedSegments: 1,
+          textUtf8Bytes: 42,
+        },
+      },
+    ],
+  };
+}
+
+function publicManifestRevision() {
+  const { title: _title, ...summaryWithoutTitle } = publicSummary();
+  return {
+    ...summaryWithoutTitle,
+    lineageCoverage: "complete",
+    root: publicRoot(),
+    counts: {
+      relations: 1,
+      entries: 2,
+      segments: 3,
+      omittedSegments: 1,
+      textUtf8Bytes: 42,
+    },
   } as const;
 }
 

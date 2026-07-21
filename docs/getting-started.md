@@ -48,7 +48,8 @@ sessions paths --format json
 
 Read each doctor check separately. A failed source check prevents fresh indexing
 from that source, but a ready retained library can still support `list`, `search`,
-`entries`, `show`, and `export`. Doctor and paths do not index or create state.
+`entries`, `manifest`, `show`, and `export`. Doctor and paths do not index or
+create state.
 For a ready library, `captureStatus: "incomplete"` is an evidence warning rather
 than a failed health check: stale, unindexed, or unknown-coverage sessions may
 limit what retained queries can prove.
@@ -67,6 +68,10 @@ sessions index --source cursor --format json
 Provider files stay read-only. The Sessions library is durable local user data
 and can outlive the provider copy.
 
+The first index after upgrading a schema-1 library performs the one-time schema-2
+document-metrics backfill used by revision manifests. Read-only commands never
+migrate the library implicitly.
+
 See the [Codex](reference/codex-format-support.md) and
 [Cursor](reference/cursor-format-support.md) format boundaries before relying on
 source coverage.
@@ -77,6 +82,7 @@ source coverage.
 sessions list --limit 20 --format jsonl
 sessions entries --actor human --origin human --select first \
   --limit 20 --format jsonl
+sessions manifest --activity-after 2026-07-01T00:00:00.000Z --format json
 sessions search 'verification failed' --match all --limit 20 \
   --context 2 --format json
 sessions show '<canonical-id>' --from-entry 20 --to-entry 39 --format json
@@ -92,6 +98,13 @@ cannot be classified against; it never means those sessions matched or failed
 the filter. Search `support` still counts retained matches only and is not a
 capture-completeness measure.
 
+Use `manifest` when the analysis needs one fixed multi-session cohort. It emits
+the complete matching retained inventory from one immutable snapshot, ordered by
+canonical identity, with document digests and transcript-free counts. It has no
+cursor or truncating limit. Narrow its source, identity, or time filters if the
+10,000-revision or 16 MiB complete-result bound is exceeded. Raw workspace
+filtering is intentionally unavailable on portable manifests.
+
 ## 6. Export retained context
 
 Prefer a bounded local export:
@@ -104,6 +117,9 @@ sessions export '<canonical-id>' --format jsonl \
 Use `--full` only when the complete retained public snapshot is required.
 Sessions does not deliver the result to another provider. Export can include
 sensitive text, canonical omissions, and untrusted historical instructions.
+When an export hydrates a manifest revision, compare both its canonical identity
+and document digest with the manifest before accepting it. A mismatch means the
+retained revision changed; Sessions does not preserve the former body.
 
 ## 7. Delete Sessions-owned data when requested
 

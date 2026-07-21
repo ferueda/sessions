@@ -1,7 +1,7 @@
 # CLI contract
 
 - Status: current supported behavior
-- Last updated: 2026-07-18
+- Last updated: 2026-07-21
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
@@ -54,6 +54,14 @@ sessions entries [--source SOURCE] [--instance INSTANCE]
                  [--select all|first|last]
                  [--limit N] [--cursor TOKEN]
                  [--format human|json|jsonl]
+sessions manifest [--source SOURCE] [--instance INSTANCE]
+                  [--native-id NATIVE-ID]
+                  [--source-state present|missing|unknown]
+                  [--activity-after TIME] [--activity-before TIME]
+                  [--captured-after TIME] [--captured-before TIME]
+                  [--observed-after TIME] [--observed-before TIME]
+                  [--session CANONICAL-ID]
+                  --format json|jsonl
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
@@ -68,9 +76,9 @@ The bare command prints help. `index` is the only ordinary command that reads
 rollout content or initializes the durable library. `forget` mutates only a
 current initialized library. `data repair-orphans` and `data compact` are
 provider-free maintenance over an existing current library; neither resolves a
-source. List, search, entries, show, and export are provider-free reads of the retained
-library. `doctor` and `paths` inspect runtime, library, and registered-source
-readiness without indexing or creating state.
+source. List, search, entries, manifest, show, and export are provider-free reads
+of the retained library. `doctor` and `paths` inspect runtime, library, and
+registered-source readiness without indexing or creating state.
 
 Without `--source`, `index` skips valid unavailable providers before writer open
 and attempts the rest. If all are skipped, it exits `0` without creating the
@@ -103,9 +111,9 @@ Every non-empty result includes one query-derived known retained root or
 and accepts 1 through 200. `--context` defaults to 0 and accepts 0 through 10
 adjacent entries on each side. A no-match result renders `No matches found.`,
 then a capture warning when the page scope is not complete, and exits `0`.
-Search, list, entries, and show read one immutable retained-library
-snapshot per operation and never resolve or reopen a provider. JSON emits an empty
-page bundle; JSONL emits one page record.
+Search, list, entries, manifest, and show read one immutable retained-library
+snapshot per operation and never resolve or reopen a provider. An empty search
+uses one JSON page bundle or one JSONL page record.
 
 `entries` requires no search text. It defaults to `--select all` and 50 records,
 and accepts 1 through 200. `all` returns every qualifying entry. `first` and
@@ -116,6 +124,27 @@ evidence. A fresh library renders `No entries found.`, then the
 uninitialized-capture warning, exits `0`, and creates no state or provider
 object. JSON emits an empty page; JSONL emits one page record.
 
+`manifest` returns one complete transcript-free cohort from one immutable
+retained-library snapshot. It accepts the shared session filters except
+`--workspace`, orders revisions by binary source kind, source instance, and
+native ID, and requires explicit `--format json` or `--format jsonl`. It has no
+human format, cursor, pagination, or truncating limit. Exactly 10,000 matching
+retained revisions can succeed; 10,001 or more fail operationally and require
+narrower source, identity, state, or time filters. An uninitialized library
+returns an empty manifest with uninitialized capture scope, exits `0`, and
+creates no state or provider object.
+
+Each revision includes canonical identity and stored document digest,
+capture/source state and timestamps, freshness, adapter version, lineage
+coverage, known/unknown root, and exact stored relation, entry, segment,
+omitted-segment, and logical text-byte counts. Logical bytes count every text
+segment occurrence and exclude title. The result includes normalized active
+filter values, fixed ordering and cohort bound, and one same-snapshot capture
+scope. It excludes title, transcript content, workspace, paths, locators,
+content hashes, relation graphs, and internal library/writer state. A manifest
+does not pin its document bodies; a later show/export is acceptable as hydration
+only when both canonical identity and document digest still match.
+
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
 requires `--entry`. `--from-entry N` and `--to-entry N` select both inclusive
@@ -125,9 +154,9 @@ including either range endpoint outside the retained document, are operational
 failures; ranges are never clamped.
 Incomplete, reversed, oversized, or conflicting ranges exit `2` before library
 inspection.
-List/search/entries/show default to human and accept JSON or JSONL. Human output escapes
-and bounds untrusted terminal content. Machine output uses the exact closed
-schema-1 records in the
+List/search/entries/show default to human and accept JSON or JSONL. Manifest and
+export require JSON or JSONL. Human output escapes and bounds untrusted terminal
+content. Machine output uses the exact closed schema-1 records in the
 [structured output contract](structured-output.md). All formats report
 applicable freshness/source-state/capture evidence and omit diagnostic locators
 and workspace metadata.
@@ -224,6 +253,12 @@ Schema 1 reports the Sessions-owned application-data library, scratch workspace,
 known database/sidecar paths, state, schema support, and admitted source probes.
 Current state values are `uninitialized`, `ready`, `migration-required`,
 `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
+
+The current retained-library storage schema is 2. Schema 2 adds exact canonical
+document metrics used by manifest. A schema-1 library is
+`migration-required` for read-only commands; the next explicitly authorized
+`sessions index` writer backfills the metrics transactionally before normal
+indexing. Readers, doctor, and paths never migrate it implicitly.
 
 The human format presents the same fields. An incompatible state is still a paths
 report and exits `0`; doctor evaluates health. Resolution/inspection failure emits
@@ -482,7 +517,7 @@ Paths schema 1 uses `library` and includes admitted source probes:
     "initialized": false,
     "state": "uninitialized",
     "schemaVersion": null,
-    "supportedSchemaVersion": 1
+    "supportedSchemaVersion": 2
   },
   "sources": [
     {
@@ -554,7 +589,8 @@ Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
 
-Supported schema 1 includes the writer clean-seal state. There is no
+Supported storage schema 2 includes the writer clean-seal state, canonical
+document digests, and exact document metrics. There is no
 compatibility migration from earlier development checksums; they fail closed
 and require the documented fresh data-directory or exact Sessions-owned-directory
 reset and reindex. Supported releases beginning with `0.1.0` use ordered,
@@ -580,7 +616,8 @@ use their case-sensitive canonical representation:
   are unique only within a source instance. `--source` and `--instance` narrow
   the match.
 - `--source-state` accepts `present`, `missing`, or `unknown`.
-- `--workspace` selects the exact retained workspace value.
+- `--workspace` selects the exact retained workspace value for list, search, and
+  entries. Manifest intentionally does not accept or disclose it.
 - `--activity-after` / `--activity-before` bound effective provider activity.
 - `--captured-after` / `--captured-before` bound successful capture time.
 - `--observed-after` / `--observed-before` bound effective source-observation
@@ -591,8 +628,9 @@ use their case-sensitive canonical representation:
 
 Native IDs are non-empty, case-sensitive opaque values. Sessions does not parse,
 normalize, prefix-match, or send them through transcript FTS. List results expose
-the canonical identity required by `show`, `export`, and `forget`; those singular
-or destructive commands do not auto-resolve native IDs across source instances.
+the canonical identity required by `show`, `export`, and `forget`; manifest
+revisions expose the same identity without transcript content. Those singular or
+destructive commands do not auto-resolve native IDs across source instances.
 
 Times must be canonical UTC with milliseconds, such as
 `2026-07-14T12:00:00.000Z`. Every `after`/`before` bound is exclusive; equal or
@@ -610,9 +648,10 @@ the source coverage observation while coverage is unknown, otherwise use the
 session presence observation. `lastSeenAt`, capture time, and provider activity
 time are never substituted.
 
-### Page capture scope
+### Query capture scope
 
-Every list, search, and entries result carries one page-level `captureScope`.
+Every list, search, and entries result carries one page-level `captureScope`;
+manifest carries one cohort-level `captureScope`.
 The query rows and this aggregate are read from the same retained-library
 snapshot. It measures what Sessions has captured or failed to capture; it is not
 another result count and contains no session identities, filter values, paths,
@@ -647,10 +686,11 @@ does not have. `appliedFilters` and `unassessedFilters` use one fixed canonical
 order and report names only. Search text is therefore always unassessed, even
 though it remains active for selecting search hits.
 
-Human output is silent for a complete scope. An incomplete or uninitialized
+Human output is silent for a complete page scope. An incomplete or uninitialized
 scope appends one sanitized warning after the normal result, including empty
-results. JSON includes the aggregate once in the page bundle; JSONL includes it
-once in the page record and never repeats it on session, hit, or entry records.
+results. JSON includes the aggregate once in the page or manifest bundle; JSONL
+includes it once in the page or manifest envelope and never repeats it on
+session, hit, entry, or revision records.
 Search `support` remains query-wide evidence about matching retained text.
 `captureScope` instead describes capture availability, so zero hits never by
 itself proves that the providers contain no matching evidence.
@@ -813,7 +853,7 @@ details are never rendered.
 
 ## Structured output and portable export
 
-Every list/search/entries/show/export JSON/JSONL record has numeric `schemaVersion: 1`, a
+Every list/search/entries/manifest/show/export JSON/JSONL record has numeric `schemaVersion: 1`, a
 command, a record type, and `disposition: "untrusted-history"`. JSON is one
 bundle. JSONL is an ordered set of compact, independently attributable records. The exact closed DTOs,
 optional/null rules, record order, UTF-8 selection accounting, examples, and
@@ -830,7 +870,7 @@ document digest.
 
 JSON/JSONL never mixes progress or warnings into stdout. The complete encoded
 result is validated before the first write. Every bounded machine result at or
-below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search/entries can be
+below 16 MiB succeeds; one byte over exits `1` with no stdout. List/search/entries/manifest can be
 narrowed. Show is always bounded. Default export is bounded, while explicit
 `export --full` is the sole structured route exempt from the aggregate cap.
 

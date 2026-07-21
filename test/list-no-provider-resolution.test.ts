@@ -10,6 +10,37 @@ import { afterEach, describe, expect, test } from "vitest";
 const temporaryDirectories: string[] = [];
 const uninitializedWarning =
   "Warning: retained evidence may be incomplete (capture scope is uninitialized).\n";
+const uninitializedManifest = {
+  schemaVersion: 1,
+  command: "manifest",
+  type: "manifest",
+  disposition: "untrusted-history",
+  revisionCount: 0,
+  selection: {
+    order: "canonical-identity-v1",
+    maximumRevisions: 10_000,
+    filters: {},
+  },
+  captureScope: {
+    status: "uninitialized",
+    trackedSessions: 0,
+    retainedSessions: { current: 0, stale: 0 },
+    unindexedSessions: 0,
+    sourceState: { present: 0, missing: 0, unknown: 0 },
+    sourceCoverage: { complete: 0, unknown: 0 },
+    latestFailures: {
+      unavailable: 0,
+      unreadable: 0,
+      malformed: 0,
+      sourceChanged: 0,
+      unsupportedFormat: 0,
+      repositoryWrite: 0,
+    },
+    appliedFilters: [],
+    unassessedFilters: [],
+  },
+  revisions: [],
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -34,6 +65,15 @@ const absentQueryCases = [
     command: "entries",
     argv: ["entries"],
     expected: { status: 0, stdout: `No entries found.\n\n${uninitializedWarning}`, stderr: "" },
+  },
+  {
+    command: "manifest",
+    argv: ["manifest", "--format", "json"],
+    expected: {
+      status: 0,
+      stdout: `${JSON.stringify(uninitializedManifest, null, 2)}\n`,
+      stderr: "",
+    },
   },
   {
     command: "show",

@@ -93,7 +93,7 @@ describe("SQLite index lifecycle", () => {
     expect(writer.database.prepare("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
     expect(
       writer.database.prepare("SELECT COUNT(*) AS count FROM sessions_schema_migrations").get(),
-    ).toEqual({ count: 1 });
+    ).toEqual({ count: CURRENT_INDEX_SCHEMA_VERSION });
     await writer.close();
   });
 

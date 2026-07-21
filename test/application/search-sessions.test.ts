@@ -187,6 +187,7 @@ function lifecycleWith(page: SessionSearchPage, state: "ready" | "uninitialized"
       sessions: [],
       captureScope: emptyCompleteCaptureScope,
     })),
+    manifest: vi.fn<SessionQueryRepository["manifest"]>(),
     search: vi.fn<SessionQueryRepository["search"]>(async () => page),
   } satisfies SessionQueryRepository;
   const reader = {

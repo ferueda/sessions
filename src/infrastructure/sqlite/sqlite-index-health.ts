@@ -137,7 +137,23 @@ export function canonicalIntegrityIsValid(database: DatabaseSync): boolean {
   return (
     libraryIdentityIsValid(database) &&
     sourceInstancesAreValid(database) &&
+    canonicalDocumentMetricsCoverageIsValid(database) &&
     sessionTrackingIsValid(database)
+  );
+}
+
+function canonicalDocumentMetricsCoverageIsValid(database: DatabaseSync): boolean {
+  return (
+    database
+      .prepare(
+        `SELECT 1 AS missing
+         FROM sessions_canonical_sessions AS canonical
+         LEFT JOIN sessions_canonical_document_metrics AS metrics
+           ON metrics.session_id = canonical.session_id
+         WHERE metrics.session_id IS NULL
+         LIMIT 1`,
+      )
+      .get() === undefined
   );
 }
 

@@ -7,6 +7,12 @@ import {
   sameSessionDocumentDigest,
   type SessionDocumentDigest,
 } from "../../domain/public-session-document.ts";
+import {
+  copySessionDocumentMetrics,
+  createSessionDocumentMetrics,
+  sameSessionDocumentMetrics,
+  type SessionDocumentMetrics,
+} from "../../domain/session-document-metrics.ts";
 import { isCanonicalSourceType, isContentClass } from "../../domain/source-type.ts";
 import type {
   ContentSegment,
@@ -35,6 +41,7 @@ export function replaceCanonicalDocument(
   documentDigest: SessionDocumentDigest,
 ): readonly SqliteContentId[] {
   const storedDigest = encodeSqliteDocumentDigest(documentDigest);
+  const documentMetrics = createSessionDocumentMetrics(document);
   const obsoleteContentCandidates = readSessionContentCandidates(database, sessionId);
   database.prepare("DELETE FROM sessions_canonical_sessions WHERE session_id = ?").run(sessionId);
   database
@@ -63,6 +70,7 @@ export function replaceCanonicalDocument(
 
   insertRelations(database, sessionId, document.relations);
   const resultingContentIds = insertEntries(database, sessionId, document.entries);
+  insertDocumentMetrics(database, sessionId, documentMetrics);
   deleteUnreferencedContentCandidates(database, obsoleteContentCandidates);
   return [...new Set([...obsoleteContentCandidates, ...resultingContentIds])].toSorted(
     compareContentIds,
@@ -80,6 +88,7 @@ export function readCanonicalDocument(
 export interface CanonicalDocumentRecord {
   readonly document: SessionDocument;
   readonly documentDigest: SessionDocumentDigest;
+  readonly documentMetrics: SessionDocumentMetrics;
 }
 
 export function readCanonicalDocumentRecord(
@@ -87,14 +96,26 @@ export function readCanonicalDocumentRecord(
   identity: SessionIdentity,
   sessionId: number,
 ): CanonicalDocumentRecord | undefined {
-  const session = database
-    .prepare(
-      `SELECT lineage_coverage, title, workspace, created_at, updated_at,
-              document_digest_scheme, document_digest
-       FROM sessions_canonical_sessions
-       WHERE session_id = ?`,
-    )
-    .get(sessionId) as SessionRow | undefined;
+  const statement = database.prepare(
+    `SELECT canonical.lineage_coverage,
+            canonical.title,
+            canonical.workspace,
+            canonical.created_at,
+            canonical.updated_at,
+            canonical.document_digest_scheme,
+            canonical.document_digest,
+            metrics.relation_count,
+            metrics.entry_count,
+            metrics.segment_count,
+            metrics.omitted_segment_count,
+            metrics.text_utf8_bytes
+     FROM sessions_canonical_sessions AS canonical
+     LEFT JOIN sessions_canonical_document_metrics AS metrics
+       ON metrics.session_id = canonical.session_id
+     WHERE canonical.session_id = ?`,
+  );
+  statement.setReadBigInts(true);
+  const session = statement.get(sessionId) as unknown as SessionRow | undefined;
   if (session === undefined) return undefined;
 
   const relations = readRelations(database, sessionId);
@@ -121,7 +142,42 @@ export function readCanonicalDocumentRecord(
   if (!sameSessionDocumentDigest(storedDigest, computedDigest)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
-  return { document: validated.document, documentDigest: storedDigest };
+  const storedMetrics = documentMetricsAt(session);
+  const computedMetrics = createSessionDocumentMetrics(validated.document);
+  if (!sameSessionDocumentMetrics(storedMetrics, computedMetrics)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return {
+    document: validated.document,
+    documentDigest: storedDigest,
+    documentMetrics: storedMetrics,
+  };
+}
+
+function insertDocumentMetrics(
+  database: DatabaseSync,
+  sessionId: number,
+  metrics: SessionDocumentMetrics,
+): void {
+  database
+    .prepare(
+      `INSERT INTO sessions_canonical_document_metrics (
+         session_id,
+         relation_count,
+         entry_count,
+         segment_count,
+         omitted_segment_count,
+         text_utf8_bytes
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      sessionId,
+      metrics.relationCount,
+      metrics.entryCount,
+      metrics.segmentCount,
+      metrics.omittedSegmentCount,
+      metrics.textUtf8Bytes,
+    );
 }
 
 function insertRelations(
@@ -481,6 +537,26 @@ interface SessionRow {
   readonly updated_at: string | null;
   readonly document_digest_scheme: unknown;
   readonly document_digest: unknown;
+  readonly relation_count: unknown;
+  readonly entry_count: unknown;
+  readonly segment_count: unknown;
+  readonly omitted_segment_count: unknown;
+  readonly text_utf8_bytes: unknown;
+}
+
+function documentMetricsAt(row: SessionRow): SessionDocumentMetrics {
+  try {
+    return copySessionDocumentMetrics({
+      relationCount: integerAt(row.relation_count),
+      entryCount: integerAt(row.entry_count),
+      segmentCount: integerAt(row.segment_count),
+      omittedSegmentCount: integerAt(row.omitted_segment_count),
+      textUtf8Bytes: integerAt(row.text_utf8_bytes),
+    });
+  } catch (error) {
+    if (error instanceof SqliteSessionIndexError) throw error;
+    throw new SqliteSessionIndexError("corrupt-data", { cause: error });
+  }
 }
 
 function lineageCoverageAt(value: unknown): SessionDocument["lineageCoverage"] {
