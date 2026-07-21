@@ -11,7 +11,7 @@ Program roadmap: [Sessions V1 implementation roadmap](260713-v1-implementation-r
 
 There are no active executor plans.
 
-M12 and the public release rollout are complete. M13 parity, Harness cutover,
-and V1 closure are next and require a reviewed executor plan.
+M13.1 standalone acceptance is complete. M13.2 Harness cutover and rollback
+reconciliation is next and requires a reviewed executor plan; M13.3 closes V1.
 
 Markdown presentation remains deferred beyond V1.

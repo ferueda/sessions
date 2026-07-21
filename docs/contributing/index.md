@@ -34,6 +34,7 @@ Contracts:
 - [Source adapters](adapter-contract.md)
 - [Repository commands](commands.md)
 - [Releasing](releasing.md)
+- [V1 standalone acceptance](v1-acceptance.md)
 - [Architecture decisions](../decisions/README.md)
 
 Research baselines:
