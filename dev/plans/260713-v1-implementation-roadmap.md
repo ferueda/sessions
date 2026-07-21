@@ -1,7 +1,7 @@
 # Sessions V1 roadmap
 
 - Status: active
-- Last updated: 2026-07-18
+- Last updated: 2026-07-21
 
 ## Goal
 
@@ -18,7 +18,8 @@ Completed implementation detail stays available in Git history and the
 
 ## Current state
 
-M0 through M12 are complete.
+M0 through M12 and M13.1 are complete. The standalone host-installation
+boundary is settled; only the M13.3 release and closeout remain.
 
 Sessions now provides:
 
@@ -32,6 +33,9 @@ Sessions now provides:
 - scoped deletion, orphan repair, page compaction, and safe whole-library clear;
 - a packaged Agent Skill with evidence-first analysis playbooks;
 - qualified cross-platform releases through GitHub and npm trusted publishing.
+- standalone acceptance across Cursor, Codex, a synthetic third adapter,
+  authorized live cohorts, the frozen legacy Harness baseline, and the
+  published CLI/Agent Skill.
 
 `0.1.0` established the supported data and CLI compatibility baseline. `0.1.1`
 verified the routine release and recovery path. Markdown output remains deferred;
@@ -52,14 +56,18 @@ JSON and JSONL are the portable V1 formats.
 | M11b      | Cursor adapter with equivalent rich evidence                                        |
 | M11c      | Reduced Cursor JSONL fallback without rich-evidence downgrade                       |
 | M12       | Public release qualification, trusted publishing, and supported npm releases        |
+| M13.1     | Standalone acceptance across providers, live cohorts, package, and Agent Skill      |
 
-## M13 — Establish parity, cut Harness over, and close V1
+## M13 — Establish parity, publish standalone Sessions, and close V1
 
-Outcome: standalone Sessions becomes the sole general implementation, while
-Harness keeps a thin, pinned Sessions skill entry and its Harness-specific
-analysis guidance.
+Outcome: standalone Sessions is the sole implementation and distribution. Agent
+hosts install the npm CLI and matching Agent Skill directly from one immutable
+Sessions release; no downstream repository integration is required.
 
-### 1. Standalone acceptance
+### 1. Standalone acceptance (complete)
+
+The durable outcome matrix and aggregate evidence are recorded in
+[V1 standalone acceptance](../../docs/contributing/v1-acceptance.md).
 
 - Compare Cursor and Codex through the same index, list, search, entries, show,
   and export outcome matrix.
@@ -73,22 +81,24 @@ analysis guidance.
 - Confirm the released CLI and matching Agent Skill satisfy the V1 acceptance
   matrix.
 
-### 2. Harness cutover
+### 2. Standalone host boundary (complete)
 
-- Keep `harness/skills/sessions` as the user-facing Harness entry.
-- Pin an exact published `@ferueda/sessions` version and integrity.
-- Keep useful Harness-specific audit guidance.
-- Remove duplicated general indexing/query implementation only after the pinned
-  wrapper passes install, doctor, representative query, and rollback smokes.
-- Keep ownership one-way: general fixes land in Sessions, then flow to Harness
-  through a reviewed version bump.
-- Do not share or migrate the legacy Harness cache. Users create the standalone
-  durable library through explicit indexing.
+The planned Harness repository wrapper is superseded. Harness merge `cbaa5bc9`
+already removed its legacy implementation, and no replacement belongs there.
+
+- Install the CLI from an exact public `@ferueda/sessions` version.
+- Install or upgrade the local Agent Skill directly from the matching immutable
+  Sessions release tag through the external skill installer.
+- Keep host discovery, copying, updates, removal, and the local skill lock in
+  user-local installer state rather than a downstream repository.
+- Do not share or migrate the legacy Harness cache. Explicit indexing creates
+  the standalone durable Sessions library.
 
 ### 3. V1 closure
 
 - Run the complete acceptance matrix below.
-- Publish and verify the release used by the final Harness integration.
+- Publish and verify the exact release used by the standalone CLI and locally
+  installed Agent Skill.
 - Update public and contributor docs to describe the finished V1 state.
 - Remove this completed program roadmap from `dev/plans/`; Git history remains
   the archive.
@@ -101,21 +111,22 @@ analysis guidance.
 - Canonical digests, ordering, provenance, lineage, support counts, failures,
   and capture scope remain correct.
 - Packed CLI and matching skill install without a source checkout.
-- The pinned Harness wrapper and rollback path pass.
+- Public npm `latest`, the installed CLI, the immutable skill tag, and the local
+  copied skill agree on one exact supported version.
 - `pnpm check` and the repository review workflow pass for each implementation
   change.
 
 ## Execution order
 
-M13 is cross-repository and should use one reviewed plan with independently
-reviewable changes:
+M13 uses independently reviewable standalone Sessions changes:
 
-1. Sessions parity and acceptance evidence.
-2. Harness pinned-consumer cutover.
+1. Sessions parity and acceptance evidence. **Complete.**
+2. Standalone local CLI/skill installation boundary. **Complete decision.**
 3. Final Sessions release and V1 documentation closure.
 
-Do not remove the Harness implementation before the pinned replacement and
-rollback route work. Do not combine post-V1 features with the cutover.
+The removed Harness implementation remains historical comparison evidence only.
+Do not add a repository wrapper or combine post-V1 features with release
+closure.
 
 ## After V1
 

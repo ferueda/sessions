@@ -42,7 +42,7 @@ Those constraints are useful migration evidence, not the standalone architecture
 5. **Honest interfaces.** Current help and docs expose only working behavior. Planned behavior is visibly planned.
 6. **Scriptable delivery.** Stable exit codes, bounded output, versioned structured formats, and clean streams.
 7. **Durable evidence, rebuildable projections.** Canonical snapshots remain local user data until explicit deletion; FTS and query projections can be rebuilt without deleting them.
-8. **One upstream after parity.** Standalone Sessions becomes the implementation owner; Harness keeps a thin pinned integration.
+8. **One release, local installs.** Sessions owns the CLI and Agent Skill; agent hosts install the exact matching release directly into local user state.
 
 ## Target system
 
@@ -939,18 +939,22 @@ No V1 daemon, watcher, TUI, native binary, Homebrew formula, shell-piped
 installer, or self-update path. Revisit another distribution channel only when
 support evidence shows that Node or global npm is a recurring adoption blocker.
 
-## Harness relationship
+## Installation and host relationship
 
-Until M13 parity and cutover, the existing Harness skill remains untouched and
-usable. The repositories do not share writable state or implementation files.
+Standalone Sessions is the sole implementation and distribution boundary. The
+CLI comes from an exact public npm release, and agent hosts install the matching
+`sessions` Agent Skill directly from the same immutable Sessions release tag.
+The external skill installer owns host discovery, copying, upgrades, and
+removal; its local skill lock is user state, not repository integration.
 
-After standalone parity:
+No downstream repository owns a Sessions wrapper, package pin, vendored
+snapshot, cache, or rollback route. Repositories do not share writable state or
+implementation files with Sessions. General fixes, skill guidance, and releases
+all land here first.
 
-1. Standalone Sessions becomes the sole implementation upstream.
-2. Harness retains `skills/sessions` as either a thin pinned wrapper around a released package or an immutable vendored release snapshot.
-3. The integration records an exact version and checksum.
-4. Updates flow one way from Sessions releases into Harness.
-5. Bug fixes land in Sessions first; Harness-specific documentation may remain in Harness.
+Harness removed its legacy Sessions implementation in merge `cbaa5bc9`. M13.1
+compares user outcomes against the immutable pre-removal baseline `7ac1839f` as
+historical evidence only; Harness has no ongoing Sessions integration target.
 
 Avoid submodules, bidirectional sync, and hand-copied dual fixes.
 
@@ -1098,12 +1102,15 @@ adapter-version replacement decision prevents reduced evidence from replacing a
 rich last-good snapshot. Domain, storage, query, export, and CLI behavior remain
 provider-neutral.
 
-### Phase 8 — Public release complete; parity next
+### Phase 8 — Public release and standalone acceptance complete
 
 Release automation, trusted publishing, and cross-platform qualification are
 live. `0.1.0` established the supported baseline and `0.1.1` verified the routine
-release path. M13 establishes parity and switches Harness to a pinned one-way
-integration.
+release path. M13.1 established standalone parity through the shared provider
+workflow, a test-only third adapter, authorized live cohorts, the frozen Harness
+baseline, and the published package/skill. Agent hosts consume the CLI and
+matching skill directly from one immutable Sessions release; no downstream
+repository wrapper remains. M13.3 qualifies the final release and closes V1.
 
 ## V1 acceptance criteria
 

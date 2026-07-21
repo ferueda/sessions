@@ -50,6 +50,7 @@
     "measure:entry-query": "node scripts/measure-entry-query.ts",
     "measure:indexing": "node scripts/measure-indexing.ts",
     "measure:indexing:codex": "node scripts/measure-codex-indexing.ts",
+    "measure:indexing:cursor": "node scripts/measure-cursor-indexing.ts",
     "measure:query-lineage": "node scripts/measure-query-lineage.ts",
     "measure:search-query": "node scripts/measure-search-query.ts",
     "hooks:install": "simple-git-hooks",

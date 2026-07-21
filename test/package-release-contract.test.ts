@@ -220,6 +220,7 @@ describe("package release artifact contract", () => {
 
     expect(smoke).toContain('runCommand(shim, ["--help"]');
     expect(smoke).toContain('runCommand(shim, ["--version"]');
+    expect(smoke).toContain('argv[0] === "--" ? argv.slice(1) : argv');
     expect(smoke).toMatch(/runCommand\(\s*process\.execPath,\s*\[installedBinary, \.\.\.args\]/u);
     expect(smoke).not.toContain("runCommand(shim, args");
   });
