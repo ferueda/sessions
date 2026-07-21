@@ -80,6 +80,15 @@ incomplete attempted source exits `1`; otherwise indexing exits `0`. Successful
 captures remain durable, complete later absence marks a session missing, and
 incomplete discovery leaves source state unknown.
 
+During `index`, the first `SIGINT` or `SIGTERM` requests a cooperative stop.
+Sessions finishes the current atomic application operation, closes the writer,
+and exits silently with `130` or `143`. Already committed complete replacements
+remain durable; an unfinished source run is recorded as `interrupted` with
+unknown coverage, so partial discovery never proves a session missing. An index
+or writer-cleanup failure retains precedence over the signal exit. A second
+signal, `SIGKILL`, or a process crash is not cooperative and keeps the existing
+conservative recovery behavior.
+
 `list` defaults to 50 and accepts 1 through 200. Activity is
 `updatedAt`, falling back to `createdAt`; missing activity sorts last, then
 activity descends, then the raw source/instance/native tuple ascends with binary
@@ -781,17 +790,21 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 `sessions index`, `sessions data repair-orphans`, and `sessions data compact`
 write one startup notice to interactive stderr warning that the operation may
 take a couple of minutes. Redirected or captured stderr remains quiet on
-success. This is expectation-setting only: it exposes no percentage, elapsed
-time, work total, ETA, cursor, partial outcome, or machine-readable progress
-contract.
+success. Interactive indexing also names its writer-open mode (`fast`, new
+library preparation, or full-library verification) and each active
+full-validation phase. These best-effort messages are non-versioned and
+non-semantic. They expose no path, identity, fingerprint, transcript value,
+percentage, elapsed time, work total, ETA, cursor, partial outcome, or
+machine-readable progress contract.
 
 The contributor diagnostic `SESSIONS_INDEX_TIMINGS=1 sessions index ...` is the
 only exception to quiet redirected stderr on successful indexing. It adds one
 prefixed aggregate JSON timing record to stderr after the operation while
 leaving stdout, the index report, and the exit code unchanged. It is not a
 versioned public DTO or progress contract and contains only fixed phase names,
-call counts, and elapsed milliseconds. Other values and commands ignore the
-switch.
+call counts, and elapsed milliseconds. Writer-open work is split into canonical,
+foreign-key, FTS structure, FTS content, FTS semantic, and FTS rebuild phases.
+Other values and commands ignore the switch.
 
 Unknown flags and values fail. Color is optional and honors `NO_COLOR`.
 Concurrent index/forget/repair/compact/clear ownership is a sanitized

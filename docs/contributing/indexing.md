@@ -38,6 +38,15 @@ never writes to the provider.
    owned generation, close the database, harden its files, and publish the
    private post-close proof last.
 
+Cooperative cancellation is checked before writer acquisition and between these
+application operations. It is not passed into provider adapters or SQLite
+transactions. Cancellation during discovery returns no candidate set;
+cancellation after a changed read discards that result before replacement; and
+cancellation after a committed replacement preserves the complete transaction.
+Checks around reconciliation and source completion prevent a partial scan from
+proving absence. Writer close records any still-active run as `interrupted` with
+unknown coverage.
+
 ## Guarantees and failures
 
 - An incomplete probe or primary discovery never proves that a retained session
@@ -69,6 +78,10 @@ never writes to the provider.
 - Recovery, migration, maintenance, abandoned work, or failed cleanup keeps the
   generation dirty and uses the existing full canonical, foreign-key, and FTS
   validation/repair path.
+- The first foreground `SIGINT` or `SIGTERM` requests cooperative cancellation
+  and maps a successfully cleaned stop to exit `130` or `143`. Operation and
+  cleanup errors keep their existing precedence. A crash, `SIGKILL`, or failed
+  cleanup remains dirty and requires full validation on the next writer.
 - Changed documents are reconstructed and digest-checked after replacement;
   affected canonical content IDs must match their FTS rows. Direct out-of-band
   SQLite edits are unsupported.
@@ -91,11 +104,11 @@ bounded failure handling, and last-good retention over parallel write throughput
 
 `SESSIONS_INDEX_TIMINGS=1 sessions index ...` measures the shipped indexing path.
 It writes one `sessions:index-timings` JSON record to stderr after the command.
-The fixed phases cover source resolution, writer open, availability and run
-probes, discovery,
-freshness reads, unchanged writes, changed reads, replacement, reconciliation,
-run bookkeeping, close, and total elapsed time. Each phase contains only a call
-count and elapsed milliseconds.
+The fixed phases cover source resolution, writer open, canonical validation,
+foreign keys, FTS structure/content/semantic validation, FTS rebuild,
+availability and run probes, discovery, freshness reads, unchanged writes,
+changed reads, replacement, reconciliation, run bookkeeping, close, and total
+elapsed time. Each phase contains only a call count and elapsed milliseconds.
 
 The source port returns an already normalized document, so
 `changedReadAndNormalize` honestly combines provider reading, adapter
@@ -108,12 +121,12 @@ paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
 clock, collection, and stderr failures are best-effort and cannot replace the
 underlying command result.
 
-The accepted baseline selected writer open as the measured owner. After the
-clean-generation fast path, a fixed synthetic 2,000-session exact-equality run
-used 2.767 ms for writer open and 264.666 ms total. An authorized read-only real
-Codex 120-session exact-cohort run used 3.262 ms and 366.055 ms, with zero
-changed reads. Both local budgets passed. These measurements are implementation
-evidence, not public performance guarantees.
+The fixed synthetic 2,000-session measurement now compares clean and deliberately
+unproven opens from equal cloned libraries. It requires equal reports, canonical
+and tracking state, health, representative queries, a final clean proof, and
+zero stable source reads. Its full-validation phase report identifies the
+dominant recovery owner without changing the clean-path budget. Measurements
+are implementation evidence, not public performance guarantees.
 
 ## Code and proofs
 
@@ -128,6 +141,7 @@ evidence, not public performance guarantees.
 - FTS structure, repair, and semantic doctor proof:
   `src/infrastructure/sqlite/fts-projection.ts`
 - Timing aggregation: `src/infrastructure/runtime/index-timings.ts`
+- Signal ownership: `src/infrastructure/runtime/index-interrupt.ts`
 - Tests: `test/application/run-index.sqlite.test.ts`,
   `test/application/discover-sessions.test.ts`,
   `test/infrastructure/sqlite-session-index.test.ts`

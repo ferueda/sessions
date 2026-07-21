@@ -19,7 +19,7 @@ import {
   SessionQueryUsageError,
 } from "../src/application/session-query-error.ts";
 import type { ProgramOptions } from "../src/cli/program.ts";
-import { runCli } from "../src/cli/run.ts";
+import { CliSignalExit, runCli } from "../src/cli/run.ts";
 import { StructuredOutputTooLargeError } from "../src/cli/structured-output-encoding.ts";
 import {
   completeCaptureScope,
@@ -80,6 +80,45 @@ describe("sessions CLI", () => {
       "stderr:Indexing sessions; this may take a couple of minutes.\n",
       `stderr:sessions: ${failure.message}\n`,
     ]);
+  });
+
+  test("reports bounded writer progress only on interactive stderr", async () => {
+    const index = vi.fn<ProgramOptions["index"]>(async (_source, options) => {
+      options?.progress?.({ kind: "writer-open-mode", mode: "full-validation" });
+      options?.progress?.({ kind: "writer-validation", phase: "fts-semantic" });
+      return indexReport(false);
+    });
+
+    const interactive = await invoke(
+      ["index", "--format", "json"],
+      { index },
+      {
+        interactive: true,
+      },
+    );
+    const redirected = await invoke(["index", "--format", "json"], { index });
+
+    expect(interactive.exitCode).toBe(0);
+    expect(interactive.stderr).toBe(
+      "Indexing sessions; this may take a couple of minutes.\n" +
+        "Verifying the full Sessions library; large libraries may take longer.\n" +
+        "Checking search index terms and positions.\n",
+    );
+    expect(JSON.parse(interactive.stdout)).toEqual(indexReport(false));
+    expect(redirected.stderr).toBe("");
+    expect(JSON.parse(redirected.stdout)).toEqual(indexReport(false));
+    expect(index.mock.calls[0]?.[1]?.progress).toEqual(expect.any(Function));
+    expect(index.mock.calls[1]).toEqual([undefined]);
+  });
+
+  test.each([130, 143] as const)("returns signal exit %s without stderr", async (exitCode) => {
+    const invocation = await invoke(["index"], {
+      index: async () => {
+        throw new CliSignalExit(exitCode);
+      },
+    });
+
+    expect(invocation).toEqual({ exitCode, stdout: "", stderr: "" });
   });
 
   test("shows the current command surface", async () => {

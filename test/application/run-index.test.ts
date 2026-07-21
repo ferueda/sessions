@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
+import { IndexInterruptedError } from "../../src/application/index-interruption.ts";
 import type { IndexLifecycle } from "../../src/application/ports/index-lifecycle.ts";
 import type {
   FinishIndexRunInput,
@@ -863,6 +864,195 @@ describe("runIndex", () => {
     expect((sourceError as AggregateError).errors).toEqual([operationError, finalizationError]);
     expect((error as AggregateError).errors[1]).toBe(closeError);
   });
+
+  test("an already-aborted index creates no writer state", async () => {
+    const source = createFakeIndexingSource();
+    const harness = createIndexHarness();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(source.probeCount).toBe(0);
+    expect(harness.openWriter).not.toHaveBeenCalled();
+    expect(harness.closeWriter).not.toHaveBeenCalled();
+  });
+
+  test("cancellation during discovery does not return candidates or reconcile absence", async () => {
+    const source = createFakeIndexingSource();
+    const harness = createIndexHarness();
+    const controller = new AbortController();
+    const candidate = source.candidate("partial");
+    const selected: SelectedSessionSource = {
+      instance: source.instance,
+      adapter: {
+        ...source.adapter,
+        async *discover(workspace) {
+          for await (const value of source.adapter.discover(workspace)) {
+            controller.abort();
+            yield value;
+          }
+        },
+      },
+    };
+    source.setDiscovery([candidate]);
+    const tracked = vi.spyOn(harness.index, "listTrackedIdentities");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(source.readNativeIds).toEqual([]);
+    expect(tracked).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toEqual([]);
+    expect(harness.closeWriter).toHaveBeenCalledOnce();
+  });
+
+  test("cancellation after a changed read discards it before replacement", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("session")]);
+    const harness = createIndexHarness();
+    const controller = new AbortController();
+    const selected: SelectedSessionSource = {
+      instance: source.instance,
+      adapter: {
+        ...source.adapter,
+        async read(candidate, workspace) {
+          const result = await source.adapter.read(candidate, workspace);
+          controller.abort();
+          return result;
+        },
+      },
+    };
+    const replace = vi.spyOn(harness.index, "replaceSession");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(source.readNativeIds).toEqual(["session"]);
+    expect(replace).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toEqual([]);
+  });
+
+  test("cancellation after replacement preserves the committed document and skips reconciliation", async () => {
+    const source = createFakeIndexingSource();
+    const candidate = source.candidate("session");
+    source.setDiscovery([candidate]);
+    const harness = createIndexHarness();
+    const controller = new AbortController();
+    const originalReplace = harness.index.replaceSession.bind(harness.index);
+    vi.spyOn(harness.index, "replaceSession").mockImplementation(async (run, replacement) => {
+      await originalReplace(run, replacement);
+      controller.abort();
+    });
+    const tracked = vi.spyOn(harness.index, "listTrackedIdentities");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    await expect(harness.index.getFreshness(candidate.identity)).resolves.toMatchObject({
+      status: "current",
+    });
+    expect(tracked).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toEqual([]);
+    expect(harness.closeWriter).toHaveBeenCalledOnce();
+  });
+
+  test("cancellation after tracked identities are loaded infers no missing sessions", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("tracked")]);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    source.setDiscovery([]);
+    const controller = new AbortController();
+    const originalList = harness.index.listTrackedIdentities.bind(harness.index);
+    vi.spyOn(harness.index, "listTrackedIdentities").mockImplementation(async (instance) => {
+      const result = await originalList(instance);
+      controller.abort();
+      return result;
+    });
+    const missing = vi.spyOn(harness.index, "recordMissing");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(missing).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toHaveLength(1);
+  });
+
+  test("a signal during successful writer close replaces success only after close", async () => {
+    const source = createFakeIndexingSource();
+    const controller = new AbortController();
+    const harness = createIndexHarness({ onClose: () => controller.abort() });
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(harness.index.finishedRuns[0]?.completion).toMatchObject({ status: "completed" });
+    expect(harness.closeWriter).toHaveBeenCalledOnce();
+  });
+
+  test("writer close failure retains precedence over a late signal", async () => {
+    const source = createFakeIndexingSource();
+    const controller = new AbortController();
+    const closeError = new Error("writer close failed");
+    const harness = createIndexHarness({
+      closeError,
+      onClose: () => controller.abort(),
+    });
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(closeError);
+  });
 });
 
 async function execute(harness: IndexHarness, sources: readonly SelectedSessionSource[]) {
@@ -873,12 +1063,20 @@ interface IndexHarness {
   readonly lifecycle: IndexLifecycle;
   readonly index: MemorySessionIndex;
   readonly openWriter: ReturnType<typeof vi.fn>;
+  readonly closeWriter: ReturnType<typeof vi.fn>;
 }
 
 function createIndexHarness(
-  options: MemoryIndexOptions & { readonly closeError?: unknown } = {},
+  options: MemoryIndexOptions & {
+    readonly closeError?: unknown;
+    readonly onClose?: () => void;
+  } = {},
 ): IndexHarness {
   const index = new MemorySessionIndex(options);
+  const closeWriter = vi.fn<() => Promise<void>>(async () => {
+    options.onClose?.();
+    if (Object.hasOwn(options, "closeError")) throw options.closeError;
+  });
   const openWriter = vi.fn<IndexLifecycle["openWriter"]>(async () => ({
     state: {
       status: "ready" as const,
@@ -888,9 +1086,7 @@ function createIndexHarness(
     },
     sessions: index,
     workspace: syntheticCaptureWorkspace,
-    async close() {
-      if (Object.hasOwn(options, "closeError")) throw options.closeError;
-    },
+    close: closeWriter,
   }));
   const unsupported = async (): Promise<never> => {
     throw new Error("not used by runIndex");
@@ -898,6 +1094,7 @@ function createIndexHarness(
   return {
     index,
     openWriter,
+    closeWriter,
     lifecycle: {
       openWriter,
       openReader: unsupported,

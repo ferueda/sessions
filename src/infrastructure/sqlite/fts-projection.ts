@@ -1,5 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  reportIndexProgress,
+  type IndexProgressObserver,
+  type IndexWriterValidationPhase,
+} from "../../application/index-progress.ts";
+import {
+  timeIndexSyncOperation,
+  type IndexTimingPhase,
+  type IndexTimingRecorder,
+} from "../../application/index-timing.ts";
 import { runLeasedImmediateTransaction, type WriterLeaseIdentity } from "./writer-lease.ts";
 
 export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
@@ -68,6 +78,8 @@ export interface RepairFtsProjectionOptions {
   readonly assertCanonicalIntegrity: () => void;
   readonly lease: WriterLeaseIdentity;
   readonly now: () => Date;
+  readonly progress?: IndexProgressObserver;
+  readonly timing?: IndexTimingRecorder;
 }
 
 export class SqliteFtsProjectionRepairError extends Error {
@@ -102,22 +114,32 @@ export function repairFtsProjection(
     return runLeasedImmediateTransaction(database, options.lease, { now: options.now }, () => {
       assertCanonical(options.assertCanonicalIntegrity);
 
-      const before = inspectFtsProjectionSafely(database);
-      if (before.structure && before.content && ftsProjectionSemanticContentIsValid(database)) {
+      const before = inspectFtsProjectionSafely(database, options);
+      if (
+        before.structure &&
+        before.content &&
+        observeRepairPhase(options, "fts-semantic", "writerFullValidationFtsSemantic", () =>
+          ftsProjectionSemanticContentIsValid(database),
+        )
+      ) {
         return false;
       }
 
-      dropFtsProjection(database);
-      database.exec(FTS_PROJECTION_SCHEMA_SQL);
-      database.exec(
-        `INSERT INTO sessions_content_fts (sessions_content_fts)
-         VALUES ('rebuild')`,
-      );
-      const repaired = inspectFtsProjection(database);
+      observeRepairPhase(options, "fts-rebuild", "writerFullValidationFtsRebuild", () => {
+        dropFtsProjection(database);
+        database.exec(FTS_PROJECTION_SCHEMA_SQL);
+        database.exec(
+          `INSERT INTO sessions_content_fts (sessions_content_fts)
+             VALUES ('rebuild')`,
+        );
+      });
+      const repaired = inspectFtsProjectionForRepair(database, options);
       if (
         !repaired.structure ||
         !repaired.content ||
-        !ftsProjectionSemanticContentIsValid(database)
+        !observeRepairPhase(options, "fts-semantic", "writerFullValidationFtsSemantic", () =>
+          ftsProjectionSemanticContentIsValid(database),
+        )
       ) {
         throw new SqliteFtsProjectionRepairError("projection-repair-failed");
       }
@@ -286,12 +308,45 @@ export function assertFtsProjectionContentParityForIds(
   }
 }
 
-function inspectFtsProjectionSafely(database: DatabaseSync): FtsProjectionHealth {
+function inspectFtsProjectionForRepair(
+  database: DatabaseSync,
+  options: RepairFtsProjectionOptions,
+): FtsProjectionHealth {
+  return {
+    structure: observeRepairPhase(
+      options,
+      "fts-structure",
+      "writerFullValidationFtsStructure",
+      () => ftsProjectionStructureIsValid(database),
+    ),
+    content: observeRepairPhase(options, "fts-content", "writerFullValidationFtsContent", () =>
+      ftsProjectionContentIsValid(database),
+    ),
+  };
+}
+
+function inspectFtsProjectionSafely(
+  database: DatabaseSync,
+  options: RepairFtsProjectionOptions,
+): FtsProjectionHealth {
   try {
-    return inspectFtsProjection(database);
+    return inspectFtsProjectionForRepair(database, options);
   } catch {
     return { structure: false, content: false };
   }
+}
+
+function observeRepairPhase<T>(
+  options: RepairFtsProjectionOptions,
+  progressPhase: IndexWriterValidationPhase,
+  timingPhase: IndexTimingPhase,
+  operation: () => T,
+): T {
+  reportIndexProgress(options.progress, {
+    kind: "writer-validation",
+    phase: progressPhase,
+  });
+  return timeIndexSyncOperation(options.timing, timingPhase, operation);
 }
 
 interface DoctorContentRow {

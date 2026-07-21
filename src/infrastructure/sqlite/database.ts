@@ -7,7 +7,10 @@ import type {
   IndexPaths,
   IndexReader,
   IndexWriter,
+  IndexWriterOpenOptions,
 } from "../../application/ports/index-lifecycle.ts";
+import { reportIndexProgress } from "../../application/index-progress.ts";
+import { timeIndexSyncOperation } from "../../application/index-timing.ts";
 import type { SessionIndexReader } from "../../application/ports/session-index.ts";
 import type { SessionQueryRepository } from "../../application/ports/session-query.ts";
 import type { IndexState, ReadyIndexState } from "../../domain/index-state.ts";
@@ -89,7 +92,7 @@ export interface SqliteIndexWriter extends IndexWriter {
 
 export interface SqliteIndexLifecycle extends IndexLifecycle {
   openReader(paths: IndexPaths): Promise<SqliteIndexReader>;
-  openWriter(paths: IndexPaths): Promise<SqliteIndexWriter>;
+  openWriter(paths: IndexPaths, options?: IndexWriterOpenOptions): Promise<SqliteIndexWriter>;
 }
 
 export interface SqliteIndexLifecycleOptions {
@@ -166,7 +169,7 @@ export function createSqliteIndexLifecycle(
       return createReader(snapshot, state);
     },
 
-    async openWriter(paths) {
+    async openWriter(paths, writerOptions = {}) {
       await refuseSidecarOnlyWriterState(paths, platform, supportedSchemaVersion);
       const preCreateFts5Security = (await fileIsAbsent(paths.database)) ? fts5Probe() : undefined;
       let databaseCreated = false;
@@ -240,15 +243,42 @@ export function createSqliteIndexLifecycle(
           throw new Error("SQLite migrations did not reach the supported schema");
         }
         await secureIndexFiles(paths, { platform });
-        if (!acquired.fastPathEligible || !ftsProjectionStructureIsValid(database)) {
+        const fastPathEligible =
+          acquired.fastPathEligible && ftsProjectionStructureIsValid(database);
+        reportIndexProgress(writerOptions.progress, {
+          kind: "writer-open-mode",
+          mode: fastPathEligible ? "fast" : databaseCreated ? "bootstrap" : "full-validation",
+        });
+        if (!fastPathEligible) {
           repairFtsProjection(database, {
             assertCanonicalIntegrity: () => {
-              if (!canonicalIntegrityIsValid(database) || !foreignKeysAreValid(database)) {
+              reportIndexProgress(writerOptions.progress, {
+                kind: "writer-validation",
+                phase: "canonical",
+              });
+              const canonicalValid = timeIndexSyncOperation(
+                writerOptions.timing,
+                "writerFullValidationCanonical",
+                () => canonicalIntegrityIsValid(database),
+              );
+              if (!canonicalValid) {
                 throw new Error("Canonical SQLite integrity check failed");
               }
+              reportIndexProgress(writerOptions.progress, {
+                kind: "writer-validation",
+                phase: "foreign-keys",
+              });
+              const foreignKeysValid = timeIndexSyncOperation(
+                writerOptions.timing,
+                "writerFullValidationForeignKeys",
+                () => foreignKeysAreValid(database),
+              );
+              if (!foreignKeysValid) throw new Error("Canonical SQLite integrity check failed");
             },
             lease: ownedLease,
             now,
+            ...(writerOptions.progress === undefined ? {} : { progress: writerOptions.progress }),
+            ...(writerOptions.timing === undefined ? {} : { timing: writerOptions.timing }),
           });
         }
         // Persistent FTS configuration is a write and must happen only after
