@@ -6,7 +6,9 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import { IndexInterruptedError } from "../../src/application/index-interruption.ts";
+import type { IndexLifecycle, IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
+import type { SessionIndexWriter } from "../../src/application/ports/session-index.ts";
 import type {
   DiscoveredSession,
   SelectedSessionSource,
@@ -17,6 +19,8 @@ import { runIndex } from "../../src/application/run-index.ts";
 import { SourceFailureError } from "../../src/application/source-failure.ts";
 import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { readWriterCleanProof } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
 import { createFakeIndexingSource } from "../fixtures/indexing-source.ts";
 
 const temporaryDirectories: string[] = [];
@@ -591,7 +595,149 @@ describe("runIndex with SQLite", () => {
     await expect(reader.sessions.getDocument(secondIdentity)).resolves.toBeDefined();
     await reader.close();
   });
+
+  test("cooperative cancellation preserves committed and untouched last-good documents", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const alpha = sessionIdentity(source.instance, "alpha");
+    const zeta = sessionIdentity(source.instance, "zeta");
+    source.setDiscovery([
+      source.candidate("alpha", "baseline-alpha"),
+      source.candidate("zeta", "baseline-zeta"),
+    ]);
+    source.setDocument("alpha", document(alpha, "old alpha"));
+    source.setDocument("zeta", document(zeta, "old zeta"));
+    await index(lifecycle, paths, source.selected);
+
+    source.setDiscovery([
+      source.candidate("alpha", "changed-alpha"),
+      source.candidate("zeta", "changed-zeta"),
+    ]);
+    source.setDocument("alpha", document(alpha, "new alpha"));
+    source.setDocument("zeta", document(zeta, "new zeta must not commit"));
+    const controller = new AbortController();
+    const cancellingLifecycle = cancelAfterFirstReplacement(lifecycle, controller);
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: cancellingLifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    const reader = await lifecycle.openReader(paths);
+    await expect(reader.sessions.getDocument(alpha)).resolves.toMatchObject({ title: "new alpha" });
+    await expect(reader.sessions.getDocument(zeta)).resolves.toMatchObject({ title: "old zeta" });
+    await reader.close();
+
+    const state = readCancellationState(paths);
+    expect(state.run).toMatchObject({
+      status: "interrupted",
+      failure_code: "interrupted",
+      discovered_count: 1,
+      updated_count: 1,
+      missing_count: 0,
+    });
+    expect(state.source).toMatchObject({ coverage_status: "unknown" });
+    expect(state.zeta).toMatchObject({
+      latest_fingerprint_digest: source.candidate("zeta", "baseline-zeta").aggregateFingerprint
+        .digest,
+      presence_status: "present",
+    });
+    expect(state.lease).toMatchObject({
+      purpose: null,
+      clean_generation: state.lease.generation,
+    });
+    expect(readWriterLeaseHealth(state.database, { now: () => new Date() })).toEqual({
+      status: "free",
+      generation: state.lease.generation,
+    });
+    state.database.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toMatchObject({
+      writerGeneration: state.lease.generation,
+    });
+  });
+
+  test("cleanup failure after cancellation suppresses the clean proof and next fast open", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("session")]);
+    const controller = new AbortController();
+    const cancellingLifecycle = cancelAfterFirstReplacement(lifecycle, controller, async () => {
+      await rm(paths.scratch, { force: true, recursive: true });
+      await writeFile(paths.scratch, "unsafe scratch replacement");
+    });
+
+    const error = await runIndex({
+      paths,
+      sources: [source.selected],
+      lifecycle: cancellingLifecycle,
+      clock: clock(),
+      signal: controller.signal,
+    }).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[0]).toBeInstanceOf(IndexInterruptedError);
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeUndefined();
+
+    await rm(paths.scratch, { force: true });
+    const modes: string[] = [];
+    const writer = await lifecycle.openWriter(paths, {
+      progress(event) {
+        if (event.kind === "writer-open-mode") modes.push(event.mode);
+      },
+    });
+    await writer.close();
+    expect(modes).toEqual(["full-validation"]);
+  });
 });
+
+function cancelAfterFirstReplacement(
+  lifecycle: ReturnType<typeof createSqliteIndexLifecycle>,
+  controller: AbortController,
+  afterReplacement?: () => Promise<void>,
+): IndexLifecycle {
+  return {
+    inspect: (paths) => lifecycle.inspect(paths),
+    inspectHealth: (paths) => lifecycle.inspectHealth(paths),
+    openReader: (paths) => lifecycle.openReader(paths),
+    async openWriter(paths, options) {
+      const writer = await lifecycle.openWriter(paths, options);
+      let replacements = 0;
+      const sessions = new Proxy(writer.sessions, {
+        get(target, property) {
+          if (property === "replaceSession") {
+            return async (...args: Parameters<SessionIndexWriter["replaceSession"]>) => {
+              const result = await target.replaceSession(...args);
+              replacements += 1;
+              if (replacements === 1) {
+                await afterReplacement?.();
+                controller.abort();
+              }
+              return result;
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      return {
+        state: writer.state,
+        sessions,
+        workspace: writer.workspace,
+        close: () => writer.close(),
+      };
+    },
+  };
+}
 
 async function index(
   lifecycle: ReturnType<typeof createSqliteIndexLifecycle>,
@@ -705,4 +851,54 @@ function readTrackingState(paths: IndexPaths, identity: SessionIdentity): Record
   } finally {
     database.close();
   }
+}
+
+function readCancellationState(paths: IndexPaths): {
+  readonly database: DatabaseSync;
+  readonly run: Record<string, unknown>;
+  readonly source: Record<string, unknown>;
+  readonly zeta: Record<string, unknown>;
+  readonly lease: {
+    readonly generation: number;
+    readonly clean_generation: number | null;
+    readonly purpose: string | null;
+  };
+} {
+  const database = new DatabaseSync(paths.database, { readOnly: true });
+  const run = database
+    .prepare(
+      `SELECT status,
+              failure_code,
+              discovered_count,
+              indexed_count AS updated_count,
+              missing_count
+       FROM sessions_index_runs
+       ORDER BY run_id DESC
+       LIMIT 1`,
+    )
+    .get() as Record<string, unknown>;
+  const source = database
+    .prepare(
+      `SELECT coverage_status, coverage_observed_at
+       FROM sessions_source_instances
+       WHERE kind = 'synthetic' AND instance_id = 'default'`,
+    )
+    .get() as Record<string, unknown>;
+  const zeta = database
+    .prepare(
+      `SELECT tracking.latest_fingerprint_digest, tracking.presence_status
+       FROM sessions_session_tracking AS tracking
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       WHERE source.kind = 'synthetic'
+         AND source.instance_id = 'default'
+         AND tracking.native_id = 'zeta'`,
+    )
+    .get() as Record<string, unknown>;
+  const lease = database.prepare("SELECT * FROM sessions_writer_lease").get() as {
+    readonly generation: number;
+    readonly clean_generation: number | null;
+    readonly purpose: string | null;
+  };
+  return { database, run, source, zeta, lease };
 }

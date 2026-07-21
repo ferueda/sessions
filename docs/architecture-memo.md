@@ -396,8 +396,18 @@ persistence trust is lost. Sources run sequentially; V1 adds no daemon or
 parallel indexing. The bounded fresh-candidate retry adds no separate
 application probe, sleep, backoff, per-candidate rediscovery, or retry loop.
 Indexing and the two potentially long data-maintenance commands write only an
-interactive startup notice that they may take a couple of minutes; they expose no
-semantic work-count or continuation-progress contract.
+interactive startup notice that they may take a couple of minutes. Indexing also
+writes bounded interactive writer-mode and full-validation phase labels. These
+labels expose no sensitive value, semantic work count, percentage, ETA, or
+continuation-progress contract.
+
+Foreground indexing owns `SIGINT` and `SIGTERM` cooperatively. The application
+checks cancellation only between provider/application operations and outside
+SQLite transactions. A clean stop closes through the normal exact-generation
+path, marks any active run interrupted with unknown coverage, preserves complete
+committed replacements and untouched last-good documents, and exits `130` or
+`143`. Cleanup uncertainty, crash, or `SIGKILL` remains dirty and forces the
+next full validation.
 
 List, search, and entries are self-describing about capture scope. One
 page-level aggregate reports tracked, retained-current, retained-stale,
@@ -1020,7 +1030,9 @@ smoke ownership are complete.
 
 All-tracked complete-scan reconciliation, honest aggregate capture scope, and
 bounded fresh-candidate recovery after `source-changed` are implemented.
-Opt-in timing is implemented and preserves exact control/timed results. The
+Opt-in timing is implemented and preserves exact control/timed results. Writer
+open now separates canonical, foreign-key, FTS structure/content/semantic, and
+FTS rebuild ownership. The
 fixed synthetic stable run attributed 282.069 of 532.902 ms to writer open; the
 authorized real Codex 120-session stable run attributed 3,177.450 of 3,553.177
 ms to writer open, with discovery at 354.958 ms and all freshness plus unchanged
@@ -1075,7 +1087,9 @@ reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.767
 ms writer open / 264.666 ms total. The authorized read-only real Codex
 120-session exact-cohort proof measured 3.262 ms / 366.055 ms with zero changed
 reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
-correctness remains their only gate.
+correctness remains their only gate. The fixed generic measurement also consumes
+the proof on an equal clone, requires semantic equality with the clean run and
+zero stable source reads, and reports the dominant full-validation phase.
 
 ### Phase 7 — Equivalent second adapter (complete)
 

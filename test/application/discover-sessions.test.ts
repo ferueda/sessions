@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { discoverSessions } from "../../src/application/discover-sessions.ts";
+import { IndexInterruptedError } from "../../src/application/index-interruption.ts";
 import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import type {
   DiscoveredSession,
@@ -84,6 +85,32 @@ describe("discoverSessions", () => {
     await expect(
       discoverSessions(selectSessionSource(sourceInstance, adapter), syntheticCaptureWorkspace),
     ).resolves.toEqual({ complete: false, candidates: [] });
+  });
+
+  test("rethrows cancellation during iteration without returning partial candidates", async () => {
+    const controller = new AbortController();
+    const adapter: SessionSource = {
+      kind: sourceInstance.kind,
+      async probe() {
+        return readyProbe();
+      },
+      async *discover() {
+        yield candidate("one");
+        controller.abort();
+        yield candidate("two");
+      },
+      async read(value) {
+        return document(value);
+      },
+    };
+
+    await expect(
+      discoverSessions(
+        selectSessionSource(sourceInstance, adapter),
+        syntheticCaptureWorkspace,
+        controller.signal,
+      ),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
   });
 
   test("passes the exact writer-owned workspace to discovery", async () => {

@@ -39,6 +39,10 @@ import {
   createSqliteIndexLifecycle,
   type SqliteIndexLifecycle,
 } from "../src/infrastructure/sqlite/database.ts";
+import {
+  consumeWriterCleanProof,
+  readWriterCleanProof,
+} from "../src/infrastructure/sqlite/writer-clean-proof.ts";
 
 const CORPUS_SESSIONS = 2_000;
 const ENTRIES_PER_SESSION = 2;
@@ -103,6 +107,7 @@ async function main(): Promise<void> {
     const seedPaths = pathsAt(path.join(temporaryRoot, "seed"));
     const controlPaths = pathsAt(path.join(temporaryRoot, "control"));
     const timedPaths = pathsAt(path.join(temporaryRoot, "timed"));
+    const recoveryPaths = pathsAt(path.join(temporaryRoot, "full-validation"));
     const seedLifecycle = lifecycleAt(SEED_AT);
     const seedSource = createMeasurementSource(corpus, true);
     const seedCollector = createIndexTimingCollector();
@@ -124,36 +129,72 @@ async function main(): Promise<void> {
 
     await cloneDatabase(seedPaths, controlPaths);
     await cloneDatabase(seedPaths, timedPaths);
+    await cloneDatabase(seedPaths, recoveryPaths);
     await prepareCleanStableLibrary(controlPaths);
     await prepareCleanStableLibrary(timedPaths);
+    await prepareCleanStableLibrary(recoveryPaths);
     const controlSeededState = readSemanticState(controlPaths);
     const timedSeededState = readSemanticState(timedPaths);
+    const recoverySeededState = readSemanticState(recoveryPaths);
     assert.deepStrictEqual(
       timedSeededState,
       controlSeededState,
       "timed and control libraries differ before the stable run",
+    );
+    assert.deepStrictEqual(
+      recoverySeededState,
+      controlSeededState,
+      "full-validation and control libraries differ before the stable run",
     );
 
     const control = await runStable(controlPaths, corpus);
     const collector = createIndexTimingCollector();
     const timed = await runStable(timedPaths, corpus, collector);
     const timing = collector.snapshot();
+    const consumed = await consumeWriterCleanProof(recoveryPaths.database);
+    assert(consumed !== undefined, "full-validation fixture had no clean proof to consume");
+    const recoveryCollector = createIndexTimingCollector();
+    const recovery = await runStable(recoveryPaths, corpus, recoveryCollector);
+    const recoveryTiming = recoveryCollector.snapshot();
 
     assertStableCounts(control.report, CORPUS_SESSIONS, 0);
     assertStableCounts(timed.report, CORPUS_SESSIONS, 0);
     assert.equal(control.sourceReads, 0, "control stable run unexpectedly read a source document");
     assert.equal(timed.sourceReads, 0, "timed stable run unexpectedly read a source document");
+    assert.equal(
+      recovery.sourceReads,
+      0,
+      "full-validation stable run unexpectedly read a source document",
+    );
     assert.deepStrictEqual(timed.report, control.report, "timing changed the index report");
+    assert.deepStrictEqual(
+      recovery.report,
+      control.report,
+      "full validation changed the index report",
+    );
     assert.deepStrictEqual(timed.state, control.state, "timing changed retained SQLite state");
+    assert.deepStrictEqual(
+      recovery.state,
+      control.state,
+      "full validation changed retained SQLite state",
+    );
     assert.deepStrictEqual(timed.health, control.health, "timing changed index health");
+    assert.deepStrictEqual(recovery.health, control.health, "full validation changed index health");
     assert.deepStrictEqual(timed.queries, control.queries, "timing changed query results");
+    assert.deepStrictEqual(
+      recovery.queries,
+      control.queries,
+      "full validation changed query results",
+    );
     assert.equal(control.health.ok, true, "control library health is not ready");
     assertStableTransition(controlSeededState, control.state);
     assertStableTransition(timedSeededState, timed.state);
+    assertStableTransition(recoverySeededState, recovery.state);
     assertRepresentativeQueries(control.queries);
-    assertTimingOwnership(timing);
+    assertStableTimingOwnership(timing, false);
+    assertStableTimingOwnership(recoveryTiming, true);
 
-    report = createOutput(seedTiming, timing);
+    report = createOutput(seedTiming, timing, recoveryTiming);
   } catch (error) {
     failure = error;
   } finally {
@@ -504,13 +545,19 @@ function assertStableTransition(before: SemanticState, after: SemanticState): vo
   );
 }
 
-function assertTimingOwnership(snapshot: IndexTimingSnapshot): void {
+function assertStableTimingOwnership(snapshot: IndexTimingSnapshot, fullValidation: boolean): void {
   const calls = Object.fromEntries(
     Object.entries(snapshot.phases).map(([phase, aggregate]) => [phase, aggregate.calls]),
   );
   assert.deepStrictEqual(calls, {
     sourceResolution: 0,
     writerOpen: 1,
+    writerFullValidationCanonical: fullValidation ? 1 : 0,
+    writerFullValidationForeignKeys: fullValidation ? 1 : 0,
+    writerFullValidationFtsStructure: fullValidation ? 1 : 0,
+    writerFullValidationFtsContent: fullValidation ? 1 : 0,
+    writerFullValidationFtsSemantic: fullValidation ? 1 : 0,
+    writerFullValidationFtsRebuild: 0,
     sourceProbe: 1,
     sourceDiscovery: 1,
     freshnessRead: CORPUS_SESSIONS,
@@ -532,6 +579,12 @@ function assertSeedTimingOwnership(snapshot: IndexTimingSnapshot): void {
   assert.deepStrictEqual(calls, {
     sourceResolution: 0,
     writerOpen: 1,
+    writerFullValidationCanonical: 1,
+    writerFullValidationForeignKeys: 1,
+    writerFullValidationFtsStructure: 1,
+    writerFullValidationFtsContent: 1,
+    writerFullValidationFtsSemantic: 1,
+    writerFullValidationFtsRebuild: 0,
     sourceProbe: 1,
     sourceDiscovery: 1,
     freshnessRead: CORPUS_SESSIONS,
@@ -615,6 +668,10 @@ async function prepareCleanStableLibrary(paths: IndexPaths): Promise<void> {
 async function assertCleanDatabase(paths: IndexPaths): Promise<void> {
   const sidecars = await Promise.all([exists(paths.wal), exists(paths.shm), exists(paths.scratch)]);
   assert.deepStrictEqual(sidecars, [false, false, false], "measurement library retained sidecars");
+  assert(
+    (await readWriterCleanProof(paths.database)) !== undefined,
+    "measurement library has no matching clean proof",
+  );
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -677,7 +734,11 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function createOutput(seedTiming: IndexTimingSnapshot, timing: IndexTimingSnapshot) {
+function createOutput(
+  seedTiming: IndexTimingSnapshot,
+  timing: IndexTimingSnapshot,
+  recoveryTiming: IndexTimingSnapshot,
+) {
   return {
     corpus: {
       sessions: CORPUS_SESSIONS,
@@ -697,7 +758,8 @@ function createOutput(seedTiming: IndexTimingSnapshot, timing: IndexTimingSnapsh
       zeroStableSourceReads: true,
     },
     seedTimings: seedTiming.phases,
-    timings: timing.phases,
+    cleanTimings: timing.phases,
+    fullValidationTimings: recoveryTiming.phases,
   };
 }
 

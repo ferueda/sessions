@@ -5,6 +5,7 @@ import {
   type SelectedSessionSource,
   type SourceCaptureWorkspace,
 } from "./ports/session-source.ts";
+import { isIndexInterruptedError, throwIfIndexInterrupted } from "./index-interruption.ts";
 import { admitDiscoveredSession, type AdmittedDiscoveredSession } from "./validate-session.ts";
 
 export type DiscoveryPreflight =
@@ -21,12 +22,15 @@ export type DiscoveryPreflight =
 export async function discoverSessions(
   selection: SelectedSessionSource,
   workspace: SourceCaptureWorkspace,
+  signal?: AbortSignal,
 ): Promise<DiscoveryPreflight> {
   const candidates = new Map<string, AdmittedDiscoveredSession>();
   let complete = true;
 
   try {
+    throwIfIndexInterrupted(signal);
     for await (const value of selection.adapter.discover(workspace)) {
+      throwIfIndexInterrupted(signal);
       const result = admitDiscoveredSession(value);
       if (!result.ok || !belongsToSelection(result.admitted, selection)) {
         complete = false;
@@ -41,7 +45,9 @@ export async function discoverSessions(
         complete = false;
       }
     }
+    throwIfIndexInterrupted(signal);
   } catch (error) {
+    if (isIndexInterruptedError(error)) throw error;
     if (error instanceof SourceCaptureWorkspaceError) throw error;
     complete = false;
   }

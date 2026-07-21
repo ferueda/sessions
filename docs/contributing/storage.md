@@ -53,6 +53,13 @@ matching clean seal and proof uses constant-size schema/FTS structure checks;
 dirty, recovery, migration, maintenance, or cleanup-failure state uses full
 canonical, foreign-key, and FTS validation/repair.
 
+A cooperative index cancellation uses the same exact-owner close path. It may
+seal the cancelled generation only after active runs are interrupted, workspace
+cleanup and heartbeat shutdown succeed, the database closes and hardens, and
+transactional integrity remains certain. If any of those steps fails, no proof
+is published and the next writer performs full validation. Abrupt process exit
+and `SIGKILL` never gain a fast-path exception.
+
 ## Guarantees and cost
 
 - Hash or document mismatches, malformed stored values, and unsupported schema

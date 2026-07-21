@@ -16,10 +16,12 @@ import { listSessions } from "../application/list-sessions.ts";
 import { listSessionEntries } from "../application/list-session-entries.ts";
 import { runDoctor } from "../application/run-doctor.ts";
 import { runIndex } from "../application/run-index.ts";
+import { isIndexInterruptedError } from "../application/index-interruption.ts";
+import type { IndexProgressObserver } from "../application/index-progress.ts";
 import { searchSessions } from "../application/search-sessions.ts";
 import { showSession } from "../application/show-session.ts";
 import { createSourceDiagnostic } from "../application/source-diagnostic.ts";
-import { runCli } from "../cli/run.ts";
+import { CliSignalExit, runCli } from "../cli/run.ts";
 import { createNodeDiagnostic } from "../infrastructure/runtime/node-diagnostic.ts";
 import { createIndexStateDiagnostic } from "../infrastructure/state/index-state-diagnostic.ts";
 import { resolveIndexPaths } from "../infrastructure/state/paths.ts";
@@ -30,6 +32,7 @@ import {
   createIndexTimingCollector,
   encodeIndexTimingDiagnostic,
 } from "../infrastructure/runtime/index-timings.ts";
+import { installIndexInterrupt } from "../infrastructure/runtime/index-interrupt.ts";
 
 const require = createRequire(import.meta.url);
 const manifest = require("../../package.json") as { version?: unknown };
@@ -61,39 +64,59 @@ const resolvePaths = () =>
     homeDirectory: homedir(),
   });
 
-const indexSessions = async (source: string | undefined) => {
-  if (!indexTimingsEnabled) {
-    return runIndex({
-      paths: resolvePaths(),
-      sources: await resolveIndexSources(source),
-      sourceSelection: source === undefined ? "optional" : "required",
-      lifecycle: indexLifecycle,
-      clock: { now: () => new Date() },
-    });
-  }
-
-  const collector = createIndexTimingCollector();
+const executeIndex = async (
+  source: string | undefined,
+  signal: AbortSignal,
+  progress: IndexProgressObserver | undefined,
+) => {
+  const collector = indexTimingsEnabled ? createIndexTimingCollector() : undefined;
   try {
-    return await timeIndexOperation(collector.recorder, "total", async () => {
+    const execute = async () => {
       const paths = resolvePaths();
-      const sources = await timeIndexOperation(collector.recorder, "sourceResolution", () =>
-        resolveIndexSources(source),
-      );
+      const sources = collector
+        ? await timeIndexOperation(collector.recorder, "sourceResolution", () =>
+            resolveIndexSources(source),
+          )
+        : await resolveIndexSources(source);
       return runIndex({
         paths,
         sources,
         sourceSelection: source === undefined ? "optional" : "required",
         lifecycle: indexLifecycle,
         clock: { now: () => new Date() },
-        timing: collector.recorder,
+        signal,
+        ...(progress === undefined ? {} : { progress }),
+        ...(collector === undefined ? {} : { timing: collector.recorder }),
       });
-    });
+    };
+    return collector === undefined
+      ? await execute()
+      : await timeIndexOperation(collector.recorder, "total", execute);
   } finally {
-    try {
-      process.stderr.write(encodeIndexTimingDiagnostic(collector.snapshot()));
-    } catch {
-      // Opt-in timing output is best-effort and must not change indexing.
+    if (collector !== undefined) {
+      try {
+        process.stderr.write(encodeIndexTimingDiagnostic(collector.snapshot()));
+      } catch {
+        // Opt-in timing output is best-effort and must not change indexing.
+      }
     }
+  }
+};
+
+const indexSessions = async (
+  source: string | undefined,
+  options: { readonly progress?: IndexProgressObserver } = {},
+) => {
+  const interrupt = installIndexInterrupt();
+  try {
+    return await executeIndex(source, interrupt.signal, options.progress);
+  } catch (error) {
+    if (isIndexInterruptedError(error) && interrupt.interruption !== undefined) {
+      throw new CliSignalExit(interrupt.interruption.exitCode);
+    }
+    throw error;
+  } finally {
+    interrupt.dispose();
   }
 };
 

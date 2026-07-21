@@ -1,6 +1,12 @@
 export const INDEX_TIMING_PHASES = [
   "sourceResolution",
   "writerOpen",
+  "writerFullValidationCanonical",
+  "writerFullValidationForeignKeys",
+  "writerFullValidationFtsStructure",
+  "writerFullValidationFtsContent",
+  "writerFullValidationFtsSemantic",
+  "writerFullValidationFtsRebuild",
   "sourceProbe",
   "sourceDiscovery",
   "freshnessRead",
@@ -31,6 +37,31 @@ export async function timeIndexOperation<T>(
   const startedAt = readMonotonicClock(recorder);
   try {
     return await operation();
+  } finally {
+    if (startedAt !== undefined) {
+      const finishedAt = readMonotonicClock(recorder);
+      if (finishedAt !== undefined && finishedAt >= startedAt) {
+        try {
+          recorder.record(phase, finishedAt - startedAt);
+        } catch {
+          // Timing is diagnostic-only and must never replace the operation result.
+        }
+      }
+    }
+  }
+}
+
+/** Measure synchronous writer work without letting diagnostics affect its outcome. */
+export function timeIndexSyncOperation<T>(
+  recorder: IndexTimingRecorder | undefined,
+  phase: IndexTimingPhase,
+  operation: () => T,
+): T {
+  if (recorder === undefined) return operation();
+
+  const startedAt = readMonotonicClock(recorder);
+  try {
+    return operation();
   } finally {
     if (startedAt !== undefined) {
       const finishedAt = readMonotonicClock(recorder);

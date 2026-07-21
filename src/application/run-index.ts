@@ -1,5 +1,7 @@
 import { compareBinaryStrings, discoverSessions } from "./discover-sessions.ts";
 import { admitSourceProbe } from "./admit-source-probe.ts";
+import { isIndexInterruptedError, throwIfIndexInterrupted } from "./index-interruption.ts";
+import type { IndexProgressObserver } from "./index-progress.ts";
 import { timeIndexOperation, type IndexTimingRecorder } from "./index-timing.ts";
 import { mapLibraryBusyError } from "./library-error.ts";
 import {
@@ -43,6 +45,8 @@ export interface RunIndexInput {
   readonly sourceSelection?: "required" | "optional";
   readonly lifecycle: IndexLifecycle;
   readonly clock: IndexClock;
+  readonly progress?: IndexProgressObserver;
+  readonly signal?: AbortSignal;
   readonly timing?: IndexTimingRecorder;
 }
 
@@ -56,28 +60,44 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   let operationFailed = false;
 
   try {
+    throwIfIndexInterrupted(input.signal);
     const skipped = await preflightOptionalSources(
       selections,
       input.sourceSelection ?? "required",
       input.clock,
+      input.signal,
       input.timing,
     );
+    throwIfIndexInterrupted(input.signal);
     const sourceReports: IndexSourceReport[] = [];
     const attempted = selections.filter((selection) => !skipped.has(selection));
     if (attempted.length > 0) {
       writer = await timeIndexOperation(input.timing, "writerOpen", () =>
-        input.lifecycle.openWriter(input.paths),
+        input.lifecycle.openWriter(input.paths, {
+          ...(input.progress === undefined ? {} : { progress: input.progress }),
+          ...(input.timing === undefined ? {} : { timing: input.timing }),
+        }),
       );
+      throwIfIndexInterrupted(input.signal);
     }
     for (const selection of selections) {
+      throwIfIndexInterrupted(input.signal);
       const skippedReport = skipped.get(selection);
       if (skippedReport !== undefined) {
         sourceReports.push(skippedReport);
       } else {
         if (writer === undefined) throw new Error("Attempted indexing requires a writer");
         sourceReports.push(
-          await runSource(writer.sessions, writer.workspace, selection, input.clock, input.timing),
+          await runSource(
+            writer.sessions,
+            writer.workspace,
+            selection,
+            input.clock,
+            input.timing,
+            input.signal,
+          ),
         );
+        throwIfIndexInterrupted(input.signal);
       }
     }
     report = createIndexReport(startedAt, timestamp(input.clock), sourceReports);
@@ -106,6 +126,7 @@ export async function runIndex(input: RunIndexInput): Promise<IndexReport> {
   }
   if (operationFailed) throw operationError;
   if (closeFailed) throw closeError;
+  throwIfIndexInterrupted(input.signal);
   if (report === undefined) throw new Error("Session indexing produced no report");
   return report;
 }
@@ -114,16 +135,19 @@ async function preflightOptionalSources(
   selections: readonly SelectedSessionSource[],
   mode: "required" | "optional",
   clock: IndexClock,
+  signal: AbortSignal | undefined,
   timing: IndexTimingRecorder | undefined,
 ): Promise<ReadonlyMap<SelectedSessionSource, IndexSourceReport>> {
   const skipped = new Map<SelectedSessionSource, IndexSourceReport>();
   if (mode === "required") return skipped;
 
   for (const selection of selections) {
+    throwIfIndexInterrupted(signal);
     const startedAt = timestamp(clock);
     const unavailable = await timeIndexOperation(timing, "sourceProbe", () =>
       isValidUnavailableSource(selection),
     );
+    throwIfIndexInterrupted(signal);
     if (unavailable) {
       skipped.set(
         selection,
@@ -155,7 +179,9 @@ async function runSource(
   selection: SelectedSessionSource,
   clock: IndexClock,
   timing: IndexTimingRecorder | undefined,
+  signal?: AbortSignal,
 ): Promise<IndexSourceReport> {
+  throwIfIndexInterrupted(signal);
   const run = await timeIndexOperation(timing, "runBookkeeping", () =>
     index.startRun({
       source: selection.instance,
@@ -168,6 +194,7 @@ async function runSource(
     status: "completed" | "incomplete",
     failure?: IndexRunFailureCode,
   ): Promise<IndexSourceReport> => {
+    throwIfIndexInterrupted(signal);
     finishAttempted = true;
     const finishedAt = timestamp(clock);
     const result = await timeIndexOperation(timing, "runBookkeeping", () =>
@@ -179,28 +206,43 @@ async function runSource(
             failure: requireFailure(failure),
           }),
     );
+    throwIfIndexInterrupted(signal);
     assertRunResultSource(result.source, selection.instance);
     return createIndexSourceReport(selection.instance, result);
   };
 
   try {
+    throwIfIndexInterrupted(signal);
     const probeFailure = await timeIndexOperation(timing, "sourceProbe", () => probe(selection));
+    throwIfIndexInterrupted(signal);
     if (probeFailure !== undefined) return await finish("incomplete", probeFailure);
 
     const discovery = await timeIndexOperation(timing, "sourceDiscovery", () =>
-      discoverSessions(selection, workspace),
+      discoverSessions(selection, workspace, signal),
     );
+    throwIfIndexInterrupted(signal);
     if (!discovery.complete) return await finish("incomplete", "discovery-failed");
 
     const seen = new Set<string>();
     const deferred: AdmittedDiscoveredSession[] = [];
     for (const candidate of discovery.candidates) {
+      throwIfIndexInterrupted(signal);
       const observation = candidate.observation;
       seen.add(observation.identity.nativeId);
-      const failure = await applyCandidate(index, run, selection, candidate, workspace, timing);
+      const failure = await applyCandidate(
+        index,
+        run,
+        selection,
+        candidate,
+        workspace,
+        timing,
+        signal,
+      );
+      throwIfIndexInterrupted(signal);
       if (failure === "source-changed") {
         deferred.push(candidate);
       } else if (failure !== undefined) {
+        throwIfIndexInterrupted(signal);
         await timeIndexOperation(timing, "runBookkeeping", () =>
           index.recordFailure(run, observation, failure),
         );
@@ -208,22 +250,28 @@ async function runSource(
     }
 
     if (deferred.length > 0) {
-      await retrySourceChanged(index, run, selection, workspace, deferred, timing);
+      await retrySourceChanged(index, run, selection, workspace, deferred, timing, signal);
+      throwIfIndexInterrupted(signal);
     }
 
+    throwIfIndexInterrupted(signal);
     const tracked = await timeIndexOperation(timing, "reconciliation", () =>
       index.listTrackedIdentities(selection.instance),
     );
+    throwIfIndexInterrupted(signal);
     const ordered = validateTrackedIdentities(tracked, selection.instance);
     for (const identity of ordered) {
+      throwIfIndexInterrupted(signal);
       if (!seen.has(identity.nativeId)) {
         await timeIndexOperation(timing, "reconciliation", () =>
           index.recordMissing(run, identity),
         );
       }
     }
+    throwIfIndexInterrupted(signal);
     return await finish("completed");
   } catch (operationError) {
+    if (isIndexInterruptedError(operationError)) throw operationError;
     if (finishAttempted) throw operationError;
     try {
       await finish("incomplete", "repository-write");
@@ -245,11 +293,14 @@ async function applyCandidate(
   candidate: AdmittedDiscoveredSession,
   workspace: SourceCaptureWorkspace,
   timing: IndexTimingRecorder | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<RecordableSessionFailureCode | undefined> {
+  throwIfIndexInterrupted(signal);
   const observation = candidate.observation;
   const freshness = await timeIndexOperation(timing, "freshnessRead", () =>
     index.getFreshness(observation.identity),
   );
+  throwIfIndexInterrupted(signal);
   if (matchesLastGoodRevision(freshness, observation.revision)) {
     await timeIndexOperation(timing, "unchangedWrite", () =>
       index.recordUnchanged(run, observation),
@@ -269,6 +320,7 @@ async function applyCandidate(
     if (!isSourceFailureError(error)) throw error;
     return error.failure.kind;
   }
+  throwIfIndexInterrupted(signal);
   // Repository replacement failures are already durably recorded once by the port.
   await timeIndexOperation(timing, "replacement", () => index.replaceSession(run, replacement));
   return undefined;
@@ -302,12 +354,16 @@ async function retrySourceChanged(
   workspace: SourceCaptureWorkspace,
   deferred: readonly AdmittedDiscoveredSession[],
   timing: IndexTimingRecorder | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
+  throwIfIndexInterrupted(signal);
   const discovery = await timeIndexOperation(timing, "sourceDiscovery", () =>
-    discoverSessions(selection, workspace),
+    discoverSessions(selection, workspace, signal),
   );
+  throwIfIndexInterrupted(signal);
   if (!discovery.complete) {
     for (const candidate of deferred) {
+      throwIfIndexInterrupted(signal);
       await timeIndexOperation(timing, "runBookkeeping", () =>
         index.recordFailure(run, candidate.observation, "source-changed"),
       );
@@ -319,6 +375,7 @@ async function retrySourceChanged(
     discovery.candidates.map((candidate) => [candidate.observation.identity.nativeId, candidate]),
   );
   for (const candidate of deferred) {
+    throwIfIndexInterrupted(signal);
     const fresh = freshByNativeId.get(candidate.observation.identity.nativeId);
     if (fresh === undefined) {
       await timeIndexOperation(timing, "runBookkeeping", () =>
@@ -327,7 +384,8 @@ async function retrySourceChanged(
       continue;
     }
 
-    const failure = await applyCandidate(index, run, selection, fresh, workspace, timing);
+    const failure = await applyCandidate(index, run, selection, fresh, workspace, timing, signal);
+    throwIfIndexInterrupted(signal);
     if (failure !== undefined) {
       await timeIndexOperation(timing, "runBookkeeping", () =>
         index.recordFailure(run, fresh.observation, failure),

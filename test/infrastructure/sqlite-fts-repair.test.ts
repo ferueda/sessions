@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import type { IndexProgressEvent } from "../../src/application/index-progress.ts";
+import type { IndexTimingPhase } from "../../src/application/index-timing.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
@@ -13,6 +15,7 @@ import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/in
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
 import {
+  consumeWriterCleanProof,
   publishWriterCleanProof,
   readWriterCleanProof,
 } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
@@ -28,6 +31,82 @@ afterEach(async () => {
 });
 
 describe("SQLite FTS projection repair", () => {
+  test("reports only fast mode and no validation timing for a proven clean open", async () => {
+    const paths = await initializedPaths();
+    const observed = validationObservation();
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths, observed.options);
+    await writer.close();
+
+    expect(observed.events).toEqual([{ kind: "writer-open-mode", mode: "fast" }]);
+    expect(observed.phases).toEqual([]);
+  });
+
+  test("reports exact full-validation owners and repeated checks after rebuild", async () => {
+    const paths = await initializedPaths();
+    const canonicalText = "canonical phase alpha";
+    mutateDatabase(paths.database, (database) => {
+      const contentId = insertContent(database, hashContent(canonicalText).digest, canonicalText);
+      poisonFtsTerms(database, contentId, canonicalText, "poison phase beta");
+    });
+    await consumeWriterCleanProof(paths.database);
+    const observed = validationObservation();
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths, observed.options);
+    await writer.close();
+
+    expect(observed.events).toEqual([
+      { kind: "writer-open-mode", mode: "full-validation" },
+      { kind: "writer-validation", phase: "canonical" },
+      { kind: "writer-validation", phase: "foreign-keys" },
+      { kind: "writer-validation", phase: "fts-structure" },
+      { kind: "writer-validation", phase: "fts-content" },
+      { kind: "writer-validation", phase: "fts-semantic" },
+      { kind: "writer-validation", phase: "fts-rebuild" },
+      { kind: "writer-validation", phase: "fts-structure" },
+      { kind: "writer-validation", phase: "fts-content" },
+      { kind: "writer-validation", phase: "fts-semantic" },
+      { kind: "writer-validation", phase: "canonical" },
+      { kind: "writer-validation", phase: "foreign-keys" },
+    ]);
+    expect(observed.phases).toEqual([
+      "writerFullValidationCanonical",
+      "writerFullValidationForeignKeys",
+      "writerFullValidationFtsStructure",
+      "writerFullValidationFtsContent",
+      "writerFullValidationFtsSemantic",
+      "writerFullValidationFtsRebuild",
+      "writerFullValidationFtsStructure",
+      "writerFullValidationFtsContent",
+      "writerFullValidationFtsSemantic",
+      "writerFullValidationCanonical",
+      "writerFullValidationForeignKeys",
+    ]);
+    expect(readFtsMatchCount(paths.database, "alpha")).toBe(1);
+    expect(readFtsMatchCount(paths.database, "beta")).toBe(0);
+  });
+
+  test("observer failures cannot change a successful full-validation open", async () => {
+    const paths = await initializedPaths();
+    await consumeWriterCleanProof(paths.database);
+
+    const writer = await createSqliteIndexLifecycle().openWriter(paths, {
+      progress() {
+        throw new Error("progress observer failed");
+      },
+      timing: {
+        now() {
+          throw new Error("timing clock failed");
+        },
+        record() {
+          throw new Error("timing recorder failed");
+        },
+      },
+    });
+
+    await expect(writer.close()).resolves.toBeUndefined();
+  });
+
   test("an explicit index writer rebuilds damaged FTS state from unchanged canonical content", async () => {
     const paths = await initializedPaths();
     const text = "retained indexed evidence";
@@ -416,6 +495,33 @@ END;`);
     expect(readFtsProjectionState(paths.database)).toEqual(projectionBefore);
   });
 });
+
+function validationObservation(): {
+  readonly events: IndexProgressEvent[];
+  readonly phases: IndexTimingPhase[];
+  readonly options: {
+    readonly progress: (event: IndexProgressEvent) => void;
+    readonly timing: {
+      readonly now: () => number;
+      readonly record: (phase: IndexTimingPhase) => void;
+    };
+  };
+} {
+  const events: IndexProgressEvent[] = [];
+  const phases: IndexTimingPhase[] = [];
+  let tick = 0;
+  return {
+    events,
+    phases,
+    options: {
+      progress: (event) => events.push(event),
+      timing: {
+        now: () => ++tick,
+        record: (phase) => phases.push(phase),
+      },
+    },
+  };
+}
 
 async function initializedPaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-fts-repair-"));

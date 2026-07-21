@@ -304,6 +304,12 @@ function phaseCalls(
   return {
     sourceResolution: 0,
     writerOpen: 1,
+    writerFullValidationCanonical: 0,
+    writerFullValidationForeignKeys: 0,
+    writerFullValidationFtsStructure: 0,
+    writerFullValidationFtsContent: 0,
+    writerFullValidationFtsSemantic: 0,
+    writerFullValidationFtsRebuild: 0,
     sourceProbe: 1,
     sourceDiscovery: 1,
     freshnessRead: 0,

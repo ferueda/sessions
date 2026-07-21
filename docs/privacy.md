@@ -31,6 +31,13 @@ not a best-effort feature.
   diagnostic with fixed phase names, call counts, and elapsed milliseconds. It
   stores and uploads nothing and includes no identities, paths, fingerprints,
   timestamps, errors, or transcript-derived values.
+- Interactive indexing may print fixed writer-mode and validation-phase labels.
+  Those labels contain no path, provider identity, session identity,
+  fingerprint, transcript value, count, percentage, or ETA and are never stored
+  or uploaded. Redirected stderr stays quiet unless opt-in timing is enabled.
+- `SIGINT` and `SIGTERM` request a cooperative stop between application
+  operations. Complete committed replacements remain in the local library;
+  partial discovery leaves coverage unknown and never infers missing sessions.
 
 Portable JSON/JSONL export and transcript-bearing JSON/JSONL
 list/search/entries/show are current. Library import/restore and automatic

@@ -7,6 +7,7 @@ import type { ExportSessionResult } from "../application/export-session.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
 import type { IndexReport } from "../application/index-report.ts";
+import type { IndexProgressEvent, IndexProgressObserver } from "../application/index-progress.ts";
 import type { ListSessionsResult } from "../application/list-sessions.ts";
 import {
   MAX_ENTRY_LIST_LIMIT,
@@ -72,7 +73,10 @@ export interface ProgramOptions {
   readonly doctor: () => Promise<DoctorReport>;
   readonly paths: () => Promise<PathsReport>;
   readonly indexSources: readonly string[];
-  readonly index: (source?: string) => Promise<IndexReport>;
+  readonly index: (
+    source?: string,
+    options?: { readonly progress?: IndexProgressObserver },
+  ) => Promise<IndexReport>;
   readonly list: (input: {
     readonly filter?: SessionFilterInput;
     readonly limit?: number;
@@ -138,6 +142,38 @@ const writeLongOperationNotice = (output: CliOutput, message: string): void => {
   }
 };
 
+function createIndexProgressObserver(output: CliOutput): IndexProgressObserver | undefined {
+  if (output.stderrIsInteractive !== true) return undefined;
+  return (event) => writeLongOperationNotice(output, renderIndexProgress(event));
+}
+
+function renderIndexProgress(event: IndexProgressEvent): string {
+  if (event.kind === "writer-open-mode") {
+    switch (event.mode) {
+      case "fast":
+        return "Using the clean Sessions library fast path.";
+      case "bootstrap":
+        return "Preparing a new Sessions library.";
+      case "full-validation":
+        return "Verifying the full Sessions library; large libraries may take longer.";
+    }
+  }
+  switch (event.phase) {
+    case "canonical":
+      return "Checking retained session documents.";
+    case "foreign-keys":
+      return "Checking retained session relationships.";
+    case "fts-structure":
+      return "Checking search index structure.";
+    case "fts-content":
+      return "Checking search index coverage.";
+    case "fts-semantic":
+      return "Checking search index terms and positions.";
+    case "fts-rebuild":
+      return "Rebuilding the search index from retained content.";
+  }
+}
+
 export function createProgram(options: ProgramOptions): Command {
   const program = new Command();
   program
@@ -183,7 +219,11 @@ export function createProgram(options: ProgramOptions): Command {
         options.output,
         "Indexing sessions; this may take a couple of minutes.",
       );
-      const report = await options.index(source);
+      const progress = createIndexProgressObserver(options.output);
+      const report =
+        progress === undefined
+          ? await options.index(source)
+          : await options.index(source, { progress });
       options.output.writeOut(renderIndex(report, format));
       if (report.incompleteSources > 0) throw new OperationalExit();
     });

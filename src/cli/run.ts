@@ -5,6 +5,16 @@ import { createProgram, OperationalExit, type ProgramOptions } from "./program.t
 
 export type CliOptions = ProgramOptions;
 
+export class CliSignalExit extends Error {
+  readonly exitCode: 130 | 143;
+
+  constructor(exitCode: 130 | 143) {
+    super("command interrupted by a process signal");
+    this.name = "CliSignalExit";
+    this.exitCode = exitCode;
+  }
+}
+
 export async function runCli(argv: readonly string[], options: CliOptions): Promise<number> {
   const program = createProgram(options);
 
@@ -12,6 +22,7 @@ export async function runCli(argv: readonly string[], options: CliOptions): Prom
     await program.parseAsync([...argv], { from: "user" });
     return 0;
   } catch (error) {
+    if (error instanceof CliSignalExit) return error.exitCode;
     if (error instanceof OperationalExit) return 1;
     if (error instanceof CommanderError) {
       if (error.code === "sessions.invalid-argument") {
