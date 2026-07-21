@@ -52,7 +52,7 @@ without reopening provider history.
 Requires Node.js 24.16 or newer.
 
 ```bash
-export SESSIONS_VERSION='0.1.1' # x-release-please-version
+export SESSIONS_VERSION='0.2.0' # x-release-please-version
 npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
 sessions --version
 sessions doctor

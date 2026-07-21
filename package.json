@@ -1,6 +1,6 @@
 {
   "name": "@ferueda/sessions",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local-first search and analysis for AI coding-agent session history",
   "keywords": [
     "agents",
