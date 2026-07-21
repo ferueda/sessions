@@ -1,0 +1,12 @@
+{
+  "base": "main",
+  "defaultAgent": "codex",
+  "agents": {
+    "codex": {
+      "model": "gpt-5.6-sol",
+      "modelReasoningEffort": "medium",
+      "sandboxMode": "read-only",
+      "approvalPolicy": "never"
+    }
+  }
+}
