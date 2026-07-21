@@ -28,6 +28,7 @@ const requiredDocs = [
   "docs/contributing/releasing.md",
   "docs/decisions/README.md",
   "docs/decisions/0009-establish-the-supported-release-baseline.md",
+  "docs/decisions/0010-install-sessions-directly-into-local-agent-hosts.md",
 ];
 
 describe("documentation contracts", () => {
@@ -73,6 +74,32 @@ describe("documentation contracts", () => {
     const agents = await readFile(path.join(root, "AGENTS.md"), "utf8");
 
     expect(agents.split("\n").length).toBeLessThanOrEqual(100);
+  });
+
+  test("keeps standalone installation as the active host boundary", async () => {
+    const [architecture, decisions, superseded, replacement] = await Promise.all([
+      readFile(path.join(root, "docs/architecture-memo.md"), "utf8"),
+      readFile(path.join(root, "docs/decisions/README.md"), "utf8"),
+      readFile(
+        path.join(root, "docs/decisions/0005-keep-one-way-ownership-with-harness.md"),
+        "utf8",
+      ),
+      readFile(
+        path.join(root, "docs/decisions/0010-install-sessions-directly-into-local-agent-hosts.md"),
+        "utf8",
+      ),
+    ]);
+
+    expect(architecture).toContain(
+      "No downstream repository owns a Sessions wrapper, package pin, vendored",
+    );
+    expect(architecture).not.toContain("Harness keeps a thin pinned integration");
+    expect(superseded).toContain("- Status: Superseded");
+    expect(superseded).toContain("0010-install-sessions-directly-into-local-agent-hosts.md");
+    expect(replacement).toContain("- Status: Accepted");
+    expect(replacement).toContain("Supersedes: [0005");
+    expect(replacement).toContain("No downstream repository owns a Sessions wrapper");
+    expect(decisions).toContain("0010-install-sessions-directly-into-local-agent-hosts.md");
   });
 
   test("keeps onboarding aligned with the release manifest", async () => {
