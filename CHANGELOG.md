@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/ferueda/sessions/compare/v0.2.0...v0.3.0) (2026-07-21)
+
+
+### Features
+
+* add atomic revision manifests ([91cc6be](https://github.com/ferueda/sessions/commit/91cc6bede821fc155ec553176cb3df8489a54a52))
+* add atomic revision manifests ([4c940e0](https://github.com/ferueda/sessions/commit/4c940e0cc8768fa2ec72fbe18860bebdb771d7ef))
+
 ## [0.2.0](https://github.com/ferueda/sessions/compare/v0.1.1...v0.2.0) (2026-07-21)
 
 
