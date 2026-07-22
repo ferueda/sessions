@@ -14,5 +14,6 @@ Statuses: Proposed, Accepted, Superseded. A later ADR supersedes an accepted dec
 - [0008 — Make orphan-content deletion explicit](0008-explicit-orphan-content-repair.md)
 - [0009 — Establish the supported release baseline](0009-establish-the-supported-release-baseline.md)
 - [0010 — Install Sessions directly into local agent hosts](0010-install-sessions-directly-into-local-agent-hosts.md)
+- [0011 — Certify index-generation recovery](0011-certify-index-generation-recovery.md)
 
 New ADRs should contain status/date, context, decision, consequences, and supersession links when relevant.

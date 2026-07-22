@@ -43,7 +43,7 @@ so total memory is not constant, but no expected or comparison state spills to
 disk. An explicit index writer may rebuild only FTS after canonical integrity
 passes.
 
-## Clean writer state
+## Writer proof state
 
 Writer-lease acquisition makes its generation dirty. Only a normal index close
 that still owns that exact generation can seal the database clean. It then
@@ -54,23 +54,39 @@ The proof contains bounded non-transcript metadata: no provider identity,
 transcript text, path, content hash, or lease token. Its absence or rejection
 only disables the fast path. A ready, sidecar-free, current-schema open with a
 matching clean seal and proof uses constant-size schema/FTS structure checks;
-dirty, recovery, migration, maintenance, or cleanup-failure state uses full
-canonical, foreign-key, and FTS validation/repair.
+the clean proof remains the preferred normal-open evidence.
+
+Storage schema 3 also has one strict singleton index-generation receipt. Format
+1 records only writer generation, schema version, SQLite schema cookie, and a
+safe-integer operation sequence. Sequence zero is created after writer setup;
+every supported index mutation advances it once in the same transaction as the
+checked operation. The schema-2-to-3 migration does not backfill a receipt. Receipt
+rows are rebuildable operational proof, not canonical evidence.
+
+After ordinary SQLite WAL recovery, an exact receipt beside its expired index
+lease may use bounded catalog and FTS structure checks and skip global canonical,
+foreign-key, FTS content, and FTS semantic scans. Acquisition interrupts the
+abandoned run, advances ownership, and clears the old receipt atomically. Free,
+live, maintenance, migration-era, stale, malformed, wrong-schema/cookie, or
+structurally invalid evidence cannot use this mode. Missing or altered receipt
+table structure is repaired only under exact ownership and still requires the
+complete validation/repair path before new proof is created.
 
 A cooperative index cancellation uses the same exact-owner close path. It may
 seal the cancelled generation only after active runs are interrupted, workspace
 cleanup and heartbeat shutdown succeed, the database closes and hardens, and
 transactional integrity remains certain. If any of those steps fails, no proof
-is published and the next writer performs full validation. Abrupt process exit
-and `SIGKILL` never gain a fast-path exception.
+is published. An abrupt process exit or `SIGKILL` may use certified recovery only
+when it left the exact expired index owner and a matching receipt at a completed
+mutation boundary; every other dirty state performs full validation.
 
 ## Guarantees and cost
 
 - Hash or document mismatches, malformed stored values, and unsupported schema
   state fail closed.
 - Direct SQLite edits outside Sessions are unsupported and are not guaranteed to
-  be found by every clean writer open. `doctor` is the explicit immutable
-  full-library semantic check.
+  be found by every clean or certified writer open. `doctor` is the explicit
+  immutable full-library semantic check.
 - Content interning saves repeated text and keeps query support tied to one
   stable ID. It still compares text within a digest bucket for collision safety.
 - FTS adds derived storage and write work in exchange for local full-text search.
@@ -80,14 +96,18 @@ and `SIGKILL` never gain a fast-path exception.
 
 ## Code and tests
 
-- Schema: `src/infrastructure/sqlite/migrations/0001-bootstrap.ts`
+- Schema: `src/infrastructure/sqlite/migrations/0001-bootstrap.ts`,
+  `src/infrastructure/sqlite/migrations/0002-session-document-metrics.ts`, and
+  `src/infrastructure/sqlite/migrations/0003-index-generation-receipt.ts`
 - Document storage: `src/infrastructure/sqlite/sqlite-session-document.ts`
 - Digest codecs: `src/infrastructure/sqlite/sqlite-content-digest.ts` and
   `src/infrastructure/sqlite/sqlite-document-digest.ts`
 - FTS: `src/infrastructure/sqlite/fts-projection.ts`
 - Writer state: `src/infrastructure/sqlite/writer-lease.ts`,
-  `src/infrastructure/sqlite/writer-clean-proof.ts`
+  `src/infrastructure/sqlite/writer-clean-proof.ts`, and
+  `src/infrastructure/sqlite/writer-recovery-receipt.ts`
 - Proof: `test/infrastructure/sqlite-canonical-migration.test.ts`,
   `test/infrastructure/sqlite-session-index.test.ts`,
   `test/infrastructure/sqlite-content-digest.test.ts`, and
-  `test/infrastructure/sqlite-fts-repair.test.ts`
+  `test/infrastructure/sqlite-fts-repair.test.ts`, plus
+  `test/infrastructure/sqlite-writer-recovery-receipt.test.ts`

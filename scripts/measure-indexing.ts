@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
 import { timeIndexOperation } from "../src/application/index-timing.ts";
+import type { IndexWriterOpenMode } from "../src/application/index-progress.ts";
 import type { IndexPaths } from "../src/application/ports/index-lifecycle.ts";
 import { SESSION_INDEX_BATCH_LIMIT } from "../src/application/ports/session-index.ts";
 import type {
@@ -58,6 +59,7 @@ const SOURCE: SourceInstance = Object.freeze({
 const SEED_AT = "2026-07-16T12:00:00.000Z";
 const STABLE_AT = "2026-07-16T13:00:00.000Z";
 const MISSING_AT = "2026-07-16T14:00:00.000Z";
+const ABANDONED_AT = "2026-07-16T12:30:00.000Z";
 const WRITER_TOKEN = "index-measurement-writer";
 
 type SqliteRow = Readonly<Record<string, unknown>>;
@@ -75,6 +77,7 @@ interface MeasurementSource {
 interface SemanticState {
   readonly staticRows: readonly SqliteRow[];
   readonly writerLeaseRows: readonly SqliteRow[];
+  readonly writerReceiptRows: readonly SqliteRow[];
   readonly sourceRows: readonly SqliteRow[];
   readonly trackingRows: readonly SqliteRow[];
   readonly canonicalRows: readonly SqliteRow[];
@@ -102,6 +105,7 @@ interface StableResult {
   readonly state: SemanticState;
   readonly health: Awaited<ReturnType<SqliteIndexLifecycle["inspectHealth"]>>;
   readonly queries: RepresentativeQueries;
+  readonly writerOpenMode: IndexWriterOpenMode;
 }
 
 async function main(): Promise<void> {
@@ -117,6 +121,7 @@ async function main(): Promise<void> {
     const seedPaths = pathsAt(path.join(temporaryRoot, "seed"));
     const controlPaths = pathsAt(path.join(temporaryRoot, "control"));
     const timedPaths = pathsAt(path.join(temporaryRoot, "timed"));
+    const certifiedPaths = pathsAt(path.join(temporaryRoot, "certified-recovery"));
     const recoveryPaths = pathsAt(path.join(temporaryRoot, "full-validation"));
     const missingPaths = pathsAt(path.join(temporaryRoot, "missing"));
     const seedLifecycle = lifecycleAt(SEED_AT);
@@ -140,20 +145,28 @@ async function main(): Promise<void> {
 
     await cloneDatabase(seedPaths, controlPaths);
     await cloneDatabase(seedPaths, timedPaths);
+    await cloneDatabase(seedPaths, certifiedPaths);
     await cloneDatabase(seedPaths, recoveryPaths);
     await cloneDatabase(seedPaths, missingPaths);
     await prepareCleanStableLibrary(controlPaths);
     await prepareCleanStableLibrary(timedPaths);
+    await prepareCleanStableLibrary(certifiedPaths);
     await prepareCleanStableLibrary(recoveryPaths);
     await prepareCleanStableLibrary(missingPaths);
     const controlSeededState = readSemanticState(controlPaths);
     const timedSeededState = readSemanticState(timedPaths);
+    const certifiedSeededState = readSemanticState(certifiedPaths);
     const recoverySeededState = readSemanticState(recoveryPaths);
     const missingSeededState = readSemanticState(missingPaths);
     assert.deepStrictEqual(
       timedSeededState,
       controlSeededState,
       "timed and control libraries differ before the stable run",
+    );
+    assert.deepStrictEqual(
+      certifiedSeededState,
+      controlSeededState,
+      "certified-recovery and control libraries differ before abandonment",
     );
     assert.deepStrictEqual(
       recoverySeededState,
@@ -170,6 +183,10 @@ async function main(): Promise<void> {
     const collector = createIndexTimingCollector();
     const timed = await runStable(timedPaths, corpus, collector);
     const timing = collector.snapshot();
+    await abandonCertifiedGeneration(certifiedPaths);
+    const certifiedCollector = createIndexTimingCollector();
+    const certified = await runStable(certifiedPaths, corpus, certifiedCollector);
+    const certifiedTiming = certifiedCollector.snapshot();
     const consumed = await consumeWriterCleanProof(recoveryPaths.database);
     assert(consumed !== undefined, "full-validation fixture had no clean proof to consume");
     const recoveryCollector = createIndexTimingCollector();
@@ -184,11 +201,21 @@ async function main(): Promise<void> {
     assert.equal(control.sourceReads, 0, "control stable run unexpectedly read a source document");
     assert.equal(timed.sourceReads, 0, "timed stable run unexpectedly read a source document");
     assert.equal(
+      certified.sourceReads,
+      0,
+      "certified-recovery stable run unexpectedly read a source document",
+    );
+    assert.equal(
       recovery.sourceReads,
       0,
       "full-validation stable run unexpectedly read a source document",
     );
     assert.deepStrictEqual(timed.report, control.report, "timing changed the index report");
+    assert.deepStrictEqual(
+      certified.report,
+      control.report,
+      "certified recovery changed the index report",
+    );
     assert.deepStrictEqual(
       recovery.report,
       control.report,
@@ -201,19 +228,34 @@ async function main(): Promise<void> {
       "full validation changed retained SQLite state",
     );
     assert.deepStrictEqual(timed.health, control.health, "timing changed index health");
+    assert.deepStrictEqual(
+      withoutKeys(certified.health as unknown as SqliteRow, ["interruptedRuns"]),
+      withoutKeys(control.health as unknown as SqliteRow, ["interruptedRuns"]),
+      "certified recovery changed non-operational index health",
+    );
+    assert.equal(certified.health.interruptedRuns, control.health.interruptedRuns + 1);
     assert.deepStrictEqual(recovery.health, control.health, "full validation changed index health");
     assert.deepStrictEqual(timed.queries, control.queries, "timing changed query results");
+    assert.deepStrictEqual(
+      withoutQueryCursors(certified.queries),
+      withoutQueryCursors(control.queries),
+      "certified recovery changed semantic query results",
+    );
     assert.deepStrictEqual(
       recovery.queries,
       control.queries,
       "full validation changed query results",
     );
     assert.equal(control.health.ok, true, "control library health is not ready");
+    assert.equal(certified.writerOpenMode, "certified-recovery");
+    assertPublicSemanticStateEqual(certified.state, control.state);
+    assertCertifiedRecoveryOperationalState(certified.state, control.state);
     assertStableTransition(controlSeededState, control.state);
     assertStableTransition(timedSeededState, timed.state);
     assertStableTransition(recoverySeededState, recovery.state);
     assertRepresentativeQueries(control.queries);
     assertStableTimingOwnership(timing, false);
+    assertStableTimingOwnership(certifiedTiming, false);
     assertStableTimingOwnership(recoveryTiming, true);
     assertMissingReport(missing.report);
     assert.equal(missing.sourceReads, 0, "missing run unexpectedly read a source document");
@@ -222,7 +264,7 @@ async function main(): Promise<void> {
     assertMissingQueries(missing.queries);
     assertMissingTimingOwnership(missingTiming);
 
-    report = createOutput(seedTiming, timing, recoveryTiming, missingTiming);
+    report = createOutput(seedTiming, timing, certifiedTiming, recoveryTiming, missingTiming);
   } catch (error) {
     failure = error;
   } finally {
@@ -249,12 +291,16 @@ async function runMissing(
 ): Promise<StableResult> {
   const source = createMeasurementSource(corpus, false, []);
   const lifecycle = lifecycleAt(MISSING_AT);
+  const writerModes: IndexWriterOpenMode[] = [];
   const report = await timeIndexOperation(collector.recorder, "total", () =>
     runIndex({
       paths,
       sources: [source.selected],
       lifecycle,
       clock: fixedClock(MISSING_AT),
+      progress: (event) => {
+        if (event.kind === "writer-open-mode") writerModes.push(event.mode);
+      },
       timing: collector.recorder,
     }),
   );
@@ -265,6 +311,7 @@ async function runMissing(
     state: readSemanticState(paths),
     health: await lifecycle.inspectHealth(paths),
     queries: await readRepresentativeQueries(lifecycle, paths),
+    writerOpenMode: singleWriterOpenMode(writerModes),
   };
 }
 
@@ -275,12 +322,16 @@ async function runStable(
 ): Promise<StableResult> {
   const source = createMeasurementSource(corpus, false);
   const lifecycle = lifecycleAt(STABLE_AT);
+  const writerModes: IndexWriterOpenMode[] = [];
   const run = () =>
     runIndex({
       paths,
       sources: [source.selected],
       lifecycle,
       clock: fixedClock(STABLE_AT),
+      progress: (event) => {
+        if (event.kind === "writer-open-mode") writerModes.push(event.mode);
+      },
       ...(collector === undefined ? {} : { timing: collector.recorder }),
     });
   const report =
@@ -294,7 +345,24 @@ async function runStable(
     state: readSemanticState(paths),
     health: await lifecycle.inspectHealth(paths),
     queries: await readRepresentativeQueries(lifecycle, paths),
+    writerOpenMode: singleWriterOpenMode(writerModes),
   };
+}
+
+async function abandonCertifiedGeneration(paths: IndexPaths): Promise<void> {
+  const lifecycle = createSqliteIndexLifecycle({
+    now: () => new Date(ABANDONED_AT),
+    writerToken: () => "abandoned-index-measurement-writer",
+    writerScheduler: {
+      setInterval: () => Symbol("disabled-measurement-heartbeat"),
+      clearInterval: () => undefined,
+    },
+  });
+  const writer = await lifecycle.openWriter(paths);
+  await writer.sessions.startRun({ source: SOURCE, startedAt: ABANDONED_AT });
+  writer.database.close();
+  const proof = await readWriterCleanProof(paths.database);
+  assert.equal(proof, undefined, "abandoned generation unexpectedly retained a clean proof");
 }
 
 function createCorpus(): Corpus {
@@ -540,6 +608,20 @@ function assertRepresentativeQueries(queries: RepresentativeQueries): void {
   ]);
 }
 
+function withoutQueryCursors(queries: RepresentativeQueries): unknown {
+  const page = (value: object): SqliteRow =>
+    withoutKeys(value as unknown as SqliteRow, ["nextCursor"]);
+  return {
+    list: queries.list.map(page),
+    search: queries.search.map(page),
+    entries: queries.entries.map(page),
+    sourceState: {
+      present: page(queries.sourceState.present),
+      missing: page(queries.sourceState.missing),
+    },
+  };
+}
+
 function assertCompleteCaptureScope(
   scope: SessionListPage["captureScope"],
   sourceState: "present" | "missing",
@@ -771,6 +853,46 @@ function assertStableTransition(before: SemanticState, after: SemanticState): vo
   );
 }
 
+function assertPublicSemanticStateEqual(actual: SemanticState, expected: SemanticState): void {
+  for (const key of [
+    "staticRows",
+    "sourceRows",
+    "trackingRows",
+    "canonicalRows",
+    "relationRows",
+    "entryRows",
+    "contentRows",
+    "occurrenceRows",
+    "runItemRows",
+  ] as const) {
+    assert.deepStrictEqual(actual[key], expected[key], `certified recovery changed public ${key}`);
+  }
+}
+
+function assertCertifiedRecoveryOperationalState(
+  certified: SemanticState,
+  control: SemanticState,
+): void {
+  const certifiedLease = singleRow(certified.writerLeaseRows, "certified writer lease");
+  const controlLease = singleRow(control.writerLeaseRows, "control writer lease");
+  assert.equal(Number(certifiedLease.generation), Number(controlLease.generation) + 1);
+  assert.equal(certifiedLease.clean_generation, certifiedLease.generation);
+
+  const receipt = singleRow(certified.writerReceiptRows, "certified writer receipt");
+  assert.equal(receipt.writer_generation, certifiedLease.generation);
+  assert.equal(receipt.schema_version, 3);
+  assert(Number(receipt.operation_sequence) > 0, "certified receipt did not advance");
+
+  assert.equal(certified.runRows.length, control.runRows.length + 1);
+  const abandoned = certified.runRows.find(
+    (row) => row.started_at === ABANDONED_AT && row.status === "interrupted",
+  );
+  assert(abandoned !== undefined, "abandoned run was not retained as interrupted");
+  assert.equal(abandoned.finished_at, STABLE_AT);
+  assert.equal(abandoned.failure_code, "interrupted");
+  assert.equal(certified.runRows.at(-1)?.status, "completed");
+}
+
 function assertMissingTransition(before: SemanticState, after: SemanticState): void {
   assert.deepStrictEqual(after.staticRows, before.staticRows, "static library state changed");
   assert.deepStrictEqual(after.canonicalRows, before.canonicalRows, "missing removed sessions");
@@ -974,6 +1096,10 @@ function readSemanticState(paths: IndexPaths): SemanticState {
         ...rows(database, "SELECT * FROM sessions_library ORDER BY singleton"),
       ],
       writerLeaseRows: rows(database, "SELECT * FROM sessions_writer_lease ORDER BY singleton"),
+      writerReceiptRows: rows(
+        database,
+        "SELECT * FROM sessions_index_generation_receipt ORDER BY singleton",
+      ),
       sourceRows: rows(
         database,
         "SELECT * FROM sessions_source_instances ORDER BY source_instance_id",
@@ -1092,6 +1218,11 @@ function singleRow(rows: readonly SqliteRow[], label: string): SqliteRow {
   return rows[0]!;
 }
 
+function singleWriterOpenMode(modes: readonly IndexWriterOpenMode[]): IndexWriterOpenMode {
+  assert.equal(modes.length, 1, "index run did not select exactly one writer-open mode");
+  return modes[0]!;
+}
+
 function temporaryHome(): string {
   return process.platform === "win32" ? "C:\\sessions-measurement" : "/sessions-measurement";
 }
@@ -1103,6 +1234,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 function createOutput(
   seedTiming: IndexTimingSnapshot,
   timing: IndexTimingSnapshot,
+  certifiedTiming: IndexTimingSnapshot,
   recoveryTiming: IndexTimingSnapshot,
   missingTiming: IndexTimingSnapshot,
 ) {
@@ -1124,6 +1256,8 @@ function createOutput(
       stableTransition: true,
       zeroStableSourceReads: true,
       boundedStableCalls: true,
+      certifiedRecovery: true,
+      certifiedRecoveryNoGlobalValidation: true,
       missingCanonicalRetention: true,
       missingQueries: true,
       missingRunItems: true,
@@ -1146,6 +1280,7 @@ function createOutput(
     },
     seedTimings: seedTiming.phases,
     cleanTimings: timing.phases,
+    certifiedRecoveryTimings: certifiedTiming.phases,
     fullValidationTimings: recoveryTiming.phases,
     completeEmptyDiscoveryTimings: missingTiming.phases,
   };

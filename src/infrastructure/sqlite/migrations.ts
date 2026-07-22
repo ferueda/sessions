@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { bootstrapMigration } from "./migrations/0001-bootstrap.ts";
 import { sessionDocumentMetricsMigration } from "./migrations/0002-session-document-metrics.ts";
+import { indexGenerationReceiptMigration } from "./migrations/0003-index-generation-receipt.ts";
 
 const CHECKSUM_SCHEME = "sha256-utf8-v1";
 const MIGRATION_TABLE = "sessions_schema_migrations";
@@ -50,8 +51,9 @@ export interface ApplyMigrationsOptions {
 export const sqliteMigrations: readonly SqliteMigration[] = [
   bootstrapMigration,
   sessionDocumentMetricsMigration,
+  indexGenerationReceiptMigration,
 ];
-export const CURRENT_INDEX_SCHEMA_VERSION = sessionDocumentMetricsMigration.version;
+export const CURRENT_INDEX_SCHEMA_VERSION = indexGenerationReceiptMigration.version;
 
 export function migrationChecksum(migration: SqliteMigration): string {
   const hash = createHash("sha256");

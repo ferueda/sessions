@@ -18,13 +18,17 @@ import {
   type SessionManifestResult,
 } from "../src/domain/session-manifest.ts";
 import type { SessionDocument, SessionIdentity, SourceInstance } from "../src/domain/session.ts";
-import { applyMigrations } from "../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
 } from "../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const CORPUS_REVISIONS = 2_000;
 const CAPTURED_AT = "2026-07-21T12:00:00.000Z";
@@ -119,8 +123,16 @@ async function seedCorpus(
     now,
     token: () => "manifest-measurement-writer",
   });
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
   try {
-    const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+    const index = createCoordinatedSqliteSessionIndex(database, {
+      lease,
+      now,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+    });
     for (const source of SOURCES.toReversed()) {
       const selected = documents.filter((document) => sameSource(document.identity.source, source));
       const run = await index.startRun({ source, startedAt: CAPTURED_AT });

@@ -21,13 +21,17 @@ import type {
   SessionIdentity,
   SourceInstance,
 } from "../src/domain/session.ts";
-import { applyMigrations } from "../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
 } from "../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const CORPUS_SESSIONS = 2_000;
 const ENTRIES_PER_SESSION = 5;
@@ -109,8 +113,16 @@ async function seedCorpus(database: DatabaseSync): Promise<void> {
     now,
     token: () => "entry-measurement-writer",
   });
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
   try {
-    const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+    const index = createCoordinatedSqliteSessionIndex(database, {
+      lease,
+      now,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+    });
     const run = await index.startRun({ source: SOURCE, startedAt: CAPTURED_AT });
     for (let ordinal = 0; ordinal < CORPUS_SESSIONS; ordinal += 1) {
       await index.replaceSession(run, replacement(ordinal));

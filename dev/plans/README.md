@@ -12,13 +12,9 @@ The durable product roadmap lives in the
 
 ## Active executor plans
 
-Implement and close this remaining cross-cutting performance plan:
+No active executor plans remain after the three accepted cross-cutting
+performance changes.
 
-1. [Certify crash-safe index generations](260721-certified-index-recovery.md)
-   follows the completed bounded incremental work and can now certify the final
-   batch mutation surface once. It adds an exact transactional recovery receipt
-   and retains full validation as the fail-closed fallback.
-
-This maintenance plan does not reorder the product roadmap. Digest-guarded
-coordinate reads remain the next product milestone to shape; later product
-milestones still wait for their predecessor's contract and acceptance evidence.
+Digest-guarded coordinate reads remain the next product milestone to shape;
+later product milestones still wait for their predecessor's contract and
+acceptance evidence.

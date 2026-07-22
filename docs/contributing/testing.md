@@ -65,6 +65,7 @@ export, and the packaged Agent Skill are current coverage.
 | Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`                 | `pnpm check`                                              |
 | Cursor path, store/JSONL normalization    | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/cursor/<file>.test.ts`                | `pnpm check`                                              |
 | Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`                 | `pnpm check`                                              |
+| Certified writer recovery                 | SQLite receipt/lease crash matrix plus equal-clone application measurement | Focused receipt, coordination, lifecycle, and index tests      | `pnpm measure:indexing`, then `pnpm check`                |
 | Doctor health, progress, or timing        | SQLite health plus focused application/runtime/CLI contracts               | Focused doctor and index-health tests                          | `pnpm check`                                              |
 | Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | Focused search or entry-query application/infrastructure tests | `pnpm check`                                              |
 | Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                        | `pnpm check`                                              |
@@ -212,18 +213,33 @@ and report only aggregate phase durations, peak process memory, final health,
 and persistent file-state equality. A live result supplements rather than
 replaces deterministic integrity tests.
 
+Certified-recovery proof stays at the SQLite boundary. Migration tests require a
+data-preserving schema-2-to-3 upgrade with no manufactured receipt. Receipt,
+coordination, lifecycle, and FTS tests cover the exact lease/schema/cookie
+eligibility matrix, same-transaction receipt cleanup, sequence-zero setup,
+atomic mutation/sequence rollback, stale-owner fencing, table-structure repair,
+and full-validation fallback. A narrow architecture assertion prevents an
+index-purpose persistent transaction from bypassing the certified mutation
+wrapper. Crash tests use deterministic clocks and heartbeat schedulers rather
+than sleeps or contributor data.
+
 `pnpm measure:indexing` is the deterministic, provider-free 2,000-session
 indexing baseline. Equal seeded clones cover an untimed stable control, a timed
-clean run, a deliberately unproven full-validation run, and a complete empty
-discovery. At the current 128-item bound, each stable run must use exactly 16
-freshness reads, 16 unchanged writes, and 16 tracked-identity page reads with
-zero source reads. Empty discovery must use 16 tracked pages plus 16 missing
-writes, retain every canonical document and representative list/search/entries
-result, report all 2,000 sessions current-but-missing, retain the first 100
-ordered missing run items, and report 1,900 omitted items. The script requires
-exact semantic, health, query, run-bookkeeping, and clean-writer equality where
-applicable and prints aggregate counts and timings only. It has no elapsed-time
-threshold and stays outside `pnpm check`.
+clean run, a raw-handle-abandoned certified generation, a receipt-invalidated
+full-validation control, and a complete empty discovery. At the current
+128-item bound, each stable run must use exactly 16 freshness reads, 16 unchanged
+writes, and 16 tracked-identity page reads with zero source reads. The abandoned
+clone must select `certified-recovery`, interrupt its prior active run, and make
+zero global validation calls. The invalidated clone must select
+`full-validation` and exercise the exact fallback. Both must remain semantically
+equal to the clean control; operational generations and interrupted-run rows are
+asserted separately. Empty discovery must use 16 tracked pages plus 16 missing
+writes, retain every canonical document and representative
+list/search/entries result, report all 2,000 sessions current-but-missing, retain
+the first 100 ordered missing run items, and report 1,900 omitted items. The
+script requires exact semantic, health, query, run-bookkeeping, and clean-writer
+equality where applicable and prints aggregate counts and timings only. It has
+no elapsed-time threshold and stays outside `pnpm check`.
 
 `pnpm measure:manifest` is the deterministic, provider-free manifest baseline.
 It indexes 2,000 generic revisions across three source instances through the

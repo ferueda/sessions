@@ -201,6 +201,8 @@ function renderIndexProgress(event: IndexProgressEvent): string {
     switch (event.mode) {
       case "fast":
         return "Using the clean Sessions library fast path.";
+      case "certified-recovery":
+        return "Using bounded checks for the prior certified Sessions writer generation.";
       case "bootstrap":
         return "Preparing a new Sessions library.";
       case "full-validation":

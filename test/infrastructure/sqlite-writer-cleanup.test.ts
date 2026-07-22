@@ -85,7 +85,7 @@ describe("SQLite writer cleanup", () => {
       source: sessionIdentity.source,
       startedAt: "2026-07-14T13:00:00.000Z",
     });
-    writer.database.exec(`CREATE TRIGGER test_fail_canonical_insert
+    writer.database.exec(`CREATE TEMP TRIGGER test_fail_canonical_insert
                           BEFORE INSERT ON sessions_canonical_sessions
                           BEGIN
                             SELECT RAISE(ABORT, 'synthetic write failure');

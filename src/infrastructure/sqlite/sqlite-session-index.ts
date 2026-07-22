@@ -31,12 +31,9 @@ import {
   readSessionSummary,
   sameRevision,
 } from "./sqlite-session-state.ts";
-import { runImmediateTransaction, SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
-import {
-  assertWriterLease,
-  runLeasedImmediateTransaction,
-  type WriterLeaseIdentity,
-} from "./writer-lease.ts";
+import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+import { assertWriterLease, type WriterLeaseIdentity } from "./writer-lease.ts";
+import { runCertifiedIndexMutation } from "./writer-recovery-receipt.ts";
 
 const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
   "unavailable",
@@ -94,6 +91,7 @@ export function createSqliteSessionIndexReader(database: DatabaseSync): SessionI
 export interface CoordinatedSqliteSessionIndexOptions {
   readonly lease: WriterLeaseIdentity;
   readonly now: () => Date;
+  readonly schemaVersion: number;
   readonly onIntegrityUncertain?: () => void;
 }
 
@@ -107,17 +105,9 @@ export function createCoordinatedSqliteSessionIndex(
   const reader = createSqliteSessionIndexReader(database);
   const assertLease = (): void => assertWriterLease(database, options.lease, options);
   const markIntegrityUncertain = (): void => options.onIntegrityUncertain?.();
-  const runTrackedImmediateTransaction = <T>(operation: () => T): T => {
+  const runCertifiedMutation = <T>(operation: () => T): T => {
     try {
-      return runImmediateTransaction(database, operation);
-    } catch (error) {
-      markIntegrityUncertain();
-      throw error;
-    }
-  };
-  const runLeasedMutation = <T>(operation: () => T): T => {
-    try {
-      return runLeasedImmediateTransaction(database, options.lease, options, operation);
+      return runCertifiedIndexMutation(database, options.lease, options, operation);
     } catch (error) {
       markIntegrityUncertain();
       throw error;
@@ -129,8 +119,7 @@ export function createCoordinatedSqliteSessionIndex(
     async startRun(input) {
       assertSource(input.source);
       assertCanonicalTimestamp(input.startedAt, "Index run start");
-      return runTrackedImmediateTransaction(() => {
-        assertLease();
+      return runCertifiedMutation(() => {
         const sourceInstanceId = ensureSourceInstance(database, input.source);
         assertSingleRowChange(
           database
@@ -167,7 +156,7 @@ export function createCoordinatedSqliteSessionIndex(
 
     async recordUnchangedBatch(run, observations) {
       assertObservationBatch(run, observations);
-      runLeasedMutation(() => {
+      runCertifiedMutation(() => {
         const context = assertActiveRun(database, run, run.source);
         const identities = observations.map((observation) => observation.identity);
         const freshness = readSessionFreshnessBatch(database, context.sourceInstanceId, identities);
@@ -189,8 +178,7 @@ export function createCoordinatedSqliteSessionIndex(
     async recordFailure(run, observation, failure) {
       assertIdentity(observation.identity);
       assertFailureCode(failure);
-      runTrackedImmediateTransaction(() => {
-        assertLease();
+      runCertifiedMutation(() => {
         recordFailure(database, run, observation, failure);
       });
     },
@@ -199,7 +187,7 @@ export function createCoordinatedSqliteSessionIndex(
       assertIdentity(replacement.observation.identity);
       let activeRunValidated = false;
       try {
-        runLeasedMutation(() => {
+        runCertifiedMutation(() => {
           const context = assertActiveRun(database, run, replacement.observation.identity.source);
           activeRunValidated = true;
           const sessionId = ensureTracking(
@@ -223,7 +211,7 @@ export function createCoordinatedSqliteSessionIndex(
       } catch (operationError) {
         if (!activeRunValidated) throw operationError;
         try {
-          runLeasedMutation(() => {
+          runCertifiedMutation(() => {
             recordFailure(database, run, replacement.observation, "repository-write");
           });
         } catch (failureRecordingError) {
@@ -248,7 +236,7 @@ export function createCoordinatedSqliteSessionIndex(
 
     async recordMissingBatch(run, identities) {
       assertIdentityBatch(run, identities);
-      runLeasedMutation(() => {
+      runCertifiedMutation(() => {
         const context = assertActiveRun(database, run, run.source);
         const tracked = resolveTrackedBatch(database, context, identities);
         if (tracked.length === 0) return;
@@ -263,8 +251,7 @@ export function createCoordinatedSqliteSessionIndex(
       if (completion.status === "incomplete" && !RUN_FAILURE_CODES.has(completion.failure)) {
         throw new TypeError("Invalid index run failure code");
       }
-      return runTrackedImmediateTransaction(() => {
-        assertLease();
+      return runCertifiedMutation(() => {
         const context = assertActiveRun(database, run);
         if (completion.status === "completed") {
           assertSingleRowChange(

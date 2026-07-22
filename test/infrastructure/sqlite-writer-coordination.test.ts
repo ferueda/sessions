@@ -31,6 +31,7 @@ import {
   startWriterLeaseHeartbeat,
   type WriterLeaseScheduler,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -549,9 +550,15 @@ describe("SQLite writer coordination", () => {
         now: acquiredAt,
         token: () => "long-replacement-owner",
       });
+      initializeWriterRecoveryReceipt(database, lease, {
+        now: acquiredAt,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const index = createCoordinatedSqliteSessionIndex(database, {
         lease,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
         now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:20.000Z",
           "2026-07-13T12:01:00.000Z",
@@ -594,9 +601,15 @@ describe("SQLite writer coordination", () => {
         now: acquiredAt,
         token: () => "failed-replacement-owner",
       });
+      initializeWriterRecoveryReceipt(database, lease, {
+        now: acquiredAt,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const index = createCoordinatedSqliteSessionIndex(database, {
         lease,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
         now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:20.000Z",
           "2026-07-13T12:01:00.000Z",
@@ -609,7 +622,7 @@ describe("SQLite writer coordination", () => {
         source: sessionIdentity.source,
         startedAt: "2026-07-13T12:00:00.000Z",
       });
-      database.exec(`CREATE TRIGGER fail_canonical_insert
+      database.exec(`CREATE TEMP TRIGGER fail_canonical_insert
                      BEFORE INSERT ON sessions_canonical_sessions
                      BEGIN
                        SELECT RAISE(ABORT, 'synthetic replacement failure');
@@ -646,9 +659,14 @@ describe("SQLite writer coordination", () => {
         now: clock.now,
         token: () => "first-repository-owner",
       });
+      initializeWriterRecoveryReceipt(database, firstLease, {
+        now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const first = createCoordinatedSqliteSessionIndex(database, {
         lease: firstLease,
         now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
       });
       const sessionIdentity = identity("fencing-profile", "session-one");
       const sessionObservation = observation(sessionIdentity, "revision-a");

@@ -1,4 +1,4 @@
-export type IndexWriterOpenMode = "fast" | "bootstrap" | "full-validation";
+export type IndexWriterOpenMode = "fast" | "certified-recovery" | "bootstrap" | "full-validation";
 
 export type IndexWriterValidationPhase =
   | "canonical"

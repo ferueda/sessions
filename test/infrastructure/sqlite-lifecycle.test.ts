@@ -18,6 +18,8 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
+import type { IndexProgressEvent } from "../../src/application/index-progress.ts";
+import type { IndexTimingPhase } from "../../src/application/index-timing.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
@@ -443,7 +445,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     await expect(readFile(paths.wal, "utf8")).resolves.toBe("orphaned recovery state");
   });
 
-  test("recovers a valid WAL and interrupts the abandoned run before new work", async () => {
+  test("uses certified recovery for a valid WAL and interrupts the abandoned run", async () => {
     const paths = await fixturePaths();
     const databaseModule = pathToFileURL(
       path.resolve("src/infrastructure/sqlite/database.ts"),
@@ -482,7 +484,18 @@ process.exit(0);`,
       status: "recovery-required",
     });
 
-    const writer = await lifecycle.openWriter(paths);
+    const progressEvents: IndexProgressEvent[] = [];
+    const timingPhases: IndexTimingPhase[] = [];
+    let timingTick = 0;
+    const writer = await lifecycle.openWriter(paths, {
+      progress: (event) => progressEvents.push(event),
+      timing: {
+        now: () => ++timingTick,
+        record: (phase) => timingPhases.push(phase),
+      },
+    });
+    expect(progressEvents).toEqual([{ kind: "writer-open-mode", mode: "certified-recovery" }]);
+    expect(timingPhases).toEqual([]);
     expect(
       writer.database
         .prepare(

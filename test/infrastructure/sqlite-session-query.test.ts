@@ -12,7 +12,10 @@ import {
 } from "../../src/domain/session-query.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { readQueryRevision } from "../../src/infrastructure/sqlite/query-cursor.ts";
 import {
   createCoordinatedSqliteSessionIndex,
@@ -22,7 +25,13 @@ import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
+  runLeasedImmediateTransaction,
+  type WriterLeaseIdentity,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  clearWriterRecoveryReceiptInTransaction,
+  initializeWriterRecoveryReceiptInTransaction,
+} from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 import { replacement } from "../contracts/session-index.contract.ts";
 import {
   sessionQueryCorpusDocuments,
@@ -358,8 +367,13 @@ describe("SQLite session query", () => {
       now,
       token: () => "unknown-coverage-writer",
     });
+    initializeDirectIndexWriter(fixture.database, lease, now);
     try {
-      const index = createCoordinatedSqliteSessionIndex(fixture.database, { lease, now });
+      const index = createCoordinatedSqliteSessionIndex(fixture.database, {
+        lease,
+        now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       await index.startRun({
         source: sessionQueryCorpusIdentity("a-session").source,
         startedAt: "2026-07-14T14:00:00.000Z",
@@ -517,7 +531,12 @@ async function seededQueryFixture(): Promise<{ readonly database: DatabaseSync }
     now,
     token: () => "seed-query-writer",
   });
-  const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+  initializeDirectIndexWriter(database, lease, now);
+  const index = createCoordinatedSqliteSessionIndex(database, {
+    lease,
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
   const [firstDocument, secondDocument] = sessionQueryCorpusDocuments();
   const first = firstDocument.identity;
   const second = secondDocument.identity;
@@ -594,8 +613,13 @@ async function seedQueryDocuments(
     now,
     token: () => "seed-marker-query-writer",
   });
+  initializeDirectIndexWriter(database, lease, now);
   try {
-    const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+    const index = createCoordinatedSqliteSessionIndex(database, {
+      lease,
+      now,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+    });
     const run = await index.startRun({
       source: first.identity.source,
       startedAt: "2026-07-14T12:00:00.000Z",
@@ -615,4 +639,18 @@ async function seedQueryDocuments(
       now: () => new Date("2026-07-14T12:02:00.000Z"),
     });
   }
+}
+
+function initializeDirectIndexWriter(
+  database: DatabaseSync,
+  lease: WriterLeaseIdentity,
+  now: () => Date,
+): void {
+  runLeasedImmediateTransaction(database, lease, { now }, (transactionNow) => {
+    clearWriterRecoveryReceiptInTransaction(database, lease, { now: transactionNow });
+    initializeWriterRecoveryReceiptInTransaction(database, lease, {
+      now: transactionNow,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+    });
+  });
 }

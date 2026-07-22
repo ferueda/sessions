@@ -18,11 +18,22 @@ import {
 } from "../contracts/session-index.contract.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { decodeSqliteDocumentDigest } from "../../src/infrastructure/sqlite/sqlite-document-digest.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
-import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  acquireWriterLease,
+  runLeasedImmediateTransaction,
+} from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  clearWriterRecoveryReceiptInTransaction,
+  initializeWriterRecoveryReceipt,
+  initializeWriterRecoveryReceiptInTransaction,
+} from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 describe("SQLite session index", () => {
   runSessionIndexContract(createFixture);
@@ -305,6 +316,7 @@ describe("SQLite session index", () => {
       database.exec("DROP TRIGGER sessions_content_values_duplicate_guard");
       insertContentWithDigest(database, digest, text);
       insertContentWithDigest(database, digest, text);
+      index.refreshReceipt();
       const run = await index.startRun({
         source: sessionIdentity.source,
         startedAt: "2026-07-13T12:00:00.000Z",
@@ -359,6 +371,7 @@ describe("SQLite session index", () => {
         startedAt: "2026-07-13T13:00:00.000Z",
       });
       database.exec(`DROP TRIGGER ${trigger}`);
+      index.refreshReceipt();
       const next = replacement(sessionIdentity, "revision-b", {
         ...minimalDocument(sessionIdentity),
         entries: [entry(0, "replacement affected-row evidence")],
@@ -1125,10 +1138,28 @@ function createIndex(database: DatabaseSync, onIntegrityUncertain?: () => void) 
     now,
     token: () => "synthetic-test-owner",
   });
-  return createCoordinatedSqliteSessionIndex(database, {
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
+  const index = createCoordinatedSqliteSessionIndex(database, {
     lease,
     now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     ...(onIntegrityUncertain === undefined ? {} : { onIntegrityUncertain }),
+  });
+  return Object.assign(index, {
+    // Persistent DDL is used by a few corruption tests. Refresh the synthetic
+    // proof so those tests still reach the operation-specific postcondition.
+    refreshReceipt() {
+      runLeasedImmediateTransaction(database, lease, { now }, (transactionNow) => {
+        clearWriterRecoveryReceiptInTransaction(database, lease, { now: transactionNow });
+        initializeWriterRecoveryReceiptInTransaction(database, lease, {
+          now: transactionNow,
+          schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+        });
+      });
+    },
   });
 }
 
