@@ -11,6 +11,9 @@ import {
 const ABOVE_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
 const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
 const DOCTOR_EXPECTED_FTS_TABLE = "sessions_doctor_expected_fts";
+const ORACLE_EXPECTED_FTS_TABLE = "sessions_test_oracle_expected_fts";
+const ORACLE_EXPECTED_VOCAB_TABLE = "sessions_test_oracle_expected_fts_vocab";
+const ORACLE_ACTUAL_VOCAB_TABLE = "sessions_test_oracle_actual_fts_vocab";
 
 describe("SQLite FTS projection invariants", () => {
   test("compares complete semantic content across signed-ID keyset windows and cleans TEMP state", () => {
@@ -52,6 +55,45 @@ describe("SQLite FTS projection invariants", () => {
 
       database.exec("ROLLBACK");
       expect(database.isTransaction).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("partitions exact comparison by UTF-8 term order and keeps an oversized term whole", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, 1n, "alpha alpha beta ａ 𐀀 𐀀 𐀀 𐀀");
+      const rangeInstances: bigint[] = [];
+
+      const bounded = ftsProjectionSemanticContentIsValidReadOnly(database, {
+        maxTermInstances: 3n,
+        observeTermRange: (instances) => rangeInstances.push(instances),
+      });
+
+      expect(bounded).toBe(true);
+      expect(bounded).toBe(wholeVocabularySemanticContentIsValid(database));
+      expect(rangeInstances).toEqual([3n, 1n, 4n]);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("fails closed for invalid internal term-range targets", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, 1n, "canonical evidence");
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database, { maxTermInstances: 0n })).toBe(
+        false,
+      );
+      expect(
+        ftsProjectionSemanticContentIsValidReadOnly(database, {
+          maxTermInstances: 1 as unknown as bigint,
+        }),
+      ).toBe(false);
       expect(readDoctorTempObjects(database)).toEqual([]);
     } finally {
       database.close();
@@ -108,6 +150,11 @@ describe("SQLite FTS projection invariants", () => {
       indexed: "alpha gamma beta",
     },
     {
+      name: "different counts for the same term universe",
+      canonical: "alpha alpha beta",
+      indexed: "alpha beta beta",
+    },
+    {
       name: "an unexpected term for zero-token canonical text",
       canonical: "!!!",
       indexed: "unexpected",
@@ -118,7 +165,50 @@ describe("SQLite FTS projection invariants", () => {
       insertContent(database, ABOVE_SAFE_INTEGER, canonical);
       replaceIndexedText(database, ABOVE_SAFE_INTEGER, canonical, indexed);
 
-      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(false);
+      const bounded = ftsProjectionSemanticContentIsValidReadOnly(database, {
+        maxTermInstances: 1n,
+      });
+      expect(bounded).toBe(wholeVocabularySemanticContentIsValid(database));
+      expect(bounded).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("detects cross-document position damage with matching vocabulary counts and docsize", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, 1n, "alpha beta");
+      insertContent(database, 2n, "gamma delta");
+      replaceIndexedText(database, 1n, "alpha beta", "alpha delta");
+      replaceIndexedText(database, 2n, "gamma delta", "gamma beta");
+
+      const bounded = ftsProjectionSemanticContentIsValidReadOnly(database, {
+        maxTermInstances: 1n,
+      });
+      expect(bounded).toBe(wholeVocabularySemanticContentIsValid(database));
+      expect(bounded).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("detects docsize-only shadow damage", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, 1n, "alpha beta");
+      database.enableDefensive(false);
+      database
+        .prepare("UPDATE sessions_content_fts_docsize SET sz = ? WHERE id = ?")
+        .run(new Uint8Array([1]), 1n);
+
+      const bounded = ftsProjectionSemanticContentIsValidReadOnly(database, {
+        maxTermInstances: 1n,
+      });
+      expect(bounded).toBe(wholeVocabularySemanticContentIsValid(database));
+      expect(bounded).toBe(false);
       expect(readDoctorTempObjects(database)).toEqual([]);
     } finally {
       database.close();
@@ -214,4 +304,105 @@ function readDoctorTempObjects(database: DatabaseSync): readonly Record<string, 
        ORDER BY name`,
     )
     .all();
+}
+
+function wholeVocabularySemanticContentIsValid(database: DatabaseSync): boolean {
+  let valid = false;
+  try {
+    dropOracleProjection(database);
+    database.exec(`CREATE VIRTUAL TABLE temp.${ORACLE_EXPECTED_FTS_TABLE} USING fts5(
+  text,
+  content='',
+  tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE temp.${ORACLE_EXPECTED_VOCAB_TABLE}
+USING fts5vocab(temp, ${ORACLE_EXPECTED_FTS_TABLE}, 'instance');
+
+CREATE VIRTUAL TABLE temp.${ORACLE_ACTUAL_VOCAB_TABLE}
+USING fts5vocab(main, sessions_content_fts, 'instance');`);
+
+    const rowsStatement = database.prepare(
+      `SELECT content_id, text
+       FROM sessions_content_values
+       ORDER BY content_id`,
+    );
+    rowsStatement.setReadBigInts(true);
+    const insert = database.prepare(
+      `INSERT INTO temp.${ORACLE_EXPECTED_FTS_TABLE} (rowid, text)
+       VALUES (?, ?)`,
+    );
+    const rows = rowsStatement.all() as unknown as readonly {
+      readonly content_id: unknown;
+      readonly text: unknown;
+    }[];
+    for (const row of rows) {
+      if (typeof row.content_id !== "bigint" || typeof row.text !== "string") {
+        throw new Error("Malformed whole-vocabulary oracle fixture");
+      }
+      insert.run(row.content_id, row.text);
+    }
+
+    valid =
+      oracleTablesMatchExactly(
+        database,
+        "main.sessions_content_fts_docsize",
+        `temp.${ORACLE_EXPECTED_FTS_TABLE}_docsize`,
+        "id, sz",
+      ) &&
+      oracleTablesMatchExactly(
+        database,
+        `temp.${ORACLE_ACTUAL_VOCAB_TABLE}`,
+        `temp.${ORACLE_EXPECTED_VOCAB_TABLE}`,
+        "term, doc, col, offset",
+      );
+  } catch {
+    valid = false;
+  } finally {
+    try {
+      dropOracleProjection(database);
+    } catch {
+      valid = false;
+    }
+  }
+  return valid;
+}
+
+function oracleTablesMatchExactly(
+  database: DatabaseSync,
+  left: string,
+  right: string,
+  columns: string,
+): boolean {
+  const leftOnly = database
+    .prepare(
+      `SELECT 1 AS mismatch
+       FROM (
+         SELECT ${columns} FROM ${left}
+         EXCEPT
+         SELECT ${columns} FROM ${right}
+       )
+       LIMIT 1`,
+    )
+    .get();
+  if (leftOnly !== undefined) return false;
+  return (
+    database
+      .prepare(
+        `SELECT 1 AS mismatch
+         FROM (
+           SELECT ${columns} FROM ${right}
+           EXCEPT
+           SELECT ${columns} FROM ${left}
+         )
+         LIMIT 1`,
+      )
+      .get() === undefined
+  );
+}
+
+function dropOracleProjection(database: DatabaseSync): void {
+  database.exec(`DROP TABLE IF EXISTS temp.${ORACLE_ACTUAL_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${ORACLE_EXPECTED_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${ORACLE_EXPECTED_FTS_TABLE};`);
 }
