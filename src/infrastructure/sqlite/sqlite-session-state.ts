@@ -99,6 +99,65 @@ export function readSessionFreshness(
   return decodeTrackedSessionFreshness(identity, booleanIntegerAt(row.has_document), row);
 }
 
+export function readSessionFreshnessBatch(
+  database: DatabaseSync,
+  sourceInstanceId: number,
+  identities: readonly SessionIdentity[],
+): readonly SessionFreshness[] {
+  const values = identities.map(() => "(?, ?)").join(", ");
+  const parameters = identities.flatMap((identity, ordinal) => [ordinal, identity.nativeId]);
+  const rows = database
+    .prepare(
+      `WITH requested(ordinal, native_id) AS (VALUES ${values})
+       SELECT requested.ordinal,
+              requested.native_id,
+              tracking.session_id,
+              tracking.source_instance_id,
+              tracking.last_good_fingerprint_scheme,
+              tracking.last_good_fingerprint_digest,
+              tracking.last_good_adapter_version,
+              tracking.latest_fingerprint_scheme,
+              tracking.latest_fingerprint_digest,
+              tracking.latest_adapter_version,
+              tracking.latest_outcome,
+              tracking.latest_failure_code,
+              CASE WHEN canonical.session_id IS NULL THEN 0 ELSE 1 END AS has_document
+       FROM requested
+       LEFT JOIN sessions_session_tracking AS tracking
+         ON tracking.source_instance_id = ?
+        AND tracking.native_id = requested.native_id COLLATE BINARY
+       LEFT JOIN sessions_canonical_sessions AS canonical
+         ON canonical.session_id = tracking.session_id
+       ORDER BY requested.ordinal`,
+    )
+    .all(...parameters, sourceInstanceId) as unknown as readonly FreshnessBatchRow[];
+  if (rows.length !== identities.length) throw new SqliteSessionIndexError("corrupt-data");
+
+  return Object.freeze(
+    rows.map((row, ordinal) => {
+      const identity = identities[ordinal];
+      if (
+        identity === undefined ||
+        integerAt(row.ordinal) !== ordinal ||
+        row.native_id !== identity.nativeId
+      ) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      if (row.session_id === null) {
+        if (row.source_instance_id !== null || booleanIntegerAt(row.has_document)) {
+          throw new SqliteSessionIndexError("corrupt-data");
+        }
+        return { status: "untracked" as const, identity: copyIdentity(identity) };
+      }
+      integerAt(row.session_id);
+      if (integerAt(row.source_instance_id) !== sourceInstanceId) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      return decodeTrackedSessionFreshness(identity, booleanIntegerAt(row.has_document), row);
+    }),
+  );
+}
+
 export function decodeTrackedSessionFreshness(
   identity: SessionIdentity,
   hasDocument: boolean,
@@ -279,6 +338,22 @@ function booleanIntegerAt(value: unknown): boolean {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   return integer === 1;
+}
+
+function integerAt(value: unknown): number {
+  const integer = typeof value === "bigint" ? Number(value) : value;
+  if (typeof integer !== "number" || !Number.isSafeInteger(integer) || integer < 0) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return integer;
+}
+
+interface FreshnessBatchRow extends SessionTrackingFreshnessColumns {
+  readonly ordinal: unknown;
+  readonly native_id: unknown;
+  readonly session_id: unknown;
+  readonly source_instance_id: unknown;
+  readonly has_document: unknown;
 }
 
 export interface SessionSummaryColumns {

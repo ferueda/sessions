@@ -19,33 +19,39 @@ never writes to the provider.
 3. Probe the source, then exhaust and validate discovery before applying any
    candidate. Conflicting duplicates or any invalid discovery item make the
    whole discovery set incomplete.
-4. Process admitted candidates in binary native-ID order. A candidate whose
-   adapter version and aggregate input fingerprint match the last good revision
-   is recorded as unchanged without reading its transcript again.
+4. Process admitted candidates in binary native-ID order in fixed slices of 128.
+   Read freshness for one whole slice. A candidate whose adapter version and
+   aggregate input fingerprint match the last good revision is buffered with
+   consecutive unchanged candidates and recorded in one bounded write, without
+   reading its transcript again.
 5. Read and validate each changed candidate. Replace its canonical document,
    public-document digest, exact document metrics, tracking state, interned text,
    and FTS rows in one leased transaction. Record ordinary typed failures immediately, but hold a
    first-attempt `source-changed` outcome until the primary pass finishes.
 6. If any source-change outcomes were held, perform one fresh complete
    rediscovery for that source and retry only those original identities, in
-   their primary order. A fresh last-good revision becomes unchanged without a
+   their primary order. Retry freshness and unchanged writes use the same
+   bounded slices. A fresh last-good revision becomes unchanged without a
    transcript read. Ignore identities found only by rediscovery.
-7. Using only the primary discovery's `seen` set, mark every tracked identity
-   absent from that exact source instance as `missing`. This includes a failed
-   first capture that has tracking evidence but no canonical document. Finish
-   the run with `complete` coverage.
+7. Page tracked identities for the exact source instance in binary native-ID
+   order, 128 at a time. Merge each page against the immutable primary discovery
+   and record absent identities as `missing` in a bounded write. This includes a
+   failed first capture that has tracking evidence but no canonical document.
+   Reconciliation builds no second corpus-sized `seen` set or tracked-identity
+   list. Finish the run with `complete` coverage.
 8. After all index work and cleanup succeeds, seal and release only the exact
    owned generation, close the database, harden its files, and publish the
    private post-close proof last.
 
-Cooperative cancellation is checked before writer acquisition and between these
-application operations. It is not passed into provider adapters or SQLite
-transactions. Cancellation during discovery returns no candidate set;
-cancellation after a changed read discards that result before replacement; and
-cancellation after a committed replacement preserves the complete transaction.
-Checks around reconciliation and source completion prevent a partial scan from
-proving absence. Writer close records any still-active run as `interrupted` with
-unknown coverage.
+Cooperative cancellation is checked before writer acquisition and before and
+after each application page, batch, or single-candidate operation. It is not
+passed into provider adapters or SQLite transactions. Cancellation during
+discovery returns no candidate set; cancellation after a changed read discards
+that result before replacement; and cancellation after a committed replacement
+or completed batch preserves that complete transaction. Checks around every
+reconciliation page/write and source completion prevent a partial scan from
+proving complete coverage. Writer close records any still-active run as
+`interrupted` with unknown coverage.
 
 ## Guarantees and failures
 
@@ -59,11 +65,19 @@ unknown coverage.
   typed read failure records one terminal failure. Other candidate read failures
   are recorded without retry. An existing canonical document remains the last
   good copy and becomes `stale`; a first-read failure remains `unindexed`.
-- The primary discovery alone controls coverage, the `seen` set, and missing
-  reconciliation. A retry-only identity cannot change those decisions, and a
-  failed retry does not make an otherwise complete primary scan incomplete.
+- The primary discovery alone controls coverage and missing reconciliation. A
+  retry-only identity cannot change those decisions, and a failed retry does not
+  make an otherwise complete primary scan incomplete.
 - A replacement failure rolls back the replacement, records a
   `repository-write` failure when possible, and fails the indexing operation.
+- Each freshness result must match the requested identity and each tracked page
+  must be bounded, source-correct, strictly advancing, and honest about whether
+  more rows remain. Invalid repository results fail the run; they cannot be used
+  to skip a candidate or prove absence.
+- An unchanged or missing batch is one transaction. A failing batch rolls back
+  as a unit. Earlier completed batches may remain as a durable prefix, but the
+  active run finishes incomplete with unknown coverage and the next index is
+  safe to repeat.
 - A complete scan may mark a session `missing`, but it does not delete its
   canonical document or tracking-only failure evidence. A failed first capture
   can therefore be both `unindexed` and `missing`; later successful capture
@@ -95,10 +109,15 @@ matched or failed a canonical metadata or transcript filter.
 
 A run must fully discover a selected source before it can prove absence. Changed
 sessions are then read and replaced one at a time; unchanged fingerprints avoid
-that work. Source-change recovery may add one complete rediscovery for the
-source, shared by every affected primary candidate. It never adds a per-candidate
-discovery, sleep, backoff, or retry loop. This favors deterministic results,
-bounded failure handling, and last-good retention over parallel write throughput.
+that work. Freshness reads, unchanged writes, tracked-identity reads, and missing
+writes are bounded to 128 identities per repository call. Source-change recovery
+may add one complete rediscovery for the source, shared by every affected primary
+candidate. It never adds a per-candidate discovery, sleep, backoff, or retry
+loop. The complete primary discovery remains corpus-sized because it is the
+source snapshot that proves coverage, but incremental repository work and
+reconciliation memory do not add another corpus-sized identity collection. This
+favors deterministic results, bounded failure handling, and last-good retention
+over parallel write throughput.
 
 ## Opt-in timing
 
@@ -121,12 +140,18 @@ paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
 clock, collection, and stderr failures are best-effort and cannot replace the
 underlying command result.
 
-The fixed synthetic 2,000-session measurement now compares clean and deliberately
-unproven opens from equal cloned libraries. It requires equal reports, canonical
-and tracking state, health, representative queries, a final clean proof, and
-zero stable source reads. Its full-validation phase report identifies the
+The fixed synthetic 2,000-session measurement compares clean and deliberately
+unproven opens from equal cloned libraries. A fully stable run must use exactly
+16 freshness reads, 16 unchanged writes, and 16 tracked-identity page reads at
+the current 128-item bound, with equal reports, canonical and tracking state,
+health, representative queries, a final clean proof, and zero source reads. A
+fourth equal clone completes an empty discovery: it must use 16 tracked pages
+plus 16 missing writes, retain all canonical/query evidence, expose every
+session as current-but-missing, and retain the first 100 ordered run items while
+reporting 1,900 omitted items. Its full-validation phase report identifies the
 dominant recovery owner without changing the clean-path budget. Measurements
-are implementation evidence, not public performance guarantees.
+assert deterministic ownership and correctness, not elapsed-time thresholds or
+public performance guarantees.
 
 ## Code and proofs
 

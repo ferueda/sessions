@@ -126,7 +126,7 @@ async function seedContractCorpus(database: DatabaseSync): Promise<void> {
       source: corpus.missing.identity.source,
       startedAt: SESSION_QUERY_CONTRACT_TIMES.missing,
     });
-    await index.recordMissing(missingRun, corpus.missing.identity);
+    await index.recordMissingBatch(missingRun, [corpus.missing.identity]);
     await index.finishRun(missingRun, {
       status: "completed",
       finishedAt: "2026-07-14T11:01:00.000Z",

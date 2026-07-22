@@ -124,9 +124,9 @@ export function runSessionIndexContract(
         startedAt: "2026-07-13T14:00:00.000Z",
       });
       await expect(
-        fixture.index.recordUnchanged(unchangedRun, changedObservation),
+        fixture.index.recordUnchangedBatch(unchangedRun, [changedObservation]),
       ).rejects.toMatchObject({ code: "invalid-state" });
-      await fixture.index.recordUnchanged(unchangedRun, firstObservation);
+      await fixture.index.recordUnchangedBatch(unchangedRun, [firstObservation]);
       await expect(fixture.index.getFreshness(sessionIdentity)).resolves.toEqual({
         status: "current",
         identity: sessionIdentity,
@@ -165,14 +165,15 @@ export function runSessionIndexContract(
       await expect(fixture.index.getDocument(failedIdentity)).resolves.toBeUndefined();
       await finishCompleted(fixture.index, failedRun, counts({ discovered: 1, failed: 1 }));
 
-      await expect(fixture.index.listTrackedIdentities(failedIdentity.source)).resolves.toEqual([
-        failedIdentity,
-      ]);
       const missingFailedRun = await fixture.index.startRun({
         source: failedIdentity.source,
         startedAt: "2026-07-13T12:30:00.000Z",
       });
-      await fixture.index.recordMissing(missingFailedRun, failedIdentity);
+      await expect(fixture.index.listTrackedIdentitiesPage(missingFailedRun)).resolves.toEqual({
+        identities: [failedIdentity],
+        hasMore: false,
+      });
+      await fixture.index.recordMissingBatch(missingFailedRun, [failedIdentity]);
       await expect(fixture.index.getFreshness(failedIdentity)).resolves.toEqual({
         status: "unindexed",
         identity: failedIdentity,
@@ -198,7 +199,7 @@ export function runSessionIndexContract(
         startedAt: "2026-07-13T13:00:00.000Z",
       });
       await fixture.index.replaceSession(indexRun, indexed);
-      await fixture.index.recordMissing(indexRun, indexedIdentity);
+      await fixture.index.recordMissingBatch(indexRun, [indexedIdentity]);
       await expect(fixture.index.getFreshness(indexedIdentity)).resolves.toEqual({
         status: "current",
         identity: indexedIdentity,
@@ -227,6 +228,83 @@ export function runSessionIndexContract(
         counts({ discovered: 2, updated: 2, missing: 1 }),
       );
       expect(result.items).toEqual([{ identity: indexedIdentity, outcome: "missing" }]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("aligns mixed freshness batches and records unchanged batches exactly", async () => {
+    const fixture = await createFixture();
+    try {
+      const currentIdentity = identity("batch-profile", "current");
+      const staleIdentity = identity("batch-profile", "stale");
+      const unindexedIdentity = identity("batch-profile", "unindexed");
+      const untrackedIdentity = identity("batch-profile", "untracked");
+      const current = replacement(currentIdentity, "current-a", minimalDocument(currentIdentity));
+      const stale = replacement(staleIdentity, "stale-a", minimalDocument(staleIdentity));
+      const seedRun = await fixture.index.startRun({
+        source: currentIdentity.source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      await fixture.index.replaceSession(seedRun, current);
+      await fixture.index.replaceSession(seedRun, stale);
+      await finishCompleted(fixture.index, seedRun, counts({ discovered: 2, updated: 2 }));
+
+      const run = await fixture.index.startRun({
+        source: currentIdentity.source,
+        startedAt: "2026-07-13T11:00:00.000Z",
+      });
+      const staleFailure = observation(staleIdentity, "stale-b");
+      const unindexedFailure = observation(unindexedIdentity, "unindexed-a");
+      await fixture.index.recordFailure(run, staleFailure, "unreadable");
+      await fixture.index.recordFailure(run, unindexedFailure, "malformed");
+
+      await expect(
+        fixture.index.getFreshnessBatch(run, [
+          currentIdentity,
+          staleIdentity,
+          unindexedIdentity,
+          untrackedIdentity,
+        ]),
+      ).resolves.toEqual([
+        {
+          status: "current",
+          identity: currentIdentity,
+          lastGood: current.observation.revision,
+          latest: { outcome: "indexed", revision: current.observation.revision },
+        },
+        {
+          status: "stale",
+          identity: staleIdentity,
+          lastGood: stale.observation.revision,
+          latest: {
+            outcome: "failed",
+            revision: staleFailure.revision,
+            failure: "unreadable",
+          },
+        },
+        {
+          status: "unindexed",
+          identity: unindexedIdentity,
+          latest: {
+            outcome: "failed",
+            revision: unindexedFailure.revision,
+            failure: "malformed",
+          },
+        },
+        { status: "untracked", identity: untrackedIdentity },
+      ]);
+
+      await fixture.index.recordUnchangedBatch(run, [current.observation, stale.observation]);
+      const result = await finishCompleted(
+        fixture.index,
+        run,
+        counts({ discovered: 4, unchanged: 2, failed: 2, stale: 1 }),
+      );
+      expect(result.items).toEqual([
+        { identity: staleIdentity, outcome: "failed", failure: "unreadable" },
+        { identity: unindexedIdentity, outcome: "failed", failure: "malformed" },
+      ]);
     } finally {
       await fixture.close();
     }

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, test } from "vitest";
 
+import { SESSION_INDEX_BATCH_LIMIT } from "../../src/application/ports/session-index.ts";
 import {
   admittedReplacement,
   completeDocument,
@@ -25,6 +26,91 @@ import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease
 
 describe("SQLite session index", () => {
   runSessionIndexContract(createFixture);
+
+  test("bounds freshness and tracked pages across 128, 129, and 257 identities", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const source = identity("bounded-page-profile", "seed").source;
+      const nativeIds = [
+        ...Array.from(
+          { length: 252 },
+          (_, ordinal) => `session-${String(ordinal).padStart(3, "0")}`,
+        ),
+        "A",
+        "a",
+        "é",
+        "Ω",
+        "😀",
+      ].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+      const identities = nativeIds.map((nativeId) => identity(source.instanceId, nativeId));
+      const seedRun = await index.startRun({
+        source,
+        startedAt: "2026-07-13T09:00:00.000Z",
+      });
+      for (const [ordinal, sessionIdentity] of identities.entries()) {
+        await index.recordFailure(
+          seedRun,
+          observation(sessionIdentity, `page-revision-${String(ordinal)}`),
+          "malformed",
+        );
+      }
+      await finishCompleted(index, seedRun, counts({ discovered: 257, failed: 257 }));
+
+      const run = await index.startRun({
+        source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      const first = await index.listTrackedIdentitiesPage(run);
+      expect(first.identities).toEqual(identities.slice(0, SESSION_INDEX_BATCH_LIMIT));
+      expect(first.hasMore).toBe(true);
+      expect(Object.isFrozen(first)).toBe(true);
+      expect(Object.isFrozen(first.identities)).toBe(true);
+
+      const second = await index.listTrackedIdentitiesPage(run, first.identities.at(-1)?.nativeId);
+      expect(second.identities).toEqual(
+        identities.slice(SESSION_INDEX_BATCH_LIMIT, SESSION_INDEX_BATCH_LIMIT * 2),
+      );
+      expect(second.hasMore).toBe(true);
+
+      const third = await index.listTrackedIdentitiesPage(run, second.identities.at(-1)?.nativeId);
+      expect(third).toEqual({ identities: identities.slice(256), hasMore: false });
+
+      const freshness = await index.getFreshnessBatch(run, first.identities);
+      expect(freshness).toHaveLength(SESSION_INDEX_BATCH_LIMIT);
+      expect(freshness.map((state) => state.identity)).toEqual(first.identities);
+      expect(freshness.every((state) => state.status === "unindexed")).toBe(true);
+      expect(Object.isFrozen(freshness)).toBe(true);
+
+      await expect(
+        index.getFreshnessBatch(run, identities.slice(0, SESSION_INDEX_BATCH_LIMIT + 1)),
+      ).rejects.toBeInstanceOf(TypeError);
+      await expect(
+        index.getFreshnessBatch(run, [identities[1]!, identities[0]!]),
+      ).rejects.toBeInstanceOf(TypeError);
+      await expect(
+        index.getFreshnessBatch(run, [identities[0]!, identities[0]!]),
+      ).rejects.toBeInstanceOf(TypeError);
+      await expect(
+        index.recordMissingBatch(run, [identity("wrong-page-profile", "wrong-source")]),
+      ).rejects.toBeInstanceOf(TypeError);
+      await expect(index.listTrackedIdentitiesPage(run, "")).rejects.toBeInstanceOf(TypeError);
+
+      await index.recordMissingBatch(run, first.identities);
+      await index.recordMissingBatch(run, [identity(source.instanceId, "zzzz-untracked")]);
+      const result = await finishCompleted(
+        index,
+        run,
+        counts({ missing: SESSION_INDEX_BATCH_LIMIT }),
+      );
+      expect(result.items).toHaveLength(100);
+      expect(result.items.map((item) => item.identity)).toEqual(first.identities.slice(0, 100));
+      expect(result.items.every((item) => item.outcome === "missing")).toBe(true);
+      expect(result.omittedItemCount).toBe(28);
+    } finally {
+      database.close();
+    }
+  });
 
   test("round-trips tool identity and ordered text/omitted evidence without interning omissions", async () => {
     const database = migratedDatabase();
@@ -653,7 +739,7 @@ describe("SQLite session index", () => {
       expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
       expect(ftsCount(database, "recurrence")).toBe(1);
 
-      await index.recordMissing(run, secondIdentity);
+      await index.recordMissingBatch(run, [secondIdentity]);
       expect(rowCount(database, "sessions_content_values")).toBe(1);
       expect(rowCount(database, "sessions_content_occurrences")).toBe(1);
       expect(ftsCount(database, "recurrence")).toBe(1);
@@ -869,7 +955,7 @@ describe("SQLite session index", () => {
          END`,
       );
 
-      await expect(index.recordUnchanged(run, admitted.observation)).rejects.toMatchObject({
+      await expect(index.recordUnchangedBatch(run, [admitted.observation])).rejects.toMatchObject({
         code: "corrupt-data",
       });
 
@@ -887,6 +973,96 @@ describe("SQLite session index", () => {
           )
           .get(Number(run.id)),
       ).toEqual({ discovered_count: 0, unchanged_count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back whole unchanged and missing batches when one member fails", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const firstIdentity = identity("atomic-batch-profile", "first");
+      const secondIdentity = identity("atomic-batch-profile", "second");
+      const first = replacement(firstIdentity, "first-a", minimalDocument(firstIdentity));
+      const second = replacement(secondIdentity, "second-a", minimalDocument(secondIdentity));
+      const seedRun = await index.startRun({
+        source: firstIdentity.source,
+        startedAt: "2026-07-13T09:00:00.000Z",
+      });
+      await index.replaceSession(seedRun, first);
+      await index.replaceSession(seedRun, second);
+      await finishCompleted(index, seedRun, counts({ discovered: 2, updated: 2 }));
+      const run = await index.startRun({
+        source: firstIdentity.source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+
+      await expect(
+        index.recordUnchangedBatch(run, [
+          first.observation,
+          observation(secondIdentity, "second-b"),
+        ]),
+      ).rejects.toMatchObject({ code: "invalid-state" });
+      expect(integrityUncertain).toBe(true);
+      await expect(index.getFreshnessBatch(run, [firstIdentity, secondIdentity])).resolves.toEqual([
+        {
+          status: "current",
+          identity: firstIdentity,
+          lastGood: first.observation.revision,
+          latest: { outcome: "indexed", revision: first.observation.revision },
+        },
+        {
+          status: "current",
+          identity: secondIdentity,
+          lastGood: second.observation.revision,
+          latest: { outcome: "indexed", revision: second.observation.revision },
+        },
+      ]);
+      expect(readRunMutationCounts(database, run.id)).toEqual({
+        discovered_count: 0,
+        unchanged_count: 0,
+        missing_count: 0,
+        omitted_item_count: 0,
+      });
+
+      integrityUncertain = false;
+      database.exec(
+        `CREATE TEMP TRIGGER test_abort_missing_batch
+         BEFORE UPDATE OF presence_status ON sessions_session_tracking
+         WHEN old.native_id = 'second'
+         BEGIN
+           SELECT RAISE(ABORT, 'forced missing batch failure');
+         END`,
+      );
+      await expect(index.recordMissingBatch(run, [firstIdentity, secondIdentity])).rejects.toThrow(
+        /forced missing batch failure/u,
+      );
+      expect(integrityUncertain).toBe(true);
+      expect(
+        database
+          .prepare(
+            `SELECT native_id, presence_status
+             FROM sessions_session_tracking
+             ORDER BY native_id COLLATE BINARY`,
+          )
+          .all(),
+      ).toEqual([
+        { native_id: "first", presence_status: "present" },
+        { native_id: "second", presence_status: "present" },
+      ]);
+      expect(readRunMutationCounts(database, run.id)).toEqual({
+        discovered_count: 0,
+        unchanged_count: 0,
+        missing_count: 0,
+        omitted_item_count: 0,
+      });
+      expect(rowCount(database, "sessions_index_run_items")).toBe(0);
+      database.exec("DROP TRIGGER test_abort_missing_batch");
+      await finishCompleted(index, run, counts());
     } finally {
       database.close();
     }
@@ -914,7 +1090,7 @@ describe("SQLite session index", () => {
          END`,
       );
 
-      await expect(index.recordMissing(run, sessionIdentity)).rejects.toMatchObject({
+      await expect(index.recordMissingBatch(run, [sessionIdentity])).rejects.toMatchObject({
         code: "corrupt-data",
       });
 
@@ -1094,4 +1270,14 @@ function rowCount(database: DatabaseSync, table: string): number {
     readonly count: number | bigint;
   };
   return Number(row.count);
+}
+
+function readRunMutationCounts(database: DatabaseSync, runId: string): Record<string, unknown> {
+  return database
+    .prepare(
+      `SELECT discovered_count, unchanged_count, missing_count, omitted_item_count
+       FROM sessions_index_runs
+       WHERE run_id = ?`,
+    )
+    .get(Number(runId)) as Record<string, unknown>;
 }

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { timeIndexOperation } from "../src/application/index-timing.ts";
 import type { IndexPaths } from "../src/application/ports/index-lifecycle.ts";
+import { SESSION_INDEX_BATCH_LIMIT } from "../src/application/ports/session-index.ts";
 import type {
   DiscoveredSession,
   SelectedSessionSource,
@@ -47,6 +48,8 @@ import {
 const CORPUS_SESSIONS = 2_000;
 const ENTRIES_PER_SESSION = 2;
 const PAGE_LIMIT = 7;
+const RETAINED_RUN_ITEMS = 100;
+const BATCH_CALLS = Math.ceil(CORPUS_SESSIONS / SESSION_INDEX_BATCH_LIMIT);
 const SHARED_SEARCH_TEXT = "routine indexing shared evidence";
 const SOURCE: SourceInstance = Object.freeze({
   kind: "synthetic-measurement",
@@ -54,6 +57,7 @@ const SOURCE: SourceInstance = Object.freeze({
 });
 const SEED_AT = "2026-07-16T12:00:00.000Z";
 const STABLE_AT = "2026-07-16T13:00:00.000Z";
+const MISSING_AT = "2026-07-16T14:00:00.000Z";
 const WRITER_TOKEN = "index-measurement-writer";
 
 type SqliteRow = Readonly<Record<string, unknown>>;
@@ -86,6 +90,10 @@ interface RepresentativeQueries {
   readonly list: readonly SessionListPage[];
   readonly search: readonly SessionSearchPage[];
   readonly entries: readonly SessionEntryPage[];
+  readonly sourceState: {
+    readonly present: SessionListPage;
+    readonly missing: SessionListPage;
+  };
 }
 
 interface StableResult {
@@ -103,11 +111,14 @@ async function main(): Promise<void> {
   let cleanupFailed = false;
 
   try {
+    assert.equal(SESSION_INDEX_BATCH_LIMIT, 128, "index batch limit changed");
+    assert.equal(BATCH_CALLS, 16, "2,000-session batch count changed");
     const corpus = createCorpus();
     const seedPaths = pathsAt(path.join(temporaryRoot, "seed"));
     const controlPaths = pathsAt(path.join(temporaryRoot, "control"));
     const timedPaths = pathsAt(path.join(temporaryRoot, "timed"));
     const recoveryPaths = pathsAt(path.join(temporaryRoot, "full-validation"));
+    const missingPaths = pathsAt(path.join(temporaryRoot, "missing"));
     const seedLifecycle = lifecycleAt(SEED_AT);
     const seedSource = createMeasurementSource(corpus, true);
     const seedCollector = createIndexTimingCollector();
@@ -130,12 +141,15 @@ async function main(): Promise<void> {
     await cloneDatabase(seedPaths, controlPaths);
     await cloneDatabase(seedPaths, timedPaths);
     await cloneDatabase(seedPaths, recoveryPaths);
+    await cloneDatabase(seedPaths, missingPaths);
     await prepareCleanStableLibrary(controlPaths);
     await prepareCleanStableLibrary(timedPaths);
     await prepareCleanStableLibrary(recoveryPaths);
+    await prepareCleanStableLibrary(missingPaths);
     const controlSeededState = readSemanticState(controlPaths);
     const timedSeededState = readSemanticState(timedPaths);
     const recoverySeededState = readSemanticState(recoveryPaths);
+    const missingSeededState = readSemanticState(missingPaths);
     assert.deepStrictEqual(
       timedSeededState,
       controlSeededState,
@@ -145,6 +159,11 @@ async function main(): Promise<void> {
       recoverySeededState,
       controlSeededState,
       "full-validation and control libraries differ before the stable run",
+    );
+    assert.deepStrictEqual(
+      missingSeededState,
+      controlSeededState,
+      "missing and control libraries differ before reconciliation",
     );
 
     const control = await runStable(controlPaths, corpus);
@@ -156,6 +175,9 @@ async function main(): Promise<void> {
     const recoveryCollector = createIndexTimingCollector();
     const recovery = await runStable(recoveryPaths, corpus, recoveryCollector);
     const recoveryTiming = recoveryCollector.snapshot();
+    const missingCollector = createIndexTimingCollector();
+    const missing = await runMissing(missingPaths, corpus, missingCollector);
+    const missingTiming = missingCollector.snapshot();
 
     assertStableCounts(control.report, CORPUS_SESSIONS, 0);
     assertStableCounts(timed.report, CORPUS_SESSIONS, 0);
@@ -193,8 +215,14 @@ async function main(): Promise<void> {
     assertRepresentativeQueries(control.queries);
     assertStableTimingOwnership(timing, false);
     assertStableTimingOwnership(recoveryTiming, true);
+    assertMissingReport(missing.report);
+    assert.equal(missing.sourceReads, 0, "missing run unexpectedly read a source document");
+    assert.equal(missing.health.ok, true, "missing library health is not ready");
+    assertMissingTransition(missingSeededState, missing.state);
+    assertMissingQueries(missing.queries);
+    assertMissingTimingOwnership(missingTiming);
 
-    report = createOutput(seedTiming, timing, recoveryTiming);
+    report = createOutput(seedTiming, timing, recoveryTiming, missingTiming);
   } catch (error) {
     failure = error;
   } finally {
@@ -212,6 +240,32 @@ async function main(): Promise<void> {
   if (cleanupFailed) throw new Error("temporary index measurement cleanup failed");
   assert(report !== undefined, "index measurement report was not produced");
   process.stdout.write(`${JSON.stringify(report, undefined, 2)}\n`);
+}
+
+async function runMissing(
+  paths: IndexPaths,
+  corpus: Corpus,
+  collector: ReturnType<typeof createIndexTimingCollector>,
+): Promise<StableResult> {
+  const source = createMeasurementSource(corpus, false, []);
+  const lifecycle = lifecycleAt(MISSING_AT);
+  const report = await timeIndexOperation(collector.recorder, "total", () =>
+    runIndex({
+      paths,
+      sources: [source.selected],
+      lifecycle,
+      clock: fixedClock(MISSING_AT),
+      timing: collector.recorder,
+    }),
+  );
+  await assertCleanDatabase(paths);
+  return {
+    report,
+    sourceReads: source.readCount(),
+    state: readSemanticState(paths),
+    health: await lifecycle.inspectHealth(paths),
+    queries: await readRepresentativeQueries(lifecycle, paths),
+  };
 }
 
 async function runStable(
@@ -268,7 +322,11 @@ function createCorpus(): Corpus {
   });
 }
 
-function createMeasurementSource(corpus: Corpus, allowReads: boolean): MeasurementSource {
+function createMeasurementSource(
+  corpus: Corpus,
+  allowReads: boolean,
+  candidates: readonly DiscoveredSession[] = corpus.candidates,
+): MeasurementSource {
   let reads = 0;
   const adapter: SessionSource = {
     kind: SOURCE.kind,
@@ -281,7 +339,7 @@ function createMeasurementSource(corpus: Corpus, allowReads: boolean): Measureme
       };
     },
     async *discover() {
-      for (const candidate of corpus.candidates) yield candidate;
+      for (const candidate of candidates) yield candidate;
     },
     async read(candidate) {
       reads += 1;
@@ -387,10 +445,17 @@ async function readRepresentativeQueries(
         cursor: requireCursor(entriesFirst.nextCursor),
       }),
     );
+    const present = await reader.query.list(
+      createSessionListQuery({ filter: { sourceState: "present" }, limit: PAGE_LIMIT }),
+    );
+    const missing = await reader.query.list(
+      createSessionListQuery({ filter: { sourceState: "missing" }, limit: PAGE_LIMIT }),
+    );
     return {
       list: [listFirst, listSecond],
       search: [searchFirst, searchSecond],
       entries: [entriesFirst, entriesSecond],
+      sourceState: { present, missing },
     };
   } finally {
     await reader.close();
@@ -407,6 +472,17 @@ function assertRepresentativeQueries(queries: RepresentativeQueries): void {
       page.sessions.every(({ root }) => root.kind === "known"),
       "list lineage is unknown",
     );
+    assert(
+      page.sessions.every(
+        (session) =>
+          session.freshness === "current" &&
+          session.sourceState === "present" &&
+          session.capturedAt === SEED_AT &&
+          session.sourceObservedAt === STABLE_AT,
+      ),
+      "stable list state is incorrect",
+    );
+    assertCompleteCaptureScope(page.captureScope, "present", CORPUS_SESSIONS);
   }
   for (const page of queries.search) {
     assert.equal(page.hits.length, PAGE_LIMIT, "search measurement page is incomplete");
@@ -420,6 +496,17 @@ function assertRepresentativeQueries(queries: RepresentativeQueries): void {
       page.hits.every(({ root }) => root.kind === "known"),
       "search lineage is unknown",
     );
+    assert(
+      page.hits.every(
+        ({ session }) =>
+          session.freshness === "current" &&
+          session.sourceState === "present" &&
+          session.capturedAt === SEED_AT &&
+          session.sourceObservedAt === STABLE_AT,
+      ),
+      "stable search state is incorrect",
+    );
+    assertCompleteCaptureScope(page.captureScope, "present", CORPUS_SESSIONS);
   }
   for (const page of queries.entries) {
     assert.equal(page.entries.length, PAGE_LIMIT, "entry measurement page is incomplete");
@@ -427,7 +514,146 @@ function assertRepresentativeQueries(queries: RepresentativeQueries): void {
       page.entries.every(({ root }) => root.kind === "known"),
       "entry lineage is unknown",
     );
+    assert(
+      page.entries.every(
+        ({ session }) =>
+          session.freshness === "current" &&
+          session.sourceState === "present" &&
+          session.capturedAt === SEED_AT &&
+          session.sourceObservedAt === STABLE_AT,
+      ),
+      "stable entry state is incorrect",
+    );
+    assertCompleteCaptureScope(page.captureScope, "present", CORPUS_SESSIONS);
   }
+  assert.equal(queries.sourceState.present.sessions.length, PAGE_LIMIT);
+  assert(
+    queries.sourceState.present.sessions.every(({ sourceState }) => sourceState === "present"),
+    "present filter returned another source state",
+  );
+  assertCompleteCaptureScope(queries.sourceState.present.captureScope, "present", CORPUS_SESSIONS, [
+    "sourceState",
+  ]);
+  assert.equal(queries.sourceState.missing.sessions.length, 0);
+  assertCompleteCaptureScope(queries.sourceState.missing.captureScope, "missing", 0, [
+    "sourceState",
+  ]);
+}
+
+function assertCompleteCaptureScope(
+  scope: SessionListPage["captureScope"],
+  sourceState: "present" | "missing",
+  sessions: number,
+  appliedFilters?: readonly string[],
+): void {
+  assert.equal(scope.status, "complete");
+  assert.equal(scope.trackedSessions, sessions);
+  assert.deepStrictEqual(scope.retainedSessions, { current: sessions, stale: 0 });
+  assert.equal(scope.unindexedSessions, 0);
+  assert.deepStrictEqual(scope.sourceState, {
+    present: sourceState === "present" ? sessions : 0,
+    missing: sourceState === "missing" ? sessions : 0,
+    unknown: 0,
+  });
+  assert.deepStrictEqual(scope.sourceCoverage, { complete: 1, unknown: 0 });
+  assert.deepStrictEqual(scope.latestFailures, {
+    unavailable: 0,
+    unreadable: 0,
+    malformed: 0,
+    sourceChanged: 0,
+    unsupportedFormat: 0,
+    repositoryWrite: 0,
+  });
+  if (appliedFilters !== undefined) {
+    assert.deepStrictEqual(scope.appliedFilters, appliedFilters);
+    assert.deepStrictEqual(scope.unassessedFilters, []);
+  }
+}
+
+function assertMissingReport(report: Awaited<ReturnType<typeof runIndex>>): void {
+  assert.deepStrictEqual(report.counts, {
+    discovered: 0,
+    unchanged: 0,
+    updated: 0,
+    failed: 0,
+    missing: CORPUS_SESSIONS,
+    stale: 0,
+  });
+  assert.equal(report.incompleteSources, 0);
+  assert.equal(report.skippedSources, 0);
+  assert.equal(report.omittedItemCount, CORPUS_SESSIONS - RETAINED_RUN_ITEMS);
+  assert.equal(report.sources.length, 1);
+  const source = report.sources[0];
+  assert(source !== undefined && source.status === "completed");
+  assert.deepStrictEqual(source.source, SOURCE);
+  assert.equal(source.startedAt, MISSING_AT);
+  assert.equal(source.finishedAt, MISSING_AT);
+  assert.deepStrictEqual(source.coverage, { status: "complete", observedAt: MISSING_AT });
+  assert.deepStrictEqual(source.counts, report.counts);
+  assert.equal(source.items.length, RETAINED_RUN_ITEMS);
+  assert.equal(source.omittedItemCount, CORPUS_SESSIONS - RETAINED_RUN_ITEMS);
+  assert.deepStrictEqual(
+    source.items.map((item) => ({
+      source: item.identity.source,
+      nativeId: item.identity.nativeId,
+      outcome: item.outcome,
+    })),
+    Array.from({ length: RETAINED_RUN_ITEMS }, (_, ordinal) => ({
+      source: SOURCE,
+      nativeId: nativeIdAt(ordinal),
+      outcome: "missing",
+    })),
+    "missing report did not retain the first 100 identities in binary order",
+  );
+}
+
+function assertMissingQueries(queries: RepresentativeQueries): void {
+  for (const page of queries.list) {
+    assert.equal(page.sessions.length, PAGE_LIMIT, "missing list page is incomplete");
+    assert(page.sessions.every(({ root }) => root.kind === "known"));
+    for (const session of page.sessions) assertMissingSummary(session);
+    assertCompleteCaptureScope(page.captureScope, "missing", CORPUS_SESSIONS);
+  }
+  for (const page of queries.search) {
+    assert.equal(page.hits.length, PAGE_LIMIT, "missing search page is incomplete");
+    assert.deepStrictEqual(page.support, {
+      occurrences: CORPUS_SESSIONS,
+      uniqueContent: 1,
+      uniqueKnownRoots: 1,
+      unknownLineageSessions: 0,
+    });
+    assert(page.hits.every(({ root }) => root.kind === "known"));
+    for (const { session } of page.hits) assertMissingSummary(session);
+    assertCompleteCaptureScope(page.captureScope, "missing", CORPUS_SESSIONS);
+  }
+  for (const page of queries.entries) {
+    assert.equal(page.entries.length, PAGE_LIMIT, "missing entry page is incomplete");
+    assert(page.entries.every(({ root }) => root.kind === "known"));
+    for (const { session } of page.entries) assertMissingSummary(session);
+    assertCompleteCaptureScope(page.captureScope, "missing", CORPUS_SESSIONS);
+  }
+
+  assert.equal(queries.sourceState.present.sessions.length, 0);
+  assertCompleteCaptureScope(queries.sourceState.present.captureScope, "present", 0, [
+    "sourceState",
+  ]);
+  assert.equal(queries.sourceState.missing.sessions.length, PAGE_LIMIT);
+  for (const session of queries.sourceState.missing.sessions) assertMissingSummary(session);
+  assertCompleteCaptureScope(queries.sourceState.missing.captureScope, "missing", CORPUS_SESSIONS, [
+    "sourceState",
+  ]);
+}
+
+function assertMissingSummary(summary: {
+  readonly freshness: string;
+  readonly sourceState: string;
+  readonly capturedAt: string;
+  readonly sourceObservedAt: string;
+}): void {
+  assert.equal(summary.freshness, "current");
+  assert.equal(summary.sourceState, "missing");
+  assert.equal(summary.capturedAt, SEED_AT);
+  assert.equal(summary.sourceObservedAt, MISSING_AT);
 }
 
 function assertStableCounts(
@@ -545,6 +771,119 @@ function assertStableTransition(before: SemanticState, after: SemanticState): vo
   );
 }
 
+function assertMissingTransition(before: SemanticState, after: SemanticState): void {
+  assert.deepStrictEqual(after.staticRows, before.staticRows, "static library state changed");
+  assert.deepStrictEqual(after.canonicalRows, before.canonicalRows, "missing removed sessions");
+  assert.deepStrictEqual(after.relationRows, before.relationRows, "missing removed lineage");
+  assert.deepStrictEqual(after.entryRows, before.entryRows, "missing removed entries");
+  assert.deepStrictEqual(after.contentRows, before.contentRows, "missing removed content");
+  assert.deepStrictEqual(
+    after.occurrenceRows,
+    before.occurrenceRows,
+    "missing removed occurrences",
+  );
+
+  assert.equal(after.sourceRows.length, before.sourceRows.length, "source row count changed");
+  for (const [index, source] of after.sourceRows.entries()) {
+    const seeded = before.sourceRows[index];
+    assert(seeded !== undefined, "seeded source row is absent");
+    assert.deepStrictEqual(
+      withoutKeys(source, ["coverage_observed_at"]),
+      withoutKeys(seeded, ["coverage_observed_at"]),
+      "source state changed outside its observation time",
+    );
+    assert.equal(seeded.coverage_observed_at, SEED_AT);
+    assert.equal(source.coverage_observed_at, MISSING_AT);
+  }
+
+  assert.equal(after.trackingRows.length, before.trackingRows.length, "tracking row count changed");
+  for (const [index, tracking] of after.trackingRows.entries()) {
+    const seeded = before.trackingRows[index];
+    assert(seeded !== undefined, "seeded tracking row is absent");
+    assert.deepStrictEqual(
+      withoutKeys(tracking, ["presence_status", "presence_observed_at"]),
+      withoutKeys(seeded, ["presence_status", "presence_observed_at"]),
+      "missing reconciliation changed capture or last-good state",
+    );
+    assert.equal(seeded.latest_outcome, "indexed");
+    assert.equal(tracking.latest_outcome, "indexed");
+    assert.equal(seeded.presence_status, "present");
+    assert.equal(tracking.presence_status, "missing");
+    assert.equal(seeded.presence_observed_at, SEED_AT);
+    assert.equal(tracking.presence_observed_at, MISSING_AT);
+    assert.equal(tracking.last_seen_at, SEED_AT);
+    assert.equal(tracking.captured_at, SEED_AT);
+  }
+
+  assert.deepStrictEqual(
+    after.runRows.slice(0, before.runRows.length),
+    before.runRows,
+    "seed index run changed",
+  );
+  assert.equal(
+    after.runRows.length,
+    before.runRows.length + 1,
+    "missing run was not appended once",
+  );
+  const missingRun = after.runRows.at(-1);
+  assert(missingRun !== undefined, "missing run row is absent");
+  assert.deepStrictEqual(
+    {
+      status: missingRun.status,
+      started_at: missingRun.started_at,
+      finished_at: missingRun.finished_at,
+      failure_code: missingRun.failure_code,
+      discovered_count: missingRun.discovered_count,
+      unchanged_count: missingRun.unchanged_count,
+      indexed_count: missingRun.indexed_count,
+      failed_count: missingRun.failed_count,
+      missing_count: missingRun.missing_count,
+      stale_count: missingRun.stale_count,
+      omitted_item_count: missingRun.omitted_item_count,
+    },
+    {
+      status: "completed",
+      started_at: MISSING_AT,
+      finished_at: MISSING_AT,
+      failure_code: null,
+      discovered_count: 0,
+      unchanged_count: 0,
+      indexed_count: 0,
+      failed_count: 0,
+      missing_count: CORPUS_SESSIONS,
+      stale_count: 0,
+      omitted_item_count: CORPUS_SESSIONS - RETAINED_RUN_ITEMS,
+    },
+    "missing run bookkeeping is incorrect",
+  );
+
+  const priorItems = after.runItemRows.slice(0, before.runItemRows.length);
+  assert.deepStrictEqual(priorItems, before.runItemRows, "prior run items changed");
+  const missingItems = after.runItemRows.slice(before.runItemRows.length);
+  assert.equal(missingItems.length, RETAINED_RUN_ITEMS);
+  const nativeBySessionId = new Map(
+    after.trackingRows.map((tracking) => [tracking.session_id, tracking.native_id]),
+  );
+  for (const [ordinal, item] of missingItems.entries()) {
+    assert.equal(item.run_id, missingRun.run_id);
+    assert.equal(item.ordinal, ordinal);
+    assert.equal(nativeBySessionId.get(item.session_id), nativeIdAt(ordinal));
+    assert.equal(item.outcome, "missing");
+    assert.equal(item.failure_code, null);
+  }
+
+  const priorLease = singleRow(before.writerLeaseRows, "prior writer lease");
+  const missingLease = singleRow(after.writerLeaseRows, "missing writer lease");
+  assert.equal(missingLease.generation, Number(priorLease.generation) + 1);
+  assert.equal(missingLease.clean_generation, missingLease.generation);
+  assert.equal(missingLease.clean_schema_cookie, priorLease.clean_schema_cookie);
+  assert.deepStrictEqual(
+    withoutKeys(missingLease, ["generation", "clean_generation"]),
+    withoutKeys(priorLease, ["generation", "clean_generation"]),
+    "missing run changed writer integrity state outside its clean generation",
+  );
+}
+
 function assertStableTimingOwnership(snapshot: IndexTimingSnapshot, fullValidation: boolean): void {
   const calls = Object.fromEntries(
     Object.entries(snapshot.phases).map(([phase, aggregate]) => [phase, aggregate.calls]),
@@ -560,11 +899,11 @@ function assertStableTimingOwnership(snapshot: IndexTimingSnapshot, fullValidati
     writerFullValidationFtsRebuild: 0,
     sourceProbe: 1,
     sourceDiscovery: 1,
-    freshnessRead: CORPUS_SESSIONS,
-    unchangedWrite: CORPUS_SESSIONS,
+    freshnessRead: BATCH_CALLS,
+    unchangedWrite: BATCH_CALLS,
     changedReadAndNormalize: 0,
     replacement: 0,
-    reconciliation: 1,
+    reconciliation: BATCH_CALLS,
     runBookkeeping: 2,
     writerClose: 1,
     total: 1,
@@ -587,16 +926,43 @@ function assertSeedTimingOwnership(snapshot: IndexTimingSnapshot): void {
     writerFullValidationFtsRebuild: 0,
     sourceProbe: 1,
     sourceDiscovery: 1,
-    freshnessRead: CORPUS_SESSIONS,
+    freshnessRead: BATCH_CALLS,
     unchangedWrite: 0,
     changedReadAndNormalize: CORPUS_SESSIONS,
     replacement: CORPUS_SESSIONS,
-    reconciliation: 1,
+    reconciliation: BATCH_CALLS,
     runBookkeeping: 2,
     writerClose: 1,
     total: 1,
   });
   assert(snapshot.phases.total.elapsedMs > 0, "seed total timing did not advance");
+}
+
+function assertMissingTimingOwnership(snapshot: IndexTimingSnapshot): void {
+  const calls = Object.fromEntries(
+    Object.entries(snapshot.phases).map(([phase, aggregate]) => [phase, aggregate.calls]),
+  );
+  assert.deepStrictEqual(calls, {
+    sourceResolution: 0,
+    writerOpen: 1,
+    writerFullValidationCanonical: 0,
+    writerFullValidationForeignKeys: 0,
+    writerFullValidationFtsStructure: 0,
+    writerFullValidationFtsContent: 0,
+    writerFullValidationFtsSemantic: 0,
+    writerFullValidationFtsRebuild: 0,
+    sourceProbe: 1,
+    sourceDiscovery: 1,
+    freshnessRead: 0,
+    unchangedWrite: 0,
+    changedReadAndNormalize: 0,
+    replacement: 0,
+    reconciliation: BATCH_CALLS * 2,
+    runBookkeeping: 2,
+    writerClose: 1,
+    total: 1,
+  });
+  assert(snapshot.phases.total.elapsedMs > 0, "missing total timing did not advance");
 }
 
 function readSemanticState(paths: IndexPaths): SemanticState {
@@ -738,6 +1104,7 @@ function createOutput(
   seedTiming: IndexTimingSnapshot,
   timing: IndexTimingSnapshot,
   recoveryTiming: IndexTimingSnapshot,
+  missingTiming: IndexTimingSnapshot,
 ) {
   return {
     corpus: {
@@ -756,10 +1123,31 @@ function createOutput(
       supportAndLineage: true,
       stableTransition: true,
       zeroStableSourceReads: true,
+      boundedStableCalls: true,
+      missingCanonicalRetention: true,
+      missingQueries: true,
+      missingRunItems: true,
+      zeroMissingSourceReads: true,
+    },
+    batching: {
+      limit: SESSION_INDEX_BATCH_LIMIT,
+      stable: {
+        sessions: CORPUS_SESSIONS,
+        freshnessCalls: BATCH_CALLS,
+        unchangedWriteCalls: BATCH_CALLS,
+        reconciliationCalls: BATCH_CALLS,
+      },
+      completeEmptyDiscovery: {
+        missingSessions: CORPUS_SESSIONS,
+        reconciliationCalls: BATCH_CALLS * 2,
+        retainedItems: RETAINED_RUN_ITEMS,
+        omittedItems: CORPUS_SESSIONS - RETAINED_RUN_ITEMS,
+      },
     },
     seedTimings: seedTiming.phases,
     cleanTimings: timing.phases,
     fullValidationTimings: recoveryTiming.phases,
+    completeEmptyDiscoveryTimings: missingTiming.phases,
   };
 }
 
