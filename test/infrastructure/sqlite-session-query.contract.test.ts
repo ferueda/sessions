@@ -4,13 +4,17 @@ import { describe } from "vitest";
 
 import type { SessionIndexWriter } from "../../src/application/ports/session-index.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 import { minimalDocument, replacement } from "../contracts/session-index.contract.ts";
 import {
   runSessionQueryContract,
@@ -91,13 +95,19 @@ async function seedLargeManifestCorpus(database: DatabaseSync): Promise<void> {
       nativeId: `manifest-${String(ordinal).padStart(3, "0")}`,
     }),
   );
+  const now = () => new Date("2026-07-14T15:00:00.000Z");
   const lease = acquireWriterLease(database, "index", {
-    now: () => new Date("2026-07-14T15:00:00.000Z"),
+    now,
     token: () => "large-manifest-contract-writer",
+  });
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
   });
   const index = createCoordinatedSqliteSessionIndex(database, {
     lease,
-    now: () => new Date("2026-07-14T15:00:00.000Z"),
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
   });
   try {
     await replaceCompleted(index, documents, "2026-07-14T15:00:00.000Z");
@@ -110,13 +120,19 @@ async function seedLargeManifestCorpus(database: DatabaseSync): Promise<void> {
 
 async function seedContractCorpus(database: DatabaseSync): Promise<void> {
   const corpus = sessionQueryContractCorpus();
+  const now = () => new Date("2026-07-14T08:00:00.000Z");
   const lease = acquireWriterLease(database, "index", {
-    now: () => new Date("2026-07-14T08:00:00.000Z"),
+    now,
     token: () => "query-contract-writer",
+  });
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
   });
   const index = createCoordinatedSqliteSessionIndex(database, {
     lease,
-    now: () => new Date("2026-07-14T08:00:00.000Z"),
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
   });
   try {
     await replaceCompleted(index, [corpus.present], SESSION_QUERY_CONTRACT_TIMES.present);

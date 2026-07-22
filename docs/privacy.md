@@ -99,22 +99,32 @@ recognized database with another page-reclamation mode fails closed; Sessions
 does not silently rewrite it.
 
 Canonical sessions and capture/source-observation state are durable user data.
-FTS and bounded operational diagnostics are rebuildable derived state even though
-they share the database. During an explicit leased index, FTS-only damage can be
-rebuilt from canonical content after canonical integrity succeeds. Doctor only
-reports the condition; FTS projection repair never rereads a provider or deletes
-canonical evidence and has no public command. `sessions data repair-orphans` is
-a separate public canonical-deletion operation for content that no retained
-occurrence reaches. It never rebuilds FTS or resolves a provider.
+FTS, bounded operational diagnostics, and the schema-3 index-generation receipt
+are rebuildable state even though they share the database. During an explicit
+leased index, FTS-only damage can be rebuilt from canonical content after
+canonical integrity succeeds. Doctor only reports the condition; FTS projection
+repair never rereads a provider or deletes canonical evidence and has no public
+command. `sessions data repair-orphans` is a separate public canonical-deletion
+operation for content that no retained occurrence reaches. It never rebuilds FTS
+or resolves a provider.
 
 Index-writer acquisition marks its lease generation dirty. A normal close may
 seal only that exact generation, then closes and hardens the database before
 publishing the private proof last. The proof contains only bounded library,
 generation, schema, and database-stat metadata—never transcript text, provider
 identity, local paths, content hashes, or lease tokens. Missing, malformed,
-unsafe, or stale proof only disables the clean-open optimization. Recovery,
-migration, maintenance, or failed cleanup uses full canonical, foreign-key, and
-FTS validation/repair.
+unsafe, or stale proof only disables the clean-open optimization.
+
+The index-generation receipt contains only its fixed format version, writer
+generation, storage schema version, SQLite schema cookie, and safe-integer
+operation sequence. It contains no timestamp, source or session identity, path,
+fingerprint, content hash, transcript, lease token, or timing value. An exact
+receipt beside an expired index lease can prove that supported Sessions index
+mutations stopped at checked transaction boundaries. It does not resume the old
+run or read less provider evidence in the new run; it only replaces global
+library validation with bounded catalog and FTS structure checks. Any missing,
+stale, malformed, wrong-purpose, migration-era, or structurally invalid evidence
+uses full canonical, foreign-key, and FTS validation/repair.
 
 Doctor remains immutable and semantically compares retained FTS terms,
 positions, and docsize with a complete contentless TEMP index built from
@@ -123,8 +133,8 @@ the exact bidirectional instance comparison at 1,000,000 occurrences per side;
 one term above that target forms one oversized range. The transient expected
 index is still corpus-sized, so total memory is not constant, but no expected
 index or comparison range spills to disk. Direct SQLite edits outside Sessions
-are unsupported and are not guaranteed to be detected by every clean writer
-open.
+are unsupported and are not guaranteed to be detected by every clean or
+certified writer open.
 
 The persisted public-document digest is canonical state, not a rebuildable FTS
 projection. A missing, malformed, unknown-scheme, or mismatching digest makes the
@@ -194,6 +204,13 @@ explicit writer-open migration. Complete document reads and health inspection
 verify the derivative against canonical content; a missing or inconsistent row
 is corruption. Manifest reads the stored derivative without reopening or
 reconstructing transcript text.
+
+Index schema 3 stores the singleton recovery receipt described above. The
+data-preserving schema-2-to-3 migration creates an empty receipt table and never
+turns legacy state into proof. A writer creates sequence zero only after its
+full or bounded open proof, FTS configuration, and private workspace setup
+succeed. Every supported durable index mutation advances the sequence in the
+same transaction as its checked state; failure advances neither.
 
 The implemented public document projection is a field-by-field allowlist. It
 includes title, provider timestamps, lineage coverage/relations, safe ordered
@@ -333,6 +350,11 @@ transfer, overly broad package contents, and permissive local state within its
 control. It does not protect against another process running as the same user, a
 compromised provider, malware, an already-compromised package manager, or
 privileged filesystem access.
+
+The clean proof and recovery receipt rely on that same local trust boundary.
+They do not authenticate arbitrary same-user, same-schema out-of-band database
+edits and do not protect against disk loss. `sessions doctor` is the explicit
+read-only whole-library semantic audit when current integrity proof is required.
 
 Source formats can contain prompt injection or untrusted tool output. Sessions
 treats transcript text as data and never executes indexed content. It cannot

@@ -19,6 +19,14 @@ Failure rolls back both that transaction's work and lease renewal. An expired
 `clear` lease is reserved for another clear so an interrupted destructive
 operation cannot be followed by a different writer.
 
+The schema-3 index-generation receipt certifies only supported `index`
+transactions. Forget, orphan repair, compaction, and clear do not initialize or
+advance it. Their free, live, expired, or newer-generation maintenance lease
+state makes any older receipt ineligible, so the next index writer uses the
+complete canonical, foreign-key, and FTS validation/repair path before it can
+create new proof. A receipt never changes clear-only recovery precedence or
+turns a live lease into recoverable ownership.
+
 ## Operations
 
 | Command                 | Behavior                                                                                                                                               |
@@ -55,6 +63,8 @@ writer and rebuilds derived search state only after canonical data is healthy.
 - Port and composition: `src/application/ports/index-maintenance.ts` and
   `src/infrastructure/sqlite/index-maintenance.ts`
 - Writer lease: `src/infrastructure/sqlite/writer-lease.ts`
+- Index-only recovery proof:
+  `src/infrastructure/sqlite/writer-recovery-receipt.ts`
 - Operations: `src/infrastructure/sqlite/sqlite-index-forget.ts`,
   `src/infrastructure/sqlite/sqlite-index-repair-orphans.ts`, and
   `src/infrastructure/sqlite/sqlite-index-compact.ts`

@@ -404,12 +404,24 @@ and final database stat and contains no transcript, provider identity, path,
 content hash, or lease token.
 
 A ready, no-sidecar, current-schema open with both the clean seal and matching
-proof uses constant-size schema and FTS structure checks. Dirty, recovery,
-migration, maintenance, or failed-cleanup state uses the existing full canonical
-document/digest/metrics, foreign-key, and FTS validation/repair path. Missing or rejected proof
-only disables the optimization. Direct SQLite edits are unsupported; automatic
-detection of arbitrary same-schema out-of-band changes on every clean open is
-not a contract.
+proof uses constant-size schema and FTS structure checks. The clean proof is
+preferred for normal free state. Schema 3 also records one transaction-bound
+receipt for an active index generation. After writer setup, sequence zero names
+the exact generation, storage schema version, and SQLite schema cookie. Every
+supported index mutation performs its local postconditions and advances that
+sequence once in the same leased transaction.
+
+After ordinary WAL recovery, an exact receipt beside its expired index lease may
+use `certified-recovery`. Acquisition interrupts the abandoned active run,
+clears the old receipt while advancing ownership, and the new invocation starts
+provider discovery from the beginning. Matching catalog and FTS structure checks
+replace global canonical, foreign-key, FTS content, and FTS semantic scans.
+Missing, stale, malformed, wrong-generation, free, maintenance, migration-era,
+or structurally unsafe evidence uses the complete validation/repair path. Live,
+clear-only, incompatible, newer-schema, and unsafe states retain their existing
+busy or fail-closed result. Direct SQLite edits are unsupported; automatic
+detection of arbitrary same-schema out-of-band changes on every clean or
+certified open is not a contract.
 
 Probe/discovery/read failures are sanitized per-source outcomes and do not
 prevent later selected sources from running. A failed or incomplete source scan
@@ -429,8 +441,10 @@ checks cancellation only between provider/application operations and outside
 SQLite transactions. A clean stop closes through the normal exact-generation
 path, marks any active run interrupted with unknown coverage, preserves complete
 committed replacements and untouched last-good documents, and exits `130` or
-`143`. Cleanup uncertainty, crash, or `SIGKILL` remains dirty and forces the
-next full validation.
+`143`. Cleanup uncertainty, crash, or `SIGKILL` remains dirty. The next writer
+uses certified recovery only for an exact expired index generation whose last
+commit advanced its matching receipt; every other dirty state uses full
+validation.
 
 List, search, entries, and manifest are self-describing about capture scope. One
 page- or cohort-level aggregate reports tracked, retained-current, retained-stale,
@@ -548,9 +562,11 @@ counts, and whole-library root resolution remain inside one immutable snapshot.
 The normal query does not read transcript text or hydrate documents per session.
 
 FTS structure and rebuild logic are shared by bootstrap and projection repair. A
-dirty or recovery-required leased index-writer open first distinguishes canonical
-corruption from FTS-only damage, then rebuilds only the projection from canonical
-content values. A clean proven open performs constant-size structure checks.
+full-validation index-writer open first distinguishes canonical corruption from
+FTS-only damage, then rebuilds only the projection from canonical content values.
+A clean proven open and an exact certified recovery perform constant-size
+structure checks. A missing or invalid receipt never permits rebuilding from
+uncertified canonical rows; it routes through the complete proof first.
 Doctor remains immutable, verifies exact semantic terms/positions, and reports
 `rebuild-required`; `data repair-orphans` never rebuilds FTS and refuses
 candidates whose derived row is missing. Show and export reconstruct canonical
@@ -566,8 +582,10 @@ write failure rolls both back to the last-good pair.
 
 Databases from development builds before `0.1.0` are unsupported and fail closed
 without migration or deletion; users can select a fresh Sessions data directory
-and index again. The clean-writer state, persisted document digest, and schema-2
-document metrics define the supported storage baseline. `data clear` does not
+and index again. The clean-writer state, persisted document digest, schema-2
+document metrics, and schema-3 rebuildable recovery receipt define the supported
+storage baseline. The schema-2-to-3 migration preserves canonical/tracking/run
+and FTS state but creates no receipt. `data clear` does not
 claim an incompatible earlier database; reset with a fresh `SESSIONS_DATA_DIR` or manual removal of
 only the exact obsolete Sessions-owned directory followed by reindexing.
 Compatibility begins with supported `0.1.0`; the unsupported `0.0.0` bootstrap
@@ -1114,55 +1132,73 @@ writer-open validation as the optimization owner; they are not public
 performance guarantees.
 Preserve exact canonical/query behavior and keep interpretation in the Agent Skill.
 
-#### Current writer-open fast path
+#### Current writer-open proofs
 
-M10 binds a durable clean/dirty integrity state to the existing writer-lease
-generation. A normally closed library has no owner and records its current
-generation plus SQLite schema cookie as clean. Lease acquisition increments the
-generation in the same immediate transaction but leaves the clean generation
-behind, making the new owner durably dirty before it can mutate state. Normal
-close atomically interrupts any active run, records the owned generation and
-current schema cookie as clean, and releases the exact lease. It then closes and
-hardens the database and publishes a private, stat-bound post-close proof last.
-A stale owner can never clean a newer generation.
+M10 binds a durable clean/dirty integrity state to the writer-lease generation.
+A normally closed library has no owner and records its current generation plus
+SQLite schema cookie as clean. Normal close atomically interrupts any active run,
+seals and releases only the exact owner, closes and hardens the database, then
+publishes a private stat-bound post-close proof last. A stale owner cannot clean
+a newer generation. A clean `fast` open requires that exact clean seal and proof,
+the current schema with no migration, no recovery sidecar, and constant-size
+pragma, catalog, and FTS object/trigger checks.
 
-A clean fast open is allowed only when the prior generation was cleanly released,
-the schema cookie and current baseline agree, no migration ran or is pending, no
-recovery sidecars or expired owner require recovery, and constant-size pragma,
-schema, and FTS object/trigger checks pass. Any crash, abandoned owner,
-migration, setup failure, heartbeat/ownership loss, recovery evidence, or failed
-cleanup keeps the library dirty and forces the existing full canonical
-document/digest/metrics, foreign-key, and FTS validation/repair path on the next writer.
+Schema 3 extends that model for ordinary crash recovery. One strict singleton
+receipt records format 1, exact index generation, storage schema version, SQLite
+schema cookie, and a monotonic safe-integer operation sequence. The writer
+creates sequence zero after validation, persistent FTS configuration, and
+capture-workspace setup. Starting and finishing runs, bounded unchanged/failure/
+missing writes, and canonical replacement advance the receipt once after their
+local postconditions in the same leased transaction. Operation or receipt
+failure rolls back both; heartbeat renewal remains coordination-only.
 
-Clean completion requires proportional proof of the writes performed during the
-generation. Canonical replacement must reconstruct and digest-check each changed
-session and verify affected FTS rows inside its transaction. Tracking and run
-writes retain exact affected-row assertions. Forget, orphan repair, and
-compaction may conservatively leave the library dirty until they prove equivalent
-local postconditions. `doctor` remains the explicit read-only full-library
-integrity check and compares canonical-derived exact terms, positions, and
-docsize through a complete memory-only TEMP expected FTS index and bounded exact
-term-instance ranges.
+Acquisition inspects the prior receipt while the old lease is locked. An expired
+`index` lease with the exact generation, schema, cookie, no pending/applied
+migration, and valid bounded catalog/FTS structure may select
+`certified-recovery`. The acquisition transaction interrupts abandoned runs,
+clears old proof, and advances ownership. The new writer rechecks the candidate,
+skips global canonical, foreign-key, FTS content, and FTS semantic scans, and
+still performs provider discovery and indexing from the beginning. It never
+continues the interrupted run.
 
-This accepts one tradeoff: direct modification of the permission-hardened
-Sessions SQLite database is unsupported. A clean marker cannot detect every
-out-of-band same-schema logical edit on the next fast open; `doctor` or a later
-dirty/recovery open still performs full validation. Preserving automatic
-detection of arbitrary external edits on every writer open would require keeping
-the measured full scan and its scale-dependent cost.
+Mode order is clean `fast`, `certified-recovery`, new-library `bootstrap`, then
+`full-validation`. Missing, stale, malformed, wrong-generation/schema/cookie,
+free, maintenance, migration-era, or structurally invalid receipt evidence uses
+the complete canonical, foreign-key, and FTS validation/repair path. Missing or
+altered receipt-table structure is repaired only under exact ownership and still
+requires that full proof. Live ownership stays busy, expired clear ownership
+stays clear-only, and unsafe/incompatible/newer-schema lifecycle states fail
+closed. Forget, orphan repair, compaction, and clear remain uncertified.
 
-The change is internal to SQLite schema and writer lifecycle. It adds no public
-CLI, application, adapter, query, JSON/JSONL, or provider behavior. Before
-supported `0.1.0`, it replaced the development baseline and checksum without a
-compatibility migration. Older development libraries fail closed and require a
-fresh `SESSIONS_DATA_DIR` or exact Sessions-owned directory reset followed by
-reindexing. A fixed synthetic 2,000-session exact-equality proof measured 2.767
-ms writer open / 264.666 ms total. The authorized read-only real Codex
-120-session exact-cohort proof measured 3.262 ms / 366.055 ms with zero changed
-reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
-correctness remains their only gate. The fixed generic measurement also consumes
-the proof on an equal clone, requires semantic equality with the clean run and
-zero stable source reads, and reports the dominant full-validation phase.
+The schema-2-to-3 migration is ordered, checksummed, transactional, and
+data-preserving. It creates no receipt from legacy state, so the first schema-3
+writer completes full validation before establishing sequence zero. Clean close
+continues to publish the stronger post-close proof. `doctor` continues to perform
+the explicit read-only whole-library semantic audit.
+
+This accepts the same threat boundary as the clean fast path: direct modification
+of the permission-hardened Sessions SQLite database is unsupported. A supported
+operation receipt cannot detect every arbitrary same-user, same-schema
+out-of-band logical edit; malware, disk loss, and privileged access are also out
+of scope. Preserving automatic detection of those edits on every writer open
+would retain the measured corpus-sized scan.
+
+The recovery change is internal to SQLite schema, writer lifecycle, and
+interactive progress. It adds no CLI flag, application/adapter/query contract,
+JSON/JSONL field, provider behavior, or exit code. The deterministic generic
+measurement compares equal clean, raw-handle-abandoned certified, and
+receipt-invalidated full-validation clones. It requires equal public reports,
+capture scope, canonical documents/digests/metrics, tracking and query results,
+full doctor health, zero stable provider reads, and final clean proof. It asserts
+generation and abandoned-run bookkeeping separately and has no elapsed-time
+release threshold.
+
+On the local 2,000-session measurement, certified recovery used 2.555 ms of
+writer-open work versus 116.784 ms for the receipt-invalidated full-validation
+control, and total time was 55.289 ms versus 169.144 ms. Semantic equality, zero
+stable provider reads, and zero certified global-validation calls passed. These
+elapsed values are local implementation evidence, not a release threshold or
+public performance guarantee.
 
 A later local before/after run of that same deterministic 2,000-session corpus
 measured the bounded incremental change. The clean stable path moved from 2,000
@@ -1276,12 +1312,14 @@ when it preserves evidence semantics. Read-only doctor now avoids per-session
 canonical reads, batches the TEMP FTS load transactionally, partitions exact FTS
 instance comparison by a fixed occurrence target, reports interactive phases,
 and supports aggregate opt-in timings without weakening its exact proof. The
-complete expected index and one oversized term remain corpus-dependent, so
-further lower total-memory work, faster dirty/recovery validation, clear
-recovery status for long operations, and lower routine storage cost remain
-priorities. Performance work must preserve canonical equality, capture scope,
-failure truth, and provider-read-only behavior; it must not weaken integrity
-checks merely to meet a time budget.
+complete expected index and one oversized term remain corpus-dependent.
+Crash-safe index generations now use a transaction-bound schema-3 receipt to
+replace global recovery scans only at exact certified boundaries; any ambiguity
+keeps the complete validation fallback. Further lower total-memory doctor work,
+clear progress for long full-validation or maintenance operations, and lower
+routine storage cost remain priorities. Performance work must preserve canonical
+equality, capture scope, failure truth, and provider-read-only behavior; it must
+not weaken integrity checks merely to meet a time budget.
 
 Provider discovery now removes three structural costs without changing admitted
 evidence: a generated 2,000-thread Codex cohort uses one spawn-edge query instead

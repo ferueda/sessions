@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,21 @@ describe("production dependency boundaries", () => {
     expect(result.violations).toEqual([
       "application/use-case.ts (application) -> ../../shared.ts (outside src)",
     ]);
+  });
+});
+
+describe("certified index mutation boundary", () => {
+  test("keeps persistent session-index writes behind the certified wrapper", async () => {
+    const source = await readFile(
+      fileURLToPath(
+        new URL("../src/infrastructure/sqlite/sqlite-session-index.ts", import.meta.url),
+      ),
+      "utf8",
+    );
+
+    expect(source).toContain("runCertifiedIndexMutation");
+    expect(source).not.toMatch(/\brunImmediateTransaction\b/u);
+    expect(source).not.toMatch(/\brunLeasedImmediateTransaction\b/u);
   });
 });
 

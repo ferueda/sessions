@@ -285,11 +285,14 @@ known database/sidecar paths, state, schema support, and admitted source probes.
 Current state values are `uninitialized`, `ready`, `migration-required`,
 `newer-schema`, `incompatible`, `recovery-required`, and `unsafe`.
 
-The current retained-library storage schema is 2. Schema 2 adds exact canonical
-document metrics used by manifest. A schema-1 library is
-`migration-required` for read-only commands; the next explicitly authorized
-`sessions index` writer backfills the metrics transactionally before normal
-indexing. Readers, doctor, and paths never migrate it implicitly.
+The current retained-library storage schema is 3. Schema 2 adds exact canonical
+document metrics used by manifest. Schema 3 adds one rebuildable operational
+receipt for certified index-generation recovery and does not backfill proof from
+older state. A schema-1 or schema-2 library is `migration-required` for read-only
+commands; the next explicitly authorized `sessions index` writer applies each
+pending data-preserving migration transactionally, performs full validation, and
+creates a receipt only after writer setup succeeds. Readers, doctor, and paths
+never migrate it implicitly.
 
 The human format presents the same fields. An incompatible state is still a paths
 report and exits `0`; doctor evaluates health. Resolution/inspection failure emits
@@ -347,10 +350,22 @@ seal and release only that exact generation, then publishes a private
 database-stat-bound post-close proof after database cleanup succeeds. A matching
 clean seal and proof allow the next ready, sidecar-free, current-schema writer to
 use constant-size schema/FTS structure checks plus proportional changed-document
-verification. Recovery, migration, maintenance, failed cleanup, or rejected
-proof uses full canonical, foreign-key, and FTS validation/repair. This is an
-internal performance path: it adds no CLI flag, output field, or exit code.
-Direct SQLite edits outside Sessions are unsupported.
+verification.
+
+A schema-3 receipt may certify an exact expired index generation when its lease,
+generation, schema version, SQLite schema cookie, and bounded FTS structure all
+match and no migration ran or is pending. Acquisition interrupts the abandoned
+run and clears its receipt before advancing ownership; the new invocation still
+discovers and indexes from the beginning. Certified recovery skips global
+canonical, foreign-key, FTS content, and FTS semantic scans. Missing, malformed,
+stale, free, maintenance, migration-era, or structurally invalid proof uses the
+complete validation/repair path. Live, clear-only, unsafe, incompatible, and
+newer-schema states retain their existing busy or fail-closed results.
+
+This is an internal performance path: it adds no CLI flag, machine-readable
+output field, or exit code. Direct SQLite edits outside Sessions are unsupported
+and are not guaranteed to be found by either bounded open mode; `sessions
+doctor` remains the explicit full-library semantic audit.
 
 Forget is logical deletion: freed whole pages become reusable, but the command
 does not promise that the main database file shrinks. `sessions data compact`
@@ -626,8 +641,11 @@ Doctor never duplicates the roots owned by paths. Summaries and labels are
 human-facing; IDs, order, detail keys/values, and schema version are
 machine-facing.
 
-Supported storage schema 2 includes the writer clean-seal state, canonical
-document digests, and exact document metrics. There is no
+Supported storage schema 3 includes the writer clean-seal state, canonical
+document digests, exact document metrics, and the rebuildable index-generation
+receipt. The schema-2-to-3 migration preserves retained evidence but manufactures
+no receipt; the first schema-3 writer must prove the library through full
+validation. There is no
 compatibility migration from earlier development checksums; they fail closed
 and require the documented fresh data-directory or exact Sessions-owned-directory
 reset and reindex. Supported releases beginning with `0.1.0` use ordered,
@@ -868,7 +886,8 @@ are continuation tokens, not durable bookmarks or public encoded schemas.
 write one startup notice to interactive stderr warning that the operation may
 take a couple of minutes. Redirected or captured stderr remains quiet on
 success. Interactive indexing also names its writer-open mode (`fast`, new
-library preparation, or full-library verification) and each active
+library preparation, bounded certified-generation recovery, or full-library
+verification) and each active
 full-validation phase. These best-effort messages are non-versioned and
 non-semantic. They expose no path, identity, fingerprint, transcript value,
 percentage, elapsed time, work total, ETA, cursor, partial outcome, or

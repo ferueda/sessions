@@ -18,6 +18,8 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
+import type { IndexProgressEvent } from "../../src/application/index-progress.ts";
+import type { IndexTimingPhase } from "../../src/application/index-timing.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { SourceCaptureWorkspaceError } from "../../src/application/ports/session-source.ts";
 import {
@@ -443,7 +445,7 @@ INSERT INTO table_that_does_not_exist VALUES (1);`,
     await expect(readFile(paths.wal, "utf8")).resolves.toBe("orphaned recovery state");
   });
 
-  test("recovers a valid WAL and interrupts the abandoned run before new work", async () => {
+  test("uses certified recovery for a valid WAL and interrupts the abandoned run", async () => {
     const paths = await fixturePaths();
     const databaseModule = pathToFileURL(
       path.resolve("src/infrastructure/sqlite/database.ts"),
@@ -473,6 +475,31 @@ process.exit(0);`,
     );
     expect(child.status).toBe(0);
     await expect(stat(paths.wal)).resolves.toMatchObject({ size: expect.any(Number) });
+    const abandoned = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(abandoned.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        purpose: "index",
+      });
+      expect(
+        abandoned
+          .prepare(
+            `SELECT writer_generation, schema_version, operation_sequence
+             FROM sessions_index_generation_receipt
+             WHERE singleton = 1`,
+          )
+          .get(),
+      ).toEqual({
+        writer_generation: 1,
+        schema_version: CURRENT_INDEX_SCHEMA_VERSION,
+        operation_sequence: 1,
+      });
+      expect(abandoned.prepare("SELECT status FROM sessions_index_runs").get()).toEqual({
+        status: "active",
+      });
+    } finally {
+      abandoned.close();
+    }
 
     const lifecycle = createSqliteIndexLifecycle({
       now: () => new Date("2026-07-13T12:01:00.000Z"),
@@ -482,7 +509,35 @@ process.exit(0);`,
       status: "recovery-required",
     });
 
-    const writer = await lifecycle.openWriter(paths);
+    const progressEvents: IndexProgressEvent[] = [];
+    const timingPhases: IndexTimingPhase[] = [];
+    let timingTick = 0;
+    const writer = await lifecycle.openWriter(paths, {
+      progress: (event) => progressEvents.push(event),
+      timing: {
+        now: () => ++timingTick,
+        record: (phase) => timingPhases.push(phase),
+      },
+    });
+    expect(progressEvents).toEqual([{ kind: "writer-open-mode", mode: "certified-recovery" }]);
+    expect(timingPhases).toEqual([]);
+    expect(writer.database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+      generation: 2,
+      purpose: "index",
+    });
+    expect(
+      writer.database
+        .prepare(
+          `SELECT writer_generation, schema_version, operation_sequence
+           FROM sessions_index_generation_receipt
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({
+      writer_generation: 2,
+      schema_version: CURRENT_INDEX_SCHEMA_VERSION,
+      operation_sequence: 0,
+    });
     expect(
       writer.database
         .prepare(
@@ -497,6 +552,368 @@ process.exit(0);`,
     });
     await writer.close();
     await expect(lifecycle.inspect(paths)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  test("rolls back an active certified mutation after abrupt process exit", async () => {
+    const paths = await fixturePaths();
+    const databaseModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/database.ts"),
+    ).href;
+    const receiptModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/writer-recovery-receipt.ts"),
+    ).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createSqliteIndexLifecycle } from ${JSON.stringify(databaseModule)};
+import { runCertifiedIndexMutation } from ${JSON.stringify(receiptModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+const now = () => new Date("2026-07-13T12:00:00.000Z");
+const writer = await createSqliteIndexLifecycle({
+  now,
+  writerToken: () => "active-mutation-crash-owner",
+}).openWriter(paths);
+await writer.sessions.startRun({
+  source: { kind: "synthetic", instanceId: "active-mutation-crash-profile" },
+  startedAt: "2026-07-13T12:00:00.000Z",
+});
+const leaseRow = writer.database.prepare(
+  "SELECT generation, owner_token FROM sessions_writer_lease WHERE singleton = 1",
+).get();
+const schemaRow = writer.database.prepare(
+  "SELECT MAX(version) AS schema_version FROM sessions_schema_migrations",
+).get();
+runCertifiedIndexMutation(
+  writer.database,
+  {
+    purpose: "index",
+    generation: Number(leaseRow.generation),
+    token: String(leaseRow.owner_token),
+  },
+  { now, schemaVersion: Number(schemaRow.schema_version) },
+  () => {
+    const changed = writer.database.prepare(
+      "UPDATE sessions_index_runs SET missing_count = 7 WHERE status = 'active'",
+    ).run();
+    if (changed.changes !== 1) throw new Error("expected one active run mutation");
+    process.exit(0);
+  },
+);`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+      },
+    );
+    expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
+    await expect(stat(paths.wal)).resolves.toMatchObject({ size: expect.any(Number) });
+
+    const abandoned = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(
+        abandoned
+          .prepare(
+            `SELECT status, missing_count
+             FROM sessions_index_runs`,
+          )
+          .get(),
+      ).toEqual({ status: "active", missing_count: 0 });
+      expect(
+        abandoned
+          .prepare(
+            `SELECT writer_generation, operation_sequence
+             FROM sessions_index_generation_receipt
+             WHERE singleton = 1`,
+          )
+          .get(),
+      ).toEqual({ writer_generation: 1, operation_sequence: 1 });
+    } finally {
+      abandoned.close();
+    }
+
+    const progressEvents: IndexProgressEvent[] = [];
+    const timingPhases: IndexTimingPhase[] = [];
+    const writer = await createSqliteIndexLifecycle({
+      now: () => new Date("2026-07-13T12:01:00.000Z"),
+      writerToken: () => "active-mutation-recovery-owner",
+    }).openWriter(paths, {
+      progress: (event) => progressEvents.push(event),
+      timing: {
+        now: () => 1,
+        record: (phase) => timingPhases.push(phase),
+      },
+    });
+
+    expect(progressEvents).toEqual([{ kind: "writer-open-mode", mode: "certified-recovery" }]);
+    expect(timingPhases).toEqual([]);
+    expect(
+      writer.database
+        .prepare(
+          `SELECT status, finished_at, failure_code, missing_count
+           FROM sessions_index_runs`,
+        )
+        .get(),
+    ).toEqual({
+      status: "interrupted",
+      finished_at: "2026-07-13T12:01:00.000Z",
+      failure_code: "interrupted",
+      missing_count: 0,
+    });
+    expect(
+      writer.database
+        .prepare(
+          `SELECT writer_generation, operation_sequence
+           FROM sessions_index_generation_receipt
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({ writer_generation: 2, operation_sequence: 0 });
+    await writer.close();
+  });
+
+  test("uses certified recovery after the setup sequence-zero receipt commits", async () => {
+    const paths = await fixturePaths();
+    const databaseModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/database.ts"),
+    ).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createSqliteIndexLifecycle } from ${JSON.stringify(databaseModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+await createSqliteIndexLifecycle({
+  now: () => new Date("2026-07-13T12:00:00.000Z"),
+  writerToken: () => "sequence-zero-owner",
+}).openWriter(paths);
+process.exit(0);`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+      },
+    );
+    expect(child.status).toBe(0);
+
+    const abandoned = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(abandoned.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 1,
+        purpose: "index",
+      });
+      expect(
+        abandoned
+          .prepare(
+            `SELECT writer_generation, schema_version, operation_sequence
+             FROM sessions_index_generation_receipt
+             WHERE singleton = 1`,
+          )
+          .get(),
+      ).toEqual({
+        writer_generation: 1,
+        schema_version: CURRENT_INDEX_SCHEMA_VERSION,
+        operation_sequence: 0,
+      });
+      expect(abandoned.prepare("SELECT COUNT(*) AS count FROM sessions_index_runs").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      abandoned.close();
+    }
+
+    const progressEvents: IndexProgressEvent[] = [];
+    const timingPhases: IndexTimingPhase[] = [];
+    let timingTick = 0;
+    const writer = await createSqliteIndexLifecycle({
+      now: () => new Date("2026-07-13T12:01:00.000Z"),
+      writerToken: () => "sequence-zero-recovery-owner",
+    }).openWriter(paths, {
+      progress: (event) => progressEvents.push(event),
+      timing: {
+        now: () => ++timingTick,
+        record: (phase) => timingPhases.push(phase),
+      },
+    });
+
+    expect(progressEvents).toEqual([{ kind: "writer-open-mode", mode: "certified-recovery" }]);
+    expect(timingPhases).toEqual([]);
+    expect(writer.database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+      generation: 2,
+      purpose: "index",
+    });
+    expect(
+      writer.database
+        .prepare(
+          `SELECT writer_generation, schema_version, operation_sequence
+           FROM sessions_index_generation_receipt
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({
+      writer_generation: 2,
+      schema_version: CURRENT_INDEX_SCHEMA_VERSION,
+      operation_sequence: 0,
+    });
+    expect(
+      writer.database.prepare("SELECT COUNT(*) AS count FROM sessions_index_runs").get(),
+    ).toEqual({ count: 0 });
+    await writer.close();
+  });
+
+  test("uses full validation after acquisition commits without sequence zero", async () => {
+    const paths = await fixturePaths();
+    const databaseModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/database.ts"),
+    ).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createSqliteIndexLifecycle } from ${JSON.stringify(databaseModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+const writer = await createSqliteIndexLifecycle({
+  now: () => new Date("2026-07-13T12:00:00.000Z"),
+  writerToken: () => "pre-acquisition-crash-owner",
+}).openWriter(paths);
+await writer.sessions.startRun({
+  source: { kind: "synthetic", instanceId: "acquisition-crash-profile" },
+  startedAt: "2026-07-13T12:00:00.000Z",
+});
+process.exit(0);`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+      },
+    );
+    expect(child.status).toBe(0);
+
+    const writerDatabaseModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/sqlite-writer-database.ts"),
+    ).href;
+    const writerSchemaModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/writer-schema.ts"),
+    ).href;
+    const migrationsModule = pathToFileURL(
+      path.resolve("src/infrastructure/sqlite/migrations.ts"),
+    ).href;
+    const acquisitionChild = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import {
+  configureSqliteWriterDatabase,
+  openSqliteWriterDatabase,
+} from ${JSON.stringify(writerDatabaseModule)};
+import { acquireWriterSchema } from ${JSON.stringify(writerSchemaModule)};
+import { sqliteMigrations } from ${JSON.stringify(migrationsModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+const database = openSqliteWriterDatabase(paths.database, 5_000);
+configureSqliteWriterDatabase(database, 5_000, { initializePageReclamation: false });
+const acquired = acquireWriterSchema(database, "index", sqliteMigrations, {
+  now: () => new Date("2026-07-13T12:01:00.000Z"),
+  token: () => "committed-acquisition-owner",
+});
+if (acquired.lease.generation !== 2 || acquired.certifiedRecoveryCandidate === undefined) {
+  throw new Error("expected certified takeover candidate");
+}
+process.exit(0);`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+      },
+    );
+    expect(acquisitionChild.status).toBe(0);
+
+    const acquisition = new DatabaseSync(paths.database, { readOnly: true });
+    try {
+      expect(
+        acquisition
+          .prepare("SELECT * FROM sessions_index_generation_receipt WHERE singleton = 1")
+          .get(),
+      ).toBeUndefined();
+      expect(acquisition.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+        generation: 2,
+        purpose: "index",
+      });
+      expect(
+        acquisition
+          .prepare(
+            `SELECT status, finished_at, failure_code
+             FROM sessions_index_runs`,
+          )
+          .get(),
+      ).toEqual({
+        status: "interrupted",
+        finished_at: "2026-07-13T12:01:00.000Z",
+        failure_code: "interrupted",
+      });
+    } finally {
+      acquisition.close();
+    }
+
+    const progressEvents: IndexProgressEvent[] = [];
+    const timingPhases: IndexTimingPhase[] = [];
+    let timingTick = 0;
+    const writer = await createSqliteIndexLifecycle({
+      now: () => new Date("2026-07-13T12:02:00.000Z"),
+      writerToken: () => "post-acquisition-recovery-owner",
+    }).openWriter(paths, {
+      progress: (event) => progressEvents.push(event),
+      timing: {
+        now: () => ++timingTick,
+        record: (phase) => timingPhases.push(phase),
+      },
+    });
+
+    expect(progressEvents).toEqual([
+      { kind: "writer-open-mode", mode: "full-validation" },
+      { kind: "writer-validation", phase: "canonical" },
+      { kind: "writer-validation", phase: "foreign-keys" },
+      { kind: "writer-validation", phase: "fts-structure" },
+      { kind: "writer-validation", phase: "fts-content" },
+      { kind: "writer-validation", phase: "fts-semantic" },
+    ]);
+    expect(timingPhases).toEqual([
+      "writerFullValidationCanonical",
+      "writerFullValidationForeignKeys",
+      "writerFullValidationFtsStructure",
+      "writerFullValidationFtsContent",
+      "writerFullValidationFtsSemantic",
+    ]);
+    expect(writer.database.prepare("SELECT * FROM sessions_writer_lease").get()).toMatchObject({
+      generation: 3,
+      purpose: "index",
+    });
+    expect(
+      writer.database
+        .prepare(
+          `SELECT writer_generation, schema_version, operation_sequence
+           FROM sessions_index_generation_receipt
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({
+      writer_generation: 3,
+      schema_version: CURRENT_INDEX_SCHEMA_VERSION,
+      operation_sequence: 0,
+    });
+    expect(
+      writer.database
+        .prepare("SELECT status, finished_at, failure_code FROM sessions_index_runs")
+        .get(),
+    ).toEqual({
+      status: "interrupted",
+      finished_at: "2026-07-13T12:01:00.000Z",
+      failure_code: "interrupted",
+    });
+    await writer.close();
   });
 
   test("rejects a preexisting empty database without changing its page mode", async () => {

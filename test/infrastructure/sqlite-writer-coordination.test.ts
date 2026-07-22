@@ -31,6 +31,10 @@ import {
   startWriterLeaseHeartbeat,
   type WriterLeaseScheduler,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import {
+  initializeWriterRecoveryReceipt,
+  type WriterRecoveryReceipt,
+} from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -379,6 +383,78 @@ describe("SQLite writer coordination", () => {
     }
   });
 
+  test("rolls back the generation and receipt when acquisition fails before commit", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const abandonedLease = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "rollback-abandoned-owner",
+      });
+      const runId = insertActiveRun(database);
+      initializeWriterRecoveryReceipt(database, abandonedLease, {
+        now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
+      const leaseBefore = leaseRow(database);
+      const receiptBefore = receiptRow(database);
+      database.exec(`CREATE TEMP TRIGGER test_fail_takeover_receipt_clear
+                     BEFORE DELETE ON sessions_index_generation_receipt
+                     BEGIN
+                       SELECT RAISE(ABORT, 'synthetic acquisition failure');
+                     END`);
+
+      clock.set("2026-07-13T12:01:00.000Z");
+      expect(() =>
+        acquireWriterSchema(database, "index", sqliteMigrations, {
+          now: clock.now,
+          token: () => "rollback-failed-takeover",
+        }),
+      ).toThrow("synthetic acquisition failure");
+
+      expect(leaseRow(database)).toEqual(leaseBefore);
+      expect(receiptRow(database)).toEqual(receiptBefore);
+      expect(
+        database
+          .prepare(
+            `SELECT status, finished_at, failure_code
+             FROM sessions_index_runs
+             WHERE run_id = ?`,
+          )
+          .get(runId),
+      ).toEqual({ status: "active", finished_at: null, failure_code: null });
+
+      database.exec("DROP TRIGGER temp.test_fail_takeover_receipt_clear");
+      const replacement = acquireWriterSchema(database, "index", sqliteMigrations, {
+        now: clock.now,
+        token: () => "rollback-successful-takeover",
+      });
+      expect(replacement).toMatchObject({
+        lease: { generation: abandonedLease.generation + 1, purpose: "index" },
+        certifiedRecoveryCandidate: receiptBefore,
+      });
+      expect(receiptRow(database)).toBeUndefined();
+      expect(
+        database
+          .prepare(
+            `SELECT status, finished_at, failure_code
+             FROM sessions_index_runs
+             WHERE run_id = ?`,
+          )
+          .get(runId),
+      ).toEqual({
+        status: "interrupted",
+        finished_at: "2026-07-13T12:01:00.000Z",
+        failure_code: "interrupted",
+      });
+      expect(
+        interruptOwnedRunsAndReleaseWriterLease(database, replacement.lease, { now: clock.now }),
+      ).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
   test("renews an expired exact owner without changing its generation", () => {
     const database = migratedDatabase();
     const clock = fakeClock("2026-07-13T12:00:00.000Z");
@@ -549,9 +625,15 @@ describe("SQLite writer coordination", () => {
         now: acquiredAt,
         token: () => "long-replacement-owner",
       });
+      initializeWriterRecoveryReceipt(database, lease, {
+        now: acquiredAt,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const index = createCoordinatedSqliteSessionIndex(database, {
         lease,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
         now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:20.000Z",
           "2026-07-13T12:01:00.000Z",
@@ -594,9 +676,15 @@ describe("SQLite writer coordination", () => {
         now: acquiredAt,
         token: () => "failed-replacement-owner",
       });
+      initializeWriterRecoveryReceipt(database, lease, {
+        now: acquiredAt,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const index = createCoordinatedSqliteSessionIndex(database, {
         lease,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
         now: sequencedClock([
+          "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:00.000Z",
           "2026-07-13T12:00:20.000Z",
           "2026-07-13T12:01:00.000Z",
@@ -609,7 +697,7 @@ describe("SQLite writer coordination", () => {
         source: sessionIdentity.source,
         startedAt: "2026-07-13T12:00:00.000Z",
       });
-      database.exec(`CREATE TRIGGER fail_canonical_insert
+      database.exec(`CREATE TEMP TRIGGER fail_canonical_insert
                      BEFORE INSERT ON sessions_canonical_sessions
                      BEGIN
                        SELECT RAISE(ABORT, 'synthetic replacement failure');
@@ -646,9 +734,14 @@ describe("SQLite writer coordination", () => {
         now: clock.now,
         token: () => "first-repository-owner",
       });
+      initializeWriterRecoveryReceipt(database, firstLease, {
+        now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const first = createCoordinatedSqliteSessionIndex(database, {
         lease: firstLease,
         now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
       });
       const sessionIdentity = identity("fencing-profile", "session-one");
       const sessionObservation = observation(sessionIdentity, "revision-a");
@@ -876,6 +969,34 @@ async function fileBackedDatabases(): Promise<{
 
 function leaseRow(database: DatabaseSync): unknown {
   return database.prepare("SELECT * FROM sessions_writer_lease WHERE singleton = 1").get();
+}
+
+function receiptRow(database: DatabaseSync): WriterRecoveryReceipt | undefined {
+  const row = database
+    .prepare(
+      `SELECT receipt_version, writer_generation, schema_version, schema_cookie,
+              operation_sequence
+       FROM sessions_index_generation_receipt
+       WHERE singleton = 1`,
+    )
+    .get() as
+    | {
+        readonly receipt_version: number;
+        readonly writer_generation: number;
+        readonly schema_version: number;
+        readonly schema_cookie: number;
+        readonly operation_sequence: number;
+      }
+    | undefined;
+  return row === undefined
+    ? undefined
+    : {
+        receiptVersion: 1,
+        writerGeneration: row.writer_generation,
+        schemaVersion: row.schema_version,
+        schemaCookie: row.schema_cookie,
+        operationSequence: row.operation_sequence,
+      };
 }
 
 function insertActiveRun(database: DatabaseSync): number {

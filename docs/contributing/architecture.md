@@ -1,7 +1,8 @@
 # Current architecture
 
-Status: the post-V1 revision-manifest milestone is complete over the
-provider-neutral library, query, export, and maintenance contracts.
+Status: the post-V1 revision-manifest milestone and certified index-recovery
+work are complete over the provider-neutral library, query, export, and
+maintenance contracts.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -28,6 +29,7 @@ index
   -> src/application/run-index.ts
   -> writer-leased SourceCaptureWorkspace for discovery and changed reads
   -> src/infrastructure/sqlite/sqlite-session-index.ts
+  -> transaction-bound schema-3 index-generation receipt
   -> optional aggregate timing at existing application/port boundaries
 
 list / search / entries / manifest / show / export
@@ -78,7 +80,7 @@ remain strict.
 | `src/adapters/cursor/`                                                                                         | Cursor path/store discovery and canonical normalization                                                                                      |
 | `src/adapters/codex/`                                                                                          | Codex path/state/rollout discovery and canonical normalization                                                                               |
 | `src/infrastructure/state/`                                                                                    | Application-data paths, state inspection, and leased ephemeral capture workspace                                                             |
-| `src/infrastructure/sqlite/`                                                                                   | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance                                              |
+| `src/infrastructure/sqlite/`                                                                                   | Schema, canonical/query and capture-scope readers, cursors, FTS repair, clean/recovery proof, leases, and maintenance                        |
 | `src/infrastructure/runtime/index-timings.ts`                                                                  | In-memory allowlisted indexing timing aggregation                                                                                            |
 | `src/infrastructure/runtime/doctor-timings.ts`                                                                 | In-memory allowlisted doctor timing aggregation                                                                                              |
 | `src/cli/structured-output.ts`                                                                                 | Closed schema-1 DTO construction, recursive validation, and freezing                                                                         |
@@ -190,9 +192,10 @@ The current baseline creates canonical text/omitted segments, exact tool identit
 and linkage, complete/unknown lineage coverage, source instances, latest
 successful fingerprints/documents, capture timestamps, source presence/coverage,
 bounded run evidence, a random library identity, derived external-content FTS,
-writer coordination, and the fixed public-document digest directly. The digest
-scheme and exact 32-byte value are stored on the canonical session row in the
-same replacement transaction as the document. Only text enters interning and FTS. Canonical
+writer coordination, a rebuildable index-generation receipt, and the fixed
+public-document digest directly. The digest scheme and exact 32-byte value are
+stored on the canonical session row in the same replacement transaction as the
+document. Only text enters interning and FTS. Canonical
 text keeps a stable integer content ID, stores the fixed SHA-256 digest as a
 32-byte BLOB, and narrows interning through a non-unique digest index before
 requiring exact binary text equality. A canonical insert guard rejects duplicate
@@ -221,15 +224,34 @@ after proportional document/affected-FTS proof. It then closes and hardens the
 database and publishes a private post-close proof bound to the library,
 generation, schema, and final database stat. A ready, no-sidecar, current-schema
 open with both matching records uses constant-size schema and FTS structure
-checks. Dirty, recovery, migration, maintenance, or failed-cleanup state uses the
-full canonical, foreign-key, and FTS validation/repair path. Missing or rejected
-proof only disables the optimization. Its bounded metadata contains no
-transcript, provider identity, local path, content hash, or lease token.
+checks. The clean proof is preferred for normal free state.
 
-The clean-writer baseline changed the single schema-1 checksum.
-Earlier development libraries are not migrated or cleared automatically; use a
-fresh `SESSIONS_DATA_DIR` or manually remove only the obsolete Sessions-owned
-directory, then index again.
+Schema 3 adds one strict singleton receipt with format version, exact index
+generation, schema version, SQLite schema cookie, and monotonic operation
+sequence. The exact index owner initializes sequence zero only after open-time
+setup succeeds. Starting/finishing runs, unchanged/failure/missing batches, and
+canonical replacement advance it once after their local postconditions in the
+same leased transaction. On an exact expired index owner, a matching receipt and
+valid bounded catalog/FTS structure permit `certified-recovery`: acquisition
+interrupts the abandoned run, clears its receipt, and advances ownership without
+global validation scans. The new invocation still starts discovery from the
+beginning.
+
+Missing, altered, malformed, stale, free, live, maintenance, migration-era, or
+wrong-generation/schema/cookie receipt evidence is not trusted. Live and
+clear-only ownership retain their lifecycle precedence; otherwise the writer
+uses the full canonical, foreign-key, and FTS validation/repair path. Missing or
+altered receipt-table structure is repaired only under the exact lease and still
+requires full validation. Every proven mode opens the capture workspace and
+configures FTS before creating its new sequence-zero receipt. The receipt's
+bounded metadata contains no transcript, provider identity, local path, content
+hash, lease token, timestamp, or timing data.
+
+The schema-2-to-3 migration preserves retained evidence and does not backfill a
+receipt. Its first schema-3 writer therefore completes full validation before
+creating proof. Earlier unsupported development libraries are not migrated or
+cleared automatically; use a fresh `SESSIONS_DATA_DIR` or manually remove only
+the obsolete Sessions-owned directory, then index again.
 
 A complete scan marks every unseen tracked session `missing`; unavailable or
 incomplete discovery leaves effective source state `unknown`. Neither deletes
@@ -296,11 +318,14 @@ oversized term; docsize is compared separately in both directions. The complete
 expected index remains corpus-sized, so total memory is not constant, but no
 comparison state spills to disk. Incomplete capture evidence produces an
 `ok: true` warning; failed health remains a failure. Direct
-out-of-band SQLite edits are unsupported; the clean fast open does not replace
-doctor as the explicit immutable full-library check. Index schema 2 adds one
+out-of-band SQLite edits are unsupported; neither the clean fast open nor
+certified recovery replaces doctor as the explicit immutable full-library check.
+Index schema 2 adds one
 strict, foreign-keyed metrics row per canonical session. Replacement writes it
 atomically with the document; migration backfills schema-1 libraries; health
-requires exact one-to-one coverage and semantic equality.
+requires exact one-to-one coverage and semantic equality. Index schema 3 adds
+the transaction-bound recovery receipt described above; it is operational proof,
+not retained canonical evidence.
 
 Interactive doctor progress is a fixed best-effort stderr presentation owned by
 the CLI. Redirected stderr stays quiet for normal success and failed-check

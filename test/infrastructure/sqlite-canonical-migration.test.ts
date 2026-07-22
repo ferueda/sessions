@@ -26,18 +26,20 @@ describe("canonical SQLite baseline", () => {
     try {
       const history = applyMigrations(database);
 
-      expect(history).toMatchObject({ currentVersion: 2, pending: [] });
+      expect(history).toMatchObject({ currentVersion: 3, pending: [] });
       expect(history.applied.map(({ version, name }) => ({ version, name }))).toEqual([
         { version: 1, name: "bootstrap" },
         { version: 2, name: "session-document-metrics" },
+        { version: 3, name: "index-generation-receipt" },
       ]);
-      expect(readMigrationHistory(database).currentVersion).toBe(2);
+      expect(readMigrationHistory(database).currentVersion).toBe(3);
       expect(strictApplicationTables(database)).toEqual([
         "sessions_canonical_document_metrics",
         "sessions_canonical_sessions",
         "sessions_content_occurrences",
         "sessions_content_values",
         "sessions_entries",
+        "sessions_index_generation_receipt",
         "sessions_index_run_items",
         "sessions_index_runs",
         "sessions_library",
@@ -126,6 +128,15 @@ describe("canonical SQLite baseline", () => {
         clean_generation: null,
         clean_schema_cookie: null,
       });
+      expect(tableColumns(database, "sessions_index_generation_receipt")).toEqual([
+        "singleton",
+        "receipt_version",
+        "writer_generation",
+        "schema_version",
+        "schema_cookie",
+        "operation_sequence",
+      ]);
+      expect(database.prepare("SELECT * FROM sessions_index_generation_receipt").all()).toEqual([]);
       expect(() =>
         database
           .prepare(
@@ -159,6 +170,68 @@ describe("canonical SQLite baseline", () => {
     }
   });
 
+  test("adds no receipt and preserves all schema-2 evidence", () => {
+    const database = openDatabase();
+    try {
+      applyMigrations(database, sqliteMigrations.slice(0, 2));
+      seedSchemaOneCanonicalDocument(database);
+      const sourceInstanceId = Number(
+        database
+          .prepare(
+            `SELECT source_instance_id
+             FROM sessions_source_instances
+             WHERE kind = 'synthetic' AND instance_id = 'migration-profile'`,
+          )
+          .get()?.source_instance_id,
+      );
+      database
+        .prepare(
+          `INSERT INTO sessions_index_runs (
+             source_instance_id, status, started_at, finished_at,
+             discovered_count, indexed_count
+           ) VALUES (?, 'completed', ?, ?, 1, 1)`,
+        )
+        .run(sourceInstanceId, "2026-07-20T10:00:00.000Z", "2026-07-20T10:01:00.000Z");
+      const before = schemaTwoEvidenceSnapshot(database);
+
+      const history = applyMigrations(database);
+
+      expect(history.currentVersion).toBe(3);
+      expect(schemaTwoEvidenceSnapshot(database)).toEqual(before);
+      expect(database.prepare("SELECT * FROM sessions_index_generation_receipt").all()).toEqual([]);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expectFtsIntegrity(database);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back a failed receipt migration without changing schema-2 state", () => {
+    const database = openDatabase();
+    try {
+      applyMigrations(database, sqliteMigrations.slice(0, 2));
+      seedSchemaOneCanonicalDocument(database);
+      const before = schemaTwoEvidenceSnapshot(database);
+      database.exec("CREATE VIEW sessions_index_generation_receipt AS SELECT 1 AS singleton");
+
+      expect(() => applyMigrations(database)).toThrow(/already exists/u);
+
+      expect(readMigrationHistory(database).currentVersion).toBe(2);
+      expect(schemaTwoEvidenceSnapshot(database)).toEqual(before);
+      expect(
+        database
+          .prepare(
+            `SELECT type
+             FROM sqlite_schema
+             WHERE name = 'sessions_index_generation_receipt'`,
+          )
+          .get(),
+      ).toEqual({ type: "view" });
+    } finally {
+      database.close();
+    }
+  });
+
   test("backfills exact occurrence metrics without changing schema-1 canonical evidence", () => {
     const database = openDatabase();
     try {
@@ -168,7 +241,7 @@ describe("canonical SQLite baseline", () => {
 
       const history = applyMigrations(database);
 
-      expect(history.currentVersion).toBe(2);
+      expect(history.currentVersion).toBe(3);
       expect(canonicalEvidenceSnapshot(database)).toEqual(before);
       expect(
         database
@@ -913,6 +986,26 @@ function canonicalEvidenceSnapshot(database: DatabaseSync): Readonly<Record<stri
       )
       .all(),
     content: database.prepare("SELECT * FROM sessions_content_values ORDER BY content_id").all(),
+  };
+}
+
+function schemaTwoEvidenceSnapshot(database: DatabaseSync): Readonly<Record<string, unknown>> {
+  return {
+    library: database.prepare("SELECT * FROM sessions_library ORDER BY singleton").all(),
+    sources: database
+      .prepare("SELECT * FROM sessions_source_instances ORDER BY source_instance_id")
+      .all(),
+    tracking: database.prepare("SELECT * FROM sessions_session_tracking ORDER BY session_id").all(),
+    ...canonicalEvidenceSnapshot(database),
+    metrics: database
+      .prepare("SELECT * FROM sessions_canonical_document_metrics ORDER BY session_id")
+      .all(),
+    runs: database.prepare("SELECT * FROM sessions_index_runs ORDER BY run_id").all(),
+    runItems: database
+      .prepare("SELECT * FROM sessions_index_run_items ORDER BY run_id, ordinal")
+      .all(),
+    fts: database.prepare("SELECT rowid, text FROM sessions_content_fts ORDER BY rowid").all(),
+    writerLease: database.prepare("SELECT * FROM sessions_writer_lease ORDER BY singleton").all(),
   };
 }
 

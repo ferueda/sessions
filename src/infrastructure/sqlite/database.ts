@@ -66,6 +66,7 @@ import {
   interruptOwnedRunsMarkCleanAndReleaseWriterLease,
   SqliteWriterLeaseError,
   startWriterLeaseHeartbeat,
+  runLeasedImmediateTransaction,
   type WriterLeaseHeartbeat,
   type WriterLeaseIdentity,
   type WriterLeaseScheduler,
@@ -75,6 +76,11 @@ import {
   publishWriterCleanProof,
   removeWriterCleanProofTemporaryFiles,
 } from "./writer-clean-proof.ts";
+import {
+  certifiedRecoveryCandidateMatchesCurrentOwner,
+  initializeWriterRecoveryReceiptInTransaction,
+  repairWriterRecoveryReceiptStructureInTransaction,
+} from "./writer-recovery-receipt.ts";
 import {
   openSourceCaptureWorkspace,
   type SourceCaptureWorkspaceLifecycle,
@@ -244,14 +250,42 @@ export function createSqliteIndexLifecycle(
         if (history.currentVersion !== supportedSchemaVersion) {
           throw new Error("SQLite migrations did not reach the supported schema");
         }
+        const receiptStructureRepaired = runLeasedImmediateTransaction(
+          database,
+          ownedLease,
+          { now },
+          (transactionNow) =>
+            repairWriterRecoveryReceiptStructureInTransaction(database, ownedLease, {
+              now: transactionNow,
+            }),
+        );
         await secureIndexFiles(paths, { platform });
+        const ftsStructureValid = ftsProjectionStructureIsValid(database);
         const fastPathEligible =
-          acquired.fastPathEligible && ftsProjectionStructureIsValid(database);
+          !receiptStructureRepaired && acquired.fastPathEligible && ftsStructureValid;
+        const certifiedRecoveryEligible =
+          !fastPathEligible &&
+          !receiptStructureRepaired &&
+          ftsStructureValid &&
+          acquired.certifiedRecoveryCandidate !== undefined &&
+          certifiedRecoveryCandidateMatchesCurrentOwner(
+            database,
+            acquired.certifiedRecoveryCandidate,
+            ownedLease,
+            { now, schemaVersion: supportedSchemaVersion },
+          );
+        const writerOpenMode = fastPathEligible
+          ? "fast"
+          : certifiedRecoveryEligible
+            ? "certified-recovery"
+            : databaseCreated
+              ? "bootstrap"
+              : "full-validation";
         reportIndexProgress(writerOptions.progress, {
           kind: "writer-open-mode",
-          mode: fastPathEligible ? "fast" : databaseCreated ? "bootstrap" : "full-validation",
+          mode: writerOpenMode,
         });
-        if (!fastPathEligible) {
+        if (!fastPathEligible && !certifiedRecoveryEligible) {
           repairFtsProjection(database, {
             assertCanonicalIntegrity: () => {
               reportIndexProgress(writerOptions.progress, {
@@ -291,17 +325,24 @@ export function createSqliteIndexLifecycle(
           fts5Security,
         );
         let integrityUncertain = false;
-        const sessions = createCoordinatedSqliteSessionIndex(database, {
-          lease: ownedLease,
-          now,
-          onIntegrityUncertain: () => {
-            integrityUncertain = true;
-          },
-        });
         const libraryInstanceId = readLibraryInstanceId(database);
         workspace = await openSourceCaptureWorkspace(paths, {
           assertLease: () => assertWriterLease(database, ownedLease, { now }),
           platform,
+        });
+        runLeasedImmediateTransaction(database, ownedLease, { now }, (transactionNow) => {
+          initializeWriterRecoveryReceiptInTransaction(database, ownedLease, {
+            now: transactionNow,
+            schemaVersion: supportedSchemaVersion,
+          });
+        });
+        const sessions = createCoordinatedSqliteSessionIndex(database, {
+          lease: ownedLease,
+          now,
+          schemaVersion: supportedSchemaVersion,
+          onIntegrityUncertain: () => {
+            integrityUncertain = true;
+          },
         });
 
         return createWriter(

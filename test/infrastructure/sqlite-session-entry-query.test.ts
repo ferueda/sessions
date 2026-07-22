@@ -5,13 +5,17 @@ import { describe, expect, test } from "vitest";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSessionEntryQuery } from "../../src/domain/session-query.ts";
 import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 import { replacement } from "../contracts/session-index.contract.ts";
 
 describe("SQLite session entry query", () => {
@@ -126,7 +130,15 @@ async function seed(database: DatabaseSync, documents: readonly SessionDocument[
     now,
     token: () => "entry-query-focused-writer",
   });
-  const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+  initializeWriterRecoveryReceipt(database, lease, {
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
+  const index = createCoordinatedSqliteSessionIndex(database, {
+    lease,
+    now,
+    schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+  });
   try {
     const run = await index.startRun({ source: SOURCE, startedAt: now().toISOString() });
     for (const [ordinal, candidate] of documents.entries()) {

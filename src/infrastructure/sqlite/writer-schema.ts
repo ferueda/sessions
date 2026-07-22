@@ -14,9 +14,16 @@ import {
   acquireIndexWriterLeaseInTransaction,
   acquireWriterLeaseInTransaction,
   assertWriterLease,
+  readWriterLeaseHealth,
   type WriterLeaseIdentity,
   type WriterLeasePurpose,
 } from "./writer-lease.ts";
+import {
+  clearWriterRecoveryReceiptInTransaction,
+  type CertifiedRecoveryCandidate,
+  inspectWriterRecoveryReceiptCandidate,
+  inspectWriterRecoveryReceiptStructure,
+} from "./writer-recovery-receipt.ts";
 
 const BASELINE_SCHEMA_VERSION = 1;
 const MIGRATION_TABLE = "sessions_schema_migrations";
@@ -38,6 +45,7 @@ export interface AcquiredWriterSchema {
   readonly history: MigrationHistory;
   readonly lease: WriterLeaseIdentity;
   readonly fastPathEligible: boolean;
+  readonly certifiedRecoveryCandidate: CertifiedRecoveryCandidate | undefined;
 }
 
 export function validateWriterSchemaCatalog(migrations: readonly SqliteMigration[]): void {
@@ -73,29 +81,47 @@ export function acquireWriterSchema(
   }
 
   return runImmediateTransaction(database, () => {
+    // Acquisition is one atomic boundary. Reuse one clock sample so receipt
+    // cleanup cannot appear to outlive the lease while this transaction runs.
+    const acquiredAt = options.now();
+    const acquisitionOptions = { ...options, now: () => acquiredAt };
     const lockedHistory = readMigrationHistory(database, migrations);
     const claim =
       purpose === "index" && cleanClaimMatches(database, lockedHistory, options.cleanClaim)
         ? options.cleanClaim
         : undefined;
     if (purpose === "index") {
+      const priorLease = readWriterLeaseHealth(database, acquisitionOptions);
+      const certifiedRecoveryCandidate =
+        lockedHistory.pending.length === 0
+          ? inspectWriterRecoveryReceiptCandidate(
+              database,
+              priorLease,
+              lockedHistory.currentVersion,
+            )
+          : undefined;
       const acquired = acquireIndexWriterLeaseInTransaction(
         database,
-        options,
+        acquisitionOptions,
         claim === undefined
           ? undefined
           : { generation: claim.generation, schemaCookie: claim.schemaCookie },
       );
+      if (inspectWriterRecoveryReceiptStructure(database) === "exact") {
+        clearWriterRecoveryReceiptInTransaction(database, acquired.lease, acquisitionOptions);
+      }
       return {
         history: lockedHistory,
         lease: acquired.lease,
         fastPathEligible: acquired.priorCleanEligible,
+        certifiedRecoveryCandidate,
       };
     }
     return {
       history: lockedHistory,
-      lease: acquireWriterLeaseInTransaction(database, purpose, options),
+      lease: acquireWriterLeaseInTransaction(database, purpose, acquisitionOptions),
       fastPathEligible: false,
+      certifiedRecoveryCandidate: undefined,
     };
   });
 }

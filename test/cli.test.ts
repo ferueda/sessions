@@ -115,6 +115,27 @@ describe("sessions CLI", () => {
     expect(index.mock.calls[1]).toEqual([undefined]);
   });
 
+  test("describes certified writer recovery without claiming a full scan or resumed run", async () => {
+    const index = vi.fn<ProgramOptions["index"]>(async (_source, options) => {
+      options?.progress?.({ kind: "writer-open-mode", mode: "certified-recovery" });
+      return indexReport(false);
+    });
+
+    const invocation = await invoke(
+      ["index", "--format", "json"],
+      { index },
+      { interactive: true },
+    );
+
+    expect(invocation).toMatchObject({
+      exitCode: 0,
+      stderr:
+        "Indexing sessions; this may take a couple of minutes.\n" +
+        "Using bounded checks for the prior certified Sessions writer generation.\n",
+    });
+    expect(invocation.stderr).not.toMatch(/full|resum/iu);
+  });
+
   test("reports bounded doctor progress only on interactive stderr", async () => {
     const doctor = vi.fn<ProgramOptions["doctor"]>(async (options) => {
       options?.progress?.({ phase: "library-state" });

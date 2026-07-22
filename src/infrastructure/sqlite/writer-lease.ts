@@ -180,11 +180,13 @@ export function runLeasedImmediateTransaction<T>(
   database: DatabaseSync,
   identity: WriterLeaseIdentity,
   options: WriterLeaseOperationOptions,
-  operation: () => T,
+  operation: (transactionNow: () => Date) => T,
 ): T {
   return runImmediateTransaction(database, () => {
-    renewExactWriterLease(database, identity, canonicalNow(options.now), true);
-    const result = operation();
+    const enteredAt = canonicalNow(options.now);
+    renewExactWriterLease(database, identity, enteredAt, true);
+    const transactionNow = (): Date => new Date(enteredAt.date.getTime());
+    const result = operation(transactionNow);
     renewExactWriterLease(database, identity, canonicalNow(options.now), true);
     return result;
   });

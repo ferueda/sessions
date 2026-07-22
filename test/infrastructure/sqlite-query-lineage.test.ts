@@ -9,13 +9,17 @@ import type {
   SessionIdentity,
   SessionRelation,
 } from "../../src/domain/session.ts";
-import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
+import {
+  applyMigrations,
+  CURRENT_INDEX_SCHEMA_VERSION,
+} from "../../src/infrastructure/sqlite/migrations.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
 import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
+import { initializeWriterRecoveryReceipt } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 import { replacement } from "../contracts/session-index.contract.ts";
 import { createTestDocument, createTestEntry, createTestSegment } from "../fixtures/session.ts";
 
@@ -26,6 +30,10 @@ describe("SQLite query lineage support", () => {
     const lease = acquireWriterLease(database, "index", {
       now,
       token: () => "query-lineage-writer",
+    });
+    initializeWriterRecoveryReceipt(database, lease, {
+      now,
+      schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
     });
     try {
       const rootA = identity("root-a");
@@ -46,7 +54,11 @@ describe("SQLite query lineage support", () => {
         document(cycleLeft, "complete", [relation("parent", cycleRight)]),
         document(cycleRight, "complete", [relation("parent", cycleLeft)]),
       ];
-      const index = createCoordinatedSqliteSessionIndex(database, { lease, now });
+      const index = createCoordinatedSqliteSessionIndex(database, {
+        lease,
+        now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
       const run = await index.startRun({
         source: rootA.source,
         startedAt: "2026-07-14T12:00:00.000Z",

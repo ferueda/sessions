@@ -1,4 +1,5 @@
 import { lstat, mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +12,7 @@ import type { IndexTimingPhase } from "../../src/application/index-timing.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
+import { ftsProjectionStructureIsValid } from "../../src/infrastructure/sqlite/fts-projection.ts";
 import { createSqliteIndexMaintenance } from "../../src/infrastructure/sqlite/index-maintenance.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
@@ -19,6 +21,7 @@ import {
   publishWriterCleanProof,
   readWriterCleanProof,
 } from "../../src/infrastructure/sqlite/writer-clean-proof.ts";
+import { inspectWriterRecoveryReceiptStructure } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -40,6 +43,52 @@ describe("SQLite FTS projection repair", () => {
 
     expect(observed.events).toEqual([{ kind: "writer-open-mode", mode: "fast" }]);
     expect(observed.phases).toEqual([]);
+  });
+
+  test("receipt structure repair forces full validation despite a matching clean proof", async () => {
+    const paths = await temporaryPaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const firstWriter = await lifecycle.openWriter(paths);
+    firstWriter.database.exec("DROP TABLE sessions_index_generation_receipt");
+    await firstWriter.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeDefined();
+
+    const observed = validationObservation();
+    const recoveredWriter = await lifecycle.openWriter(paths, observed.options);
+
+    expectCompleteFullValidation(observed);
+    expect(inspectWriterRecoveryReceiptStructure(recoveredWriter.database)).toBe("exact");
+    await recoveredWriter.close();
+  });
+
+  test("rejects receipt repair with inbound foreign keys without deleting dependent rows", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      database.exec(`DROP TABLE sessions_index_generation_receipt;
+CREATE TABLE sessions_index_generation_receipt (
+  singleton INTEGER PRIMARY KEY
+) STRICT;
+INSERT INTO sessions_index_generation_receipt (singleton) VALUES (1);
+CREATE TABLE receipt_repair_dependency (
+  dependency_id INTEGER PRIMARY KEY,
+  receipt_singleton INTEGER NOT NULL
+    REFERENCES sessions_index_generation_receipt(singleton) ON DELETE CASCADE
+) STRICT;
+INSERT INTO receipt_repair_dependency (dependency_id, receipt_singleton) VALUES (1, 1);`);
+    });
+
+    await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+      code: "invalid-structure",
+    });
+    const database = openImmutable(paths.database);
+    try {
+      expect(database.prepare("SELECT * FROM receipt_repair_dependency").all()).toEqual([
+        { dependency_id: 1, receipt_singleton: 1 },
+      ]);
+      expect(inspectWriterRecoveryReceiptStructure(database)).toBe("altered");
+    } finally {
+      database.close();
+    }
   });
 
   test("reports exact full-validation owners and repeated checks after rebuild", async () => {
@@ -105,6 +154,109 @@ describe("SQLite FTS projection repair", () => {
     });
 
     await expect(writer.close()).resolves.toBeUndefined();
+  });
+
+  test.each([
+    {
+      label: "an invalid receipt row",
+      mutate(database: DatabaseSync) {
+        database.exec("PRAGMA ignore_check_constraints = ON");
+        database
+          .prepare(
+            `UPDATE sessions_index_generation_receipt
+             SET receipt_version = 2
+             WHERE singleton = 1`,
+          )
+          .run();
+      },
+    },
+    {
+      label: "a missing receipt row",
+      mutate(database: DatabaseSync) {
+        database.prepare("DELETE FROM sessions_index_generation_receipt").run();
+      },
+    },
+    {
+      label: "a missing receipt table",
+      mutate(database: DatabaseSync) {
+        database.exec("DROP TABLE sessions_index_generation_receipt");
+      },
+    },
+    {
+      label: "an altered receipt table",
+      mutate(database: DatabaseSync) {
+        database.exec(`DROP TABLE sessions_index_generation_receipt;
+CREATE TABLE sessions_index_generation_receipt (
+  singleton INTEGER PRIMARY KEY,
+  receipt_version INTEGER NOT NULL,
+  writer_generation INTEGER NOT NULL,
+  schema_version INTEGER NOT NULL,
+  schema_cookie INTEGER NOT NULL,
+  operation_sequence INTEGER NOT NULL
+) STRICT;`);
+      },
+    },
+  ])("$label requires complete full validation", async ({ mutate }) => {
+    const paths = await abandonedCertifiedPaths();
+    mutateDatabase(paths.database, mutate);
+    const observed = validationObservation();
+
+    const writer = await recoveryLifecycle().openWriter(paths, observed.options);
+
+    expectCompleteFullValidation(observed);
+    expect(inspectWriterRecoveryReceiptStructure(writer.database)).toBe("exact");
+    const lease = writer.database.prepare("SELECT generation FROM sessions_writer_lease").get();
+    expect(
+      writer.database
+        .prepare(
+          `SELECT receipt_version, writer_generation, operation_sequence
+           FROM sessions_index_generation_receipt`,
+        )
+        .get(),
+    ).toEqual({
+      receipt_version: 1,
+      writer_generation: (lease as { readonly generation: number }).generation,
+      operation_sequence: 0,
+    });
+    await writer.close();
+  });
+
+  test("invalid certified FTS structure runs and completes the full repair path", async () => {
+    const paths = await abandonedCertifiedPaths();
+    mutateDatabase(paths.database, (database) => {
+      database.exec("DROP TRIGGER sessions_content_values_ai");
+    });
+    const observed = validationObservation();
+
+    const writer = await recoveryLifecycle().openWriter(paths, observed.options);
+
+    expect(observed.events).toEqual([
+      { kind: "writer-open-mode", mode: "full-validation" },
+      { kind: "writer-validation", phase: "canonical" },
+      { kind: "writer-validation", phase: "foreign-keys" },
+      { kind: "writer-validation", phase: "fts-structure" },
+      { kind: "writer-validation", phase: "fts-content" },
+      { kind: "writer-validation", phase: "fts-rebuild" },
+      { kind: "writer-validation", phase: "fts-structure" },
+      { kind: "writer-validation", phase: "fts-content" },
+      { kind: "writer-validation", phase: "fts-semantic" },
+      { kind: "writer-validation", phase: "canonical" },
+      { kind: "writer-validation", phase: "foreign-keys" },
+    ]);
+    expect(observed.phases).toEqual([
+      "writerFullValidationCanonical",
+      "writerFullValidationForeignKeys",
+      "writerFullValidationFtsStructure",
+      "writerFullValidationFtsContent",
+      "writerFullValidationFtsRebuild",
+      "writerFullValidationFtsStructure",
+      "writerFullValidationFtsContent",
+      "writerFullValidationFtsSemantic",
+      "writerFullValidationCanonical",
+      "writerFullValidationForeignKeys",
+    ]);
+    expect(ftsProjectionStructureIsValid(writer.database)).toBe(true);
+    await writer.close();
   });
 
   test("an explicit index writer rebuilds damaged FTS state from unchanged canonical content", async () => {
@@ -523,7 +675,66 @@ function validationObservation(): {
   };
 }
 
+function expectCompleteFullValidation(observed: ReturnType<typeof validationObservation>): void {
+  expect(observed.events).toEqual([
+    { kind: "writer-open-mode", mode: "full-validation" },
+    { kind: "writer-validation", phase: "canonical" },
+    { kind: "writer-validation", phase: "foreign-keys" },
+    { kind: "writer-validation", phase: "fts-structure" },
+    { kind: "writer-validation", phase: "fts-content" },
+    { kind: "writer-validation", phase: "fts-semantic" },
+  ]);
+  expect(observed.phases).toEqual([
+    "writerFullValidationCanonical",
+    "writerFullValidationForeignKeys",
+    "writerFullValidationFtsStructure",
+    "writerFullValidationFtsContent",
+    "writerFullValidationFtsSemantic",
+  ]);
+}
+
 async function initializedPaths(): Promise<IndexPaths> {
+  const paths = await temporaryPaths();
+  const writer = await createSqliteIndexLifecycle().openWriter(paths);
+  await writer.close();
+  return paths;
+}
+
+async function abandonedCertifiedPaths(): Promise<IndexPaths> {
+  const paths = await temporaryPaths();
+  const databaseModule = pathToFileURL(path.resolve("src/infrastructure/sqlite/database.ts")).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { createSqliteIndexLifecycle } from ${JSON.stringify(databaseModule)};
+const paths = JSON.parse(process.env.SESSIONS_TEST_INDEX_PATHS);
+const writer = await createSqliteIndexLifecycle({
+  now: () => new Date("2026-07-13T12:00:00.000Z"),
+  writerToken: () => "abandoned-certified-owner",
+}).openWriter(paths);
+process.exit(0);`,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, SESSIONS_TEST_INDEX_PATHS: JSON.stringify(paths) },
+    },
+  );
+  if (child.status !== 0) {
+    throw new Error(`Certified writer child failed: ${child.stderr || child.stdout}`);
+  }
+  return paths;
+}
+
+function recoveryLifecycle() {
+  return createSqliteIndexLifecycle({
+    now: () => new Date("2026-07-13T12:01:00.000Z"),
+    writerToken: () => "certified-recovery-owner",
+  });
+}
+
+async function temporaryPaths(): Promise<IndexPaths> {
   const root = await mkdtemp(path.join(tmpdir(), "sessions-fts-repair-"));
   temporaryDirectories.push(root);
   const directory = path.join(root, "sessions");
@@ -535,8 +746,6 @@ async function initializedPaths(): Promise<IndexPaths> {
     wal: `${database}-wal`,
     shm: `${database}-shm`,
   };
-  const writer = await createSqliteIndexLifecycle().openWriter(paths);
-  await writer.close();
   return paths;
 }
 

@@ -838,6 +838,97 @@ describe("runIndex with SQLite", () => {
     });
   });
 
+  test("certified recovery preserves clean incremental results without rereading documents", async () => {
+    const controlPaths = await fixturePaths();
+    const recoveryPaths = await fixturePaths();
+    const controlSource = createFakeIndexingSource();
+    const recoverySource = createFakeIndexingSource();
+    const candidate = controlSource.candidate("session", "stable-revision");
+    const recoveryCandidate = recoverySource.candidate("session", "stable-revision");
+    const identity = candidate.identity;
+    controlSource.setDiscovery([candidate]);
+    recoverySource.setDiscovery([recoveryCandidate]);
+    controlSource.setDocument("session", document(identity, "stable capture"));
+    recoverySource.setDocument("session", document(identity, "stable capture"));
+
+    const baselineOptions = {
+      now: () => new Date("2026-07-13T12:00:00.000Z"),
+      writerScheduler: noOpWriterScheduler(),
+    };
+    await index(
+      createSqliteIndexLifecycle({ ...baselineOptions, writerToken: () => "control-baseline" }),
+      controlPaths,
+      controlSource.selected,
+    );
+    await index(
+      createSqliteIndexLifecycle({ ...baselineOptions, writerToken: () => "recovery-baseline" }),
+      recoveryPaths,
+      recoverySource.selected,
+    );
+
+    const abandonedWriter = await createSqliteIndexLifecycle({
+      now: () => new Date("2026-07-13T12:01:00.000Z"),
+      writerScheduler: noOpWriterScheduler(),
+      writerToken: () => "abandoned-owner",
+    }).openWriter(recoveryPaths);
+    await abandonedWriter.sessions.startRun({
+      source: recoverySource.instance,
+      startedAt: "2026-07-13T12:01:00.000Z",
+    });
+    abandonedWriter.database.close();
+
+    const controlEvents: string[] = [];
+    const recoveryEvents: string[] = [];
+    const controlReads = controlSource.readNativeIds.length;
+    const recoveryReads = recoverySource.readNativeIds.length;
+    const incrementalNow = "2026-07-13T12:02:00.000Z";
+    const controlReport = await runIndex({
+      paths: controlPaths,
+      sources: [controlSource.selected],
+      lifecycle: createSqliteIndexLifecycle({
+        now: () => new Date(incrementalNow),
+        writerScheduler: noOpWriterScheduler(),
+        writerToken: () => "control-incremental",
+      }),
+      clock: clock(incrementalNow),
+      progress: (event) =>
+        controlEvents.push(`${event.kind}:${"mode" in event ? event.mode : event.phase}`),
+    });
+    const recoveryReport = await runIndex({
+      paths: recoveryPaths,
+      sources: [recoverySource.selected],
+      lifecycle: createSqliteIndexLifecycle({
+        now: () => new Date(incrementalNow),
+        writerScheduler: noOpWriterScheduler(),
+        writerToken: () => "recovery-owner",
+      }),
+      clock: clock(incrementalNow),
+      progress: (event) =>
+        recoveryEvents.push(`${event.kind}:${"mode" in event ? event.mode : event.phase}`),
+    });
+
+    expect(controlEvents).toEqual(["writer-open-mode:fast"]);
+    expect(recoveryEvents).toEqual(["writer-open-mode:certified-recovery"]);
+    expect(controlSource.readNativeIds).toHaveLength(controlReads);
+    expect(recoverySource.readNativeIds).toHaveLength(recoveryReads);
+    expect(recoveryReport).toEqual(controlReport);
+    await expect(readStableIndexResults(recoveryPaths, identity)).resolves.toEqual(
+      await readStableIndexResults(controlPaths, identity),
+    );
+
+    const controlOperations = readOperationalState(controlPaths);
+    const recoveryOperations = readOperationalState(recoveryPaths);
+    expect(controlOperations.runStatuses).toEqual(["completed", "completed"]);
+    expect(recoveryOperations.runStatuses).toEqual(["completed", "interrupted", "completed"]);
+    expect(recoveryOperations.generation).toBe(controlOperations.generation + 1);
+    await expect(readWriterCleanProof(controlPaths.database)).resolves.toMatchObject({
+      writerGeneration: controlOperations.generation,
+    });
+    await expect(readWriterCleanProof(recoveryPaths.database)).resolves.toMatchObject({
+      writerGeneration: recoveryOperations.generation,
+    });
+  });
+
   test("cleanup failure after cancellation suppresses the clean proof and next fast open", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
@@ -969,8 +1060,8 @@ async function fixturePaths(): Promise<IndexPaths> {
   };
 }
 
-function clock() {
-  let milliseconds = Date.parse("2026-07-13T12:00:00.000Z");
+function clock(initial = "2026-07-13T12:00:00.000Z") {
+  let milliseconds = Date.parse(initial);
   return {
     now() {
       const result = new Date(milliseconds);
@@ -978,6 +1069,46 @@ function clock() {
       return result;
     },
   };
+}
+
+function noOpWriterScheduler() {
+  return {
+    setInterval() {
+      return "unused-heartbeat";
+    },
+    clearInterval() {},
+  };
+}
+
+async function readStableIndexResults(paths: IndexPaths, identity: SessionIdentity) {
+  const reader = await createSqliteIndexLifecycle().openReader(paths);
+  try {
+    return {
+      session: await reader.sessions.getSession(identity),
+      freshness: await reader.sessions.getFreshness(identity),
+      list: await reader.query.list(createSessionListQuery({ limit: 10 })),
+    };
+  } finally {
+    await reader.close();
+  }
+}
+
+function readOperationalState(paths: IndexPaths): {
+  readonly generation: number;
+  readonly runStatuses: readonly string[];
+} {
+  const database = new DatabaseSync(paths.database, { readOnly: true });
+  try {
+    const lease = database.prepare("SELECT generation FROM sessions_writer_lease").get() as {
+      readonly generation: number;
+    };
+    const runs = database
+      .prepare("SELECT status FROM sessions_index_runs ORDER BY run_id")
+      .all() as unknown as readonly { readonly status: string }[];
+    return { generation: lease.generation, runStatuses: runs.map(({ status }) => status) };
+  } finally {
+    database.close();
+  }
 }
 
 function sessionIdentity(

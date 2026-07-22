@@ -13,9 +13,12 @@ never writes to the provider.
    providers as skipped. If every provider is unavailable, return without
    opening or creating the library.
 2. If any source remains, acquire the single index writer lease, which makes the
-   new generation dirty,
-   and start one run per source. Starting a run changes that source's coverage
-   to `unknown`.
+   new generation dirty. Select `fast`, `certified-recovery`, `bootstrap`, or
+   `full-validation` from the locked prior generation and bounded structure
+   evidence. After validation, FTS configuration, and capture-workspace setup
+   succeed, create the new generation's sequence-zero recovery receipt. Then
+   start one run per source. Starting a run changes that source's coverage to
+   `unknown`.
 3. Probe the source, then exhaust and validate discovery before applying any
    candidate. Conflicting duplicates or any invalid discovery item make the
    whole discovery set incomplete.
@@ -26,8 +29,11 @@ never writes to the provider.
    reading its transcript again.
 5. Read and validate each changed candidate. Replace its canonical document,
    public-document digest, exact document metrics, tracking state, interned text,
-   and FTS rows in one leased transaction. Record ordinary typed failures immediately, but hold a
-   first-attempt `source-changed` outcome until the primary pass finishes.
+   and FTS rows in one leased transaction. Record ordinary typed failures
+   immediately, but hold a first-attempt `source-changed` outcome until the
+   primary pass finishes. Every durable index operation performs its local
+   postconditions and advances the generation receipt once before that same
+   transaction commits.
 6. If any source-change outcomes were held, perform one fresh complete
    rediscovery for that source and retry only those original identities, in
    their primary order. Retry freshness and unchanged writes use the same
@@ -89,13 +95,22 @@ proving complete coverage. Writer close records any still-active run as
   next ready, sidecar-free, current-schema open to use constant-size schema/FTS
   structure checks. Missing, stale, malformed, or unsafe proof disables only
   this optimization.
-- Recovery, migration, maintenance, abandoned work, or failed cleanup keeps the
-  generation dirty and uses the existing full canonical document/digest/metrics,
-  foreign-key, and FTS validation/repair path.
+- An exact receipt beside an expired index lease may use the same bounded catalog
+  and FTS structure checks. Acquisition interrupts the abandoned run, clears the
+  old receipt, and starts a new run from discovery; it never resumes the old run.
+  Each supported committed index mutation and its receipt sequence advance are
+  atomic.
+- Missing, stale, malformed, wrong-generation, free, maintenance, migration-era,
+  or structurally unsafe receipt evidence uses the full canonical
+  document/digest/metrics, foreign-key, and FTS validation/repair path. A live
+  owner remains busy, an expired clear owner remains clear-only, and incompatible
+  lifecycle states fail closed.
 - The first foreground `SIGINT` or `SIGTERM` requests cooperative cancellation
   and maps a successfully cleaned stop to exit `130` or `143`. Operation and
   cleanup errors keep their existing precedence. A crash, `SIGKILL`, or failed
-  cleanup remains dirty and requires full validation on the next writer.
+  cleanup remains dirty. The next writer may use certified recovery only when
+  the crash left an exact expired index lease and a matching receipt at a
+  completed mutation boundary; otherwise it performs full validation.
 - Changed documents are reconstructed and digest-checked after replacement;
   affected canonical content IDs must match their FTS rows. Direct out-of-band
   SQLite edits are unsupported.
@@ -140,18 +155,19 @@ paths, fingerprints, timestamps, errors, or transcript-derived values. Timing
 clock, collection, and stderr failures are best-effort and cannot replace the
 underlying command result.
 
-The fixed synthetic 2,000-session measurement compares clean and deliberately
-unproven opens from equal cloned libraries. A fully stable run must use exactly
-16 freshness reads, 16 unchanged writes, and 16 tracked-identity page reads at
-the current 128-item bound, with equal reports, canonical and tracking state,
-health, representative queries, a final clean proof, and zero source reads. A
-fourth equal clone completes an empty discovery: it must use 16 tracked pages
-plus 16 missing writes, retain all canonical/query evidence, expose every
-session as current-but-missing, and retain the first 100 ordered run items while
-reporting 1,900 omitted items. Its full-validation phase report identifies the
-dominant recovery owner without changing the clean-path budget. Measurements
-assert deterministic ownership and correctness, not elapsed-time thresholds or
-public performance guarantees.
+The fixed synthetic 2,000-session measurement compares a clean open, an
+abandoned exact certified generation, and a receipt-invalidated
+full-validation control from equal cloned libraries. Stable runs must use
+exactly 16 freshness reads, 16 unchanged writes, and 16 tracked-identity page
+reads at the current 128-item bound, with equal reports, canonical and tracking
+state, health, representative queries, a final clean proof, and zero source
+reads. Certified recovery must record no global validation phase; the
+invalidated control must exercise the complete fallback. A separate equal clone
+completes an empty discovery through 16 tracked pages plus 16 missing writes,
+retains all canonical/query evidence, exposes every session as
+current-but-missing, and retains the first 100 ordered run items while reporting
+1,900 omitted items. Measurements assert deterministic ownership and
+correctness, not elapsed-time thresholds or public performance guarantees.
 
 ## Code and proofs
 
@@ -163,6 +179,8 @@ public performance guarantees.
   `src/infrastructure/sqlite/database.ts`
 - Clean state: `src/infrastructure/sqlite/writer-lease.ts`,
   `src/infrastructure/sqlite/writer-clean-proof.ts`
+- Crash-boundary certification:
+  `src/infrastructure/sqlite/writer-recovery-receipt.ts`
 - FTS structure, repair, and semantic doctor proof:
   `src/infrastructure/sqlite/fts-projection.ts`
 - Timing aggregation: `src/infrastructure/runtime/index-timings.ts`
