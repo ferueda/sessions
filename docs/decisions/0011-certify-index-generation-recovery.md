@@ -71,7 +71,10 @@ A live lease remains busy rather than becoming a recovery mode. An expired
 sidecar states keep their existing fail-closed lifecycle result. A missing or
 altered receipt table is repaired only after exact writer ownership is acquired,
 and that open must still complete full validation before it can create new
-proof. If the isolated repair cannot be proved, opening fails closed.
+proof. Repair requires an ordinary main-schema table with no inbound foreign
+keys, external schema dependencies, temporary name collision, or attached
+schema. If that isolation cannot be proved, opening fails closed without
+dropping or creating the receipt table.
 
 Every successful mode configures persistent FTS settings and opens the private
 capture workspace before creating the current generation's sequence-zero

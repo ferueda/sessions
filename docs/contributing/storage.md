@@ -70,7 +70,10 @@ abandoned run, advances ownership, and clears the old receipt atomically. Free,
 live, maintenance, migration-era, stale, malformed, wrong-schema/cookie, or
 structurally invalid evidence cannot use this mode. Missing or altered receipt
 table structure is repaired only under exact ownership and still requires the
-complete validation/repair path before new proof is created.
+complete validation/repair path before new proof is created. Repair fails closed
+before DDL when another schema object depends on the table, a temporary object
+shadows it, an attached schema is present, or the altered object is not an
+isolated ordinary main-schema table.
 
 A cooperative index cancellation uses the same exact-owner close path. It may
 seal the cancelled generation only after active runs are interrupted, workspace

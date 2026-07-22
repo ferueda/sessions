@@ -45,6 +45,52 @@ describe("SQLite FTS projection repair", () => {
     expect(observed.phases).toEqual([]);
   });
 
+  test("receipt structure repair forces full validation despite a matching clean proof", async () => {
+    const paths = await temporaryPaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const firstWriter = await lifecycle.openWriter(paths);
+    firstWriter.database.exec("DROP TABLE sessions_index_generation_receipt");
+    await firstWriter.close();
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeDefined();
+
+    const observed = validationObservation();
+    const recoveredWriter = await lifecycle.openWriter(paths, observed.options);
+
+    expectCompleteFullValidation(observed);
+    expect(inspectWriterRecoveryReceiptStructure(recoveredWriter.database)).toBe("exact");
+    await recoveredWriter.close();
+  });
+
+  test("rejects receipt repair with inbound foreign keys without deleting dependent rows", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      database.exec(`DROP TABLE sessions_index_generation_receipt;
+CREATE TABLE sessions_index_generation_receipt (
+  singleton INTEGER PRIMARY KEY
+) STRICT;
+INSERT INTO sessions_index_generation_receipt (singleton) VALUES (1);
+CREATE TABLE receipt_repair_dependency (
+  dependency_id INTEGER PRIMARY KEY,
+  receipt_singleton INTEGER NOT NULL
+    REFERENCES sessions_index_generation_receipt(singleton) ON DELETE CASCADE
+) STRICT;
+INSERT INTO receipt_repair_dependency (dependency_id, receipt_singleton) VALUES (1, 1);`);
+    });
+
+    await expect(createSqliteIndexLifecycle().openWriter(paths)).rejects.toMatchObject({
+      code: "invalid-structure",
+    });
+    const database = openImmutable(paths.database);
+    try {
+      expect(database.prepare("SELECT * FROM receipt_repair_dependency").all()).toEqual([
+        { dependency_id: 1, receipt_singleton: 1 },
+      ]);
+      expect(inspectWriterRecoveryReceiptStructure(database)).toBe("altered");
+    } finally {
+      database.close();
+    }
+  });
+
   test("reports exact full-validation owners and repeated checks after rebuild", async () => {
     const paths = await initializedPaths();
     const canonicalText = "canonical phase alpha";

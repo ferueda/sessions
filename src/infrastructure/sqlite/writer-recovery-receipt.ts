@@ -260,19 +260,148 @@ export function repairWriterRecoveryReceiptStructureInTransaction(
   assertOwnedIndexTransaction(database, lease, options);
   const structure = inspectWriterRecoveryReceiptStructure(database);
   if (structure === "exact") return false;
-
-  const namedObject = database
-    .prepare("SELECT type FROM sqlite_schema WHERE name = ?")
-    .get(INDEX_GENERATION_RECEIPT_TABLE) as { readonly type?: unknown } | undefined;
-  if (namedObject !== undefined && namedObject.type !== "table") {
-    throw new WriterRecoveryReceiptError("invalid-structure");
-  }
-  if (namedObject?.type === "table") {
+  assertReceiptStructureIsIsolatedForRepair(database, structure);
+  if (structure === "altered") {
     database.exec(`DROP TABLE ${INDEX_GENERATION_RECEIPT_TABLE}`);
   }
   database.exec(INDEX_GENERATION_RECEIPT_TABLE_SQL);
   assertExactStructure(database);
   return true;
+}
+
+function assertReceiptStructureIsIsolatedForRepair(
+  database: DatabaseSync,
+  structure: Exclude<WriterRecoveryReceiptStructure, "exact">,
+): void {
+  try {
+    assertNoAttachedSchemas(database);
+    assertNoExternalReceiptDependencies(database, structure);
+    if (structure === "altered") {
+      assertOrdinaryMainReceiptTable(database);
+      assertReceiptTableHasNoInboundForeignKeys(database);
+    }
+  } catch (error) {
+    if (error instanceof WriterRecoveryReceiptError) throw error;
+    throw new WriterRecoveryReceiptError("invalid-structure", { cause: error });
+  }
+}
+
+function assertNoAttachedSchemas(database: DatabaseSync): void {
+  const databases = database
+    .prepare("SELECT name FROM pragma_database_list ORDER BY seq")
+    .all() as readonly { readonly name?: unknown }[];
+  for (const row of databases) {
+    if (row.name !== "main" && row.name !== "temp") {
+      throw new WriterRecoveryReceiptError("invalid-structure");
+    }
+  }
+}
+
+function assertNoExternalReceiptDependencies(
+  database: DatabaseSync,
+  structure: Exclude<WriterRecoveryReceiptStructure, "exact">,
+): void {
+  const objects = database
+    .prepare(
+      `SELECT 'main' AS schema_name, type, name, tbl_name, sql
+       FROM sqlite_schema
+       UNION ALL
+       SELECT 'temp' AS schema_name, type, name, tbl_name, sql
+       FROM sqlite_temp_schema
+       ORDER BY schema_name COLLATE BINARY, type COLLATE BINARY, name COLLATE BINARY`,
+    )
+    .all() as readonly {
+    readonly schema_name?: unknown;
+    readonly type?: unknown;
+    readonly name?: unknown;
+    readonly tbl_name?: unknown;
+    readonly sql?: unknown;
+  }[];
+  for (const row of objects) {
+    if (
+      (row.schema_name !== "main" && row.schema_name !== "temp") ||
+      typeof row.type !== "string" ||
+      typeof row.name !== "string" ||
+      typeof row.tbl_name !== "string" ||
+      (row.sql !== null && typeof row.sql !== "string")
+    ) {
+      throw new WriterRecoveryReceiptError("invalid-structure");
+    }
+    const ownedObject =
+      sameSqlIdentifier(row.name, INDEX_GENERATION_RECEIPT_TABLE) ||
+      sameSqlIdentifier(row.tbl_name, INDEX_GENERATION_RECEIPT_TABLE);
+    if (row.schema_name === "temp" && ownedObject) {
+      throw new WriterRecoveryReceiptError("invalid-structure");
+    }
+    if (row.schema_name === "main" && ownedObject) {
+      if (structure === "missing") {
+        throw new WriterRecoveryReceiptError("invalid-structure");
+      }
+      continue;
+    }
+    if (
+      typeof row.sql === "string" &&
+      row.sql.toLowerCase().includes(INDEX_GENERATION_RECEIPT_TABLE)
+    ) {
+      throw new WriterRecoveryReceiptError("invalid-structure");
+    }
+  }
+}
+
+function assertOrdinaryMainReceiptTable(database: DatabaseSync): void {
+  const tableRows = database
+    .prepare(
+      `SELECT schema, name, type
+       FROM pragma_table_list
+       WHERE schema = 'main' AND name = ? COLLATE NOCASE`,
+    )
+    .all(INDEX_GENERATION_RECEIPT_TABLE) as readonly {
+    readonly schema?: unknown;
+    readonly name?: unknown;
+    readonly type?: unknown;
+  }[];
+  if (
+    tableRows.length !== 1 ||
+    tableRows[0]?.schema !== "main" ||
+    tableRows[0]?.name !== INDEX_GENERATION_RECEIPT_TABLE ||
+    tableRows[0]?.type !== "table"
+  ) {
+    throw new WriterRecoveryReceiptError("invalid-structure");
+  }
+}
+
+function sameSqlIdentifier(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function assertReceiptTableHasNoInboundForeignKeys(database: DatabaseSync): void {
+  try {
+    const tables = database
+      .prepare(
+        `SELECT name
+         FROM sqlite_schema
+         WHERE type = 'table'
+         ORDER BY name COLLATE BINARY`,
+      )
+      .all() as readonly { readonly name?: unknown }[];
+    const referencesReceipt = database.prepare(
+      `SELECT 1 AS present
+       FROM pragma_foreign_key_list(?)
+       WHERE "table" = ? COLLATE NOCASE
+       LIMIT 1`,
+    );
+    for (const row of tables) {
+      if (typeof row.name !== "string") {
+        throw new WriterRecoveryReceiptError("invalid-structure");
+      }
+      if (referencesReceipt.get(row.name, INDEX_GENERATION_RECEIPT_TABLE) !== undefined) {
+        throw new WriterRecoveryReceiptError("invalid-structure");
+      }
+    }
+  } catch (error) {
+    if (error instanceof WriterRecoveryReceiptError) throw error;
+    throw new WriterRecoveryReceiptError("invalid-structure", { cause: error });
+  }
 }
 
 function assertReceiptOwnership(

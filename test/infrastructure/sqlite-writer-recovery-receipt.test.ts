@@ -372,6 +372,53 @@ describe("writer recovery receipt", () => {
     }
   });
 
+  test.each([
+    {
+      label: "an external schema dependency",
+      mutate(database: DatabaseSync) {
+        database.exec(`DROP TABLE ${INDEX_GENERATION_RECEIPT_TABLE};
+CREATE VIEW receipt_dependency_view AS
+SELECT extra FROM ${INDEX_GENERATION_RECEIPT_TABLE};`);
+      },
+    },
+    {
+      label: "a temporary name collision",
+      mutate(database: DatabaseSync) {
+        database.exec(`DROP TABLE ${INDEX_GENERATION_RECEIPT_TABLE};
+CREATE TEMP TABLE ${INDEX_GENERATION_RECEIPT_TABLE} (singleton INTEGER PRIMARY KEY) STRICT;`);
+      },
+    },
+    {
+      label: "an attached schema",
+      mutate(database: DatabaseSync) {
+        database.exec(`DROP TABLE ${INDEX_GENERATION_RECEIPT_TABLE};
+ATTACH ':memory:' AS attached_receipt_dependency;`);
+      },
+    },
+  ])("refuses missing-table repair with $label", ({ mutate }) => {
+    const database = migratedDatabase();
+    try {
+      const lease = acquireIndexLease(database);
+      mutate(database);
+      expect(inspectWriterRecoveryReceiptStructure(database)).toBe("missing");
+
+      expect(() =>
+        runLeasedImmediateTransaction(database, lease, { now: () => BEFORE_EXPIRY }, () =>
+          repairWriterRecoveryReceiptStructureInTransaction(database, lease, {
+            now: () => BEFORE_EXPIRY,
+          }),
+        ),
+      ).toThrowError(
+        expect.objectContaining<Partial<WriterRecoveryReceiptError>>({
+          code: "invalid-structure",
+        }),
+      );
+      expect(inspectWriterRecoveryReceiptStructure(database)).toBe("missing");
+    } finally {
+      database.close();
+    }
+  });
+
   test("refuses unsafe structure repair and every stale-owner mutation", () => {
     const database = migratedDatabase();
     try {
@@ -395,6 +442,21 @@ describe("writer recovery receipt", () => {
       expect(inspectWriterRecoveryReceiptStructure(database)).toBe("altered");
 
       database.exec(`DROP VIEW ${INDEX_GENERATION_RECEIPT_TABLE}`);
+      database.exec(`CREATE VIRTUAL TABLE ${INDEX_GENERATION_RECEIPT_TABLE} USING fts5(value)`);
+      expect(() =>
+        runLeasedImmediateTransaction(database, staleLease, { now: () => BEFORE_EXPIRY }, () =>
+          repairWriterRecoveryReceiptStructureInTransaction(database, staleLease, {
+            now: () => BEFORE_EXPIRY,
+          }),
+        ),
+      ).toThrowError(
+        expect.objectContaining<Partial<WriterRecoveryReceiptError>>({
+          code: "invalid-structure",
+        }),
+      );
+      expect(inspectWriterRecoveryReceiptStructure(database)).toBe("altered");
+
+      database.exec(`DROP TABLE ${INDEX_GENERATION_RECEIPT_TABLE}`);
       runLeasedImmediateTransaction(database, staleLease, { now: () => BEFORE_EXPIRY }, () =>
         repairWriterRecoveryReceiptStructureInTransaction(database, staleLease, {
           now: () => BEFORE_EXPIRY,

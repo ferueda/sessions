@@ -261,7 +261,8 @@ export function createSqliteIndexLifecycle(
         );
         await secureIndexFiles(paths, { platform });
         const ftsStructureValid = ftsProjectionStructureIsValid(database);
-        const fastPathEligible = acquired.fastPathEligible && ftsStructureValid;
+        const fastPathEligible =
+          !receiptStructureRepaired && acquired.fastPathEligible && ftsStructureValid;
         const certifiedRecoveryEligible =
           !fastPathEligible &&
           !receiptStructureRepaired &&
