@@ -5,9 +5,11 @@ import {
   type IndexTimingPhase,
   type IndexTimingRecorder,
 } from "../../src/application/index-timing.ts";
+import { compareBinaryStrings } from "../../src/application/discover-sessions.ts";
 import type { IndexLifecycle } from "../../src/application/ports/index-lifecycle.ts";
 import {
   createSessionIndexRunId,
+  SESSION_INDEX_BATCH_LIMIT,
   type FinishIndexRunInput,
   type IndexRunCounts,
   type IndexRunItem,
@@ -53,6 +55,36 @@ describe("runIndex timing", () => {
     expect(report.counts).toEqual(indexCounts({ discovered: 1, unchanged: 1 }));
     expect(source.readNativeIds).toEqual([]);
     expect(timing.snapshot()).toEqual(phaseCalls({ freshnessRead: 1, unchangedWrite: 1 }));
+  });
+
+  test("records stable work in fixed-size freshness and unchanged batches", async () => {
+    const source = createFakeIndexingSource();
+    const candidates = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 1 }, (_, ordinal) =>
+      source.candidate(`stable-${String(ordinal).padStart(3, "0")}`),
+    );
+    source.setDiscovery(candidates);
+    const revisions = new Map(
+      candidates.map((candidate) => [candidate.identity.nativeId, revision(candidate)]),
+    );
+    const harness = createIndexHarness({
+      freshness: (sessionIdentity) => {
+        const lastGood = revisions.get(sessionIdentity.nativeId);
+        if (lastGood === undefined) throw new Error("missing stable timing revision");
+        return currentFreshness(sessionIdentity, lastGood);
+      },
+    });
+    const timing = createPhaseCounter();
+
+    const report = await execute(source.selected, harness.lifecycle, timing.recorder);
+
+    expect(report.counts).toEqual(
+      indexCounts({
+        discovered: SESSION_INDEX_BATCH_LIMIT + 1,
+        unchanged: SESSION_INDEX_BATCH_LIMIT + 1,
+      }),
+    );
+    expect(source.readNativeIds).toEqual([]);
+    expect(timing.snapshot()).toEqual(phaseCalls({ freshnessRead: 2, unchangedWrite: 2 }));
   });
 
   test("records changed read and replacement as separate phases", async () => {
@@ -108,6 +140,21 @@ describe("runIndex timing", () => {
       { identity: { nativeId: "missing-session" }, outcome: "missing" },
     ]);
     expect(timing.snapshot()).toEqual(phaseCalls({ reconciliation: 2 }));
+  });
+
+  test("records tracked reconciliation as bounded page and missing-batch calls", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([]);
+    const tracked = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 1 }, (_, ordinal) =>
+      identity(source.instance, `missing-${String(ordinal).padStart(3, "0")}`),
+    );
+    const harness = createIndexHarness({ tracked });
+    const timing = createPhaseCounter();
+
+    const report = await execute(source.selected, harness.lifecycle, timing.recorder);
+
+    expect(report.counts).toEqual(indexCounts({ missing: SESSION_INDEX_BATCH_LIMIT + 1 }));
+    expect(timing.snapshot()).toEqual(phaseCalls({ reconciliation: 4 }));
   });
 
   test("records writer close while preserving its original failure", async () => {
@@ -193,9 +240,6 @@ function createSessionIndex(options: IndexHarnessOptions): SessionIndexWriter {
     async getSession() {
       return undefined;
     },
-    async listTrackedIdentities() {
-      return options.tracked ?? [];
-    },
     async startRun({ source, startedAt }) {
       activeRun = {
         id: createSessionIndexRunId("timing-run"),
@@ -204,9 +248,21 @@ function createSessionIndex(options: IndexHarnessOptions): SessionIndexWriter {
       };
       return activeRun;
     },
-    async recordUnchanged(_run, _observation: SessionObservation) {
-      counts.discovered += 1;
-      counts.unchanged += 1;
+    async getFreshnessBatch(run, identities) {
+      if (run !== activeRun) throw new Error("unexpected timing-test run");
+      return Promise.all(
+        identities.map(
+          async (sessionIdentity) =>
+            options.freshness?.(sessionIdentity) ?? {
+              status: "untracked" as const,
+              identity: sessionIdentity,
+            },
+        ),
+      );
+    },
+    async recordUnchangedBatch(_run, observations: readonly SessionObservation[]) {
+      counts.discovered += observations.length;
+      counts.unchanged += observations.length;
     },
     async recordFailure(_run, observation, failure) {
       counts.discovered += 1;
@@ -217,9 +273,27 @@ function createSessionIndex(options: IndexHarnessOptions): SessionIndexWriter {
       counts.discovered += 1;
       counts.updated += 1;
     },
-    async recordMissing(_run, sessionIdentity) {
-      counts.missing += 1;
-      items.push({ identity: sessionIdentity, outcome: "missing" });
+    async listTrackedIdentitiesPage(run, afterNativeId) {
+      if (run !== activeRun) throw new Error("unexpected timing-test run");
+      const identities = [...(options.tracked ?? [])]
+        .sort((left, right) => compareBinaryStrings(left.nativeId, right.nativeId))
+        .filter(
+          ({ nativeId }) =>
+            afterNativeId === undefined || compareBinaryStrings(nativeId, afterNativeId) > 0,
+        );
+      return {
+        identities: identities.slice(0, SESSION_INDEX_BATCH_LIMIT),
+        hasMore: identities.length > SESSION_INDEX_BATCH_LIMIT,
+      };
+    },
+    async recordMissingBatch(_run, identities) {
+      counts.missing += identities.length;
+      items.push(
+        ...identities.map((sessionIdentity) => ({
+          identity: sessionIdentity,
+          outcome: "missing" as const,
+        })),
+      );
     },
     async finishRun(run, completion) {
       if (run !== activeRun) throw new Error("unexpected timing-test run");

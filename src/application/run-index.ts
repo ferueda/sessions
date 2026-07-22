@@ -18,7 +18,9 @@ import type {
   SessionFreshness,
   SessionIndexRun,
   SessionIndexWriter,
+  TrackedIdentityPage,
 } from "./ports/session-index.ts";
+import { SESSION_INDEX_BATCH_LIMIT } from "./ports/session-index.ts";
 import type {
   SelectedSessionSource,
   SourceCaptureWorkspace,
@@ -29,6 +31,7 @@ import { isSourceFailureError } from "./source-failure.ts";
 import {
   selectSessionSource,
   type AdmittedDiscoveredSession,
+  type SessionObservation,
   type SessionRevision,
   type ValidatedSessionReplacement,
 } from "./validate-session.ts";
@@ -223,51 +226,33 @@ async function runSource(
     throwIfIndexInterrupted(signal);
     if (!discovery.complete) return await finish("incomplete", "discovery-failed");
 
-    const seen = new Set<string>();
     const deferred: AdmittedDiscoveredSession[] = [];
-    for (const candidate of discovery.candidates) {
-      throwIfIndexInterrupted(signal);
-      const observation = candidate.observation;
-      seen.add(observation.identity.nativeId);
-      const failure = await applyCandidate(
-        index,
-        run,
-        selection,
-        candidate,
-        workspace,
-        timing,
-        signal,
-      );
-      throwIfIndexInterrupted(signal);
-      if (failure === "source-changed") {
-        deferred.push(candidate);
-      } else if (failure !== undefined) {
+    await processCandidateBatches(
+      index,
+      run,
+      selection,
+      discovery.candidates,
+      workspace,
+      timing,
+      signal,
+      async (candidate, failure) => {
+        if (failure === "source-changed") {
+          deferred.push(candidate);
+          return;
+        }
         throwIfIndexInterrupted(signal);
         await timeIndexOperation(timing, "runBookkeeping", () =>
-          index.recordFailure(run, observation, failure),
+          index.recordFailure(run, candidate.observation, failure),
         );
-      }
-    }
+      },
+    );
 
     if (deferred.length > 0) {
       await retrySourceChanged(index, run, selection, workspace, deferred, timing, signal);
       throwIfIndexInterrupted(signal);
     }
 
-    throwIfIndexInterrupted(signal);
-    const tracked = await timeIndexOperation(timing, "reconciliation", () =>
-      index.listTrackedIdentities(selection.instance),
-    );
-    throwIfIndexInterrupted(signal);
-    const ordered = validateTrackedIdentities(tracked, selection.instance);
-    for (const identity of ordered) {
-      throwIfIndexInterrupted(signal);
-      if (!seen.has(identity.nativeId)) {
-        await timeIndexOperation(timing, "reconciliation", () =>
-          index.recordMissing(run, identity),
-        );
-      }
-    }
+    await reconcileMissing(index, run, selection.instance, discovery.candidates, timing, signal);
     throwIfIndexInterrupted(signal);
     return await finish("completed");
   } catch (operationError) {
@@ -286,27 +271,86 @@ async function runSource(
   }
 }
 
-async function applyCandidate(
+type CandidateFailureHandler = (
+  candidate: AdmittedDiscoveredSession,
+  failure: RecordableSessionFailureCode,
+) => Promise<void>;
+
+async function processCandidateBatches(
+  index: SessionIndexWriter,
+  run: SessionIndexRun,
+  selection: SelectedSessionSource,
+  candidates: readonly AdmittedDiscoveredSession[],
+  workspace: SourceCaptureWorkspace,
+  timing: IndexTimingRecorder | undefined,
+  signal: AbortSignal | undefined,
+  onFailure: CandidateFailureHandler,
+): Promise<void> {
+  for (let start = 0; start < candidates.length; start += SESSION_INDEX_BATCH_LIMIT) {
+    throwIfIndexInterrupted(signal);
+    const batch = candidates.slice(start, start + SESSION_INDEX_BATCH_LIMIT);
+    const identities = batch.map(({ observation }) => observation.identity);
+    const rawFreshness = await timeIndexOperation(timing, "freshnessRead", () =>
+      index.getFreshnessBatch(run, identities),
+    );
+    throwIfIndexInterrupted(signal);
+    const freshness = validateFreshnessBatch(rawFreshness, identities);
+    let unchanged: SessionObservation[] = [];
+
+    const flushUnchanged = async (): Promise<void> => {
+      if (unchanged.length === 0) return;
+      throwIfIndexInterrupted(signal);
+      const observations = unchanged;
+      unchanged = [];
+      await timeIndexOperation(timing, "unchangedWrite", () =>
+        index.recordUnchangedBatch(run, observations),
+      );
+      throwIfIndexInterrupted(signal);
+    };
+
+    for (const [offset, candidate] of batch.entries()) {
+      throwIfIndexInterrupted(signal);
+      const candidateFreshness = freshness[offset];
+      if (candidateFreshness === undefined) {
+        throw new TypeError("Session repository returned incomplete freshness results");
+      }
+      const observation = candidate.observation;
+      if (matchesLastGoodRevision(candidateFreshness, observation.revision)) {
+        unchanged.push(observation);
+        continue;
+      }
+
+      await flushUnchanged();
+      const failure = await applyChangedCandidate(
+        index,
+        run,
+        selection,
+        candidate,
+        candidateFreshness,
+        workspace,
+        timing,
+        signal,
+      );
+      throwIfIndexInterrupted(signal);
+      if (failure !== undefined) await onFailure(candidate, failure);
+      throwIfIndexInterrupted(signal);
+    }
+
+    await flushUnchanged();
+  }
+}
+
+async function applyChangedCandidate(
   index: SessionIndexWriter,
   run: SessionIndexRun,
   selection: SelectedSessionSource,
   candidate: AdmittedDiscoveredSession,
+  freshness: SessionFreshness,
   workspace: SourceCaptureWorkspace,
   timing: IndexTimingRecorder | undefined,
   signal: AbortSignal | undefined,
 ): Promise<RecordableSessionFailureCode | undefined> {
-  throwIfIndexInterrupted(signal);
   const observation = candidate.observation;
-  const freshness = await timeIndexOperation(timing, "freshnessRead", () =>
-    index.getFreshness(observation.identity),
-  );
-  throwIfIndexInterrupted(signal);
-  if (matchesLastGoodRevision(freshness, observation.revision)) {
-    await timeIndexOperation(timing, "unchangedWrite", () =>
-      index.recordUnchanged(run, observation),
-    );
-    return undefined;
-  }
   if (!allowsReplacement(selection, freshness, observation.revision)) {
     return "unsupported-format";
   }
@@ -374,24 +418,46 @@ async function retrySourceChanged(
   const freshByNativeId = new Map(
     discovery.candidates.map((candidate) => [candidate.observation.identity.nativeId, candidate]),
   );
+  let pending: AdmittedDiscoveredSession[] = [];
+
+  const flushPending = async (): Promise<void> => {
+    if (pending.length === 0) return;
+    const candidates = pending;
+    pending = [];
+    await processCandidateBatches(
+      index,
+      run,
+      selection,
+      candidates,
+      workspace,
+      timing,
+      signal,
+      async (candidate, failure) => {
+        throwIfIndexInterrupted(signal);
+        await timeIndexOperation(timing, "runBookkeeping", () =>
+          index.recordFailure(run, candidate.observation, failure),
+        );
+      },
+    );
+  };
+
   for (const candidate of deferred) {
     throwIfIndexInterrupted(signal);
     const fresh = freshByNativeId.get(candidate.observation.identity.nativeId);
     if (fresh === undefined) {
+      await flushPending();
+      throwIfIndexInterrupted(signal);
       await timeIndexOperation(timing, "runBookkeeping", () =>
         index.recordFailure(run, candidate.observation, "source-changed"),
       );
       continue;
     }
-
-    const failure = await applyCandidate(index, run, selection, fresh, workspace, timing, signal);
-    throwIfIndexInterrupted(signal);
-    if (failure !== undefined) {
-      await timeIndexOperation(timing, "runBookkeeping", () =>
-        index.recordFailure(run, fresh.observation, failure),
-      );
+    pending.push(fresh);
+    if (pending.length === SESSION_INDEX_BATCH_LIMIT) {
+      await flushPending();
     }
   }
+  await flushPending();
 }
 
 function prepareSelections(
@@ -447,23 +513,118 @@ function matchesLastGoodRevision(freshness: SessionFreshness, revision: SessionR
   );
 }
 
-function validateTrackedIdentities(
-  identities: readonly SessionIdentity[],
+async function reconcileMissing(
+  index: SessionIndexWriter,
+  run: SessionIndexRun,
   source: SourceInstance,
-): readonly SessionIdentity[] {
-  const nativeIds = new Set<string>();
-  const result: SessionIdentity[] = [];
-  for (const identity of identities) {
-    if (!isSessionIdentity(identity) || !sameSource(identity.source, source)) {
-      throw new TypeError("Session repository returned an invalid tracked identity");
+  primaryCandidates: readonly AdmittedDiscoveredSession[],
+  timing: IndexTimingRecorder | undefined,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  let candidateIndex = 0;
+  let afterNativeId: string | undefined;
+
+  while (true) {
+    throwIfIndexInterrupted(signal);
+    const rawPage = await timeIndexOperation(timing, "reconciliation", () =>
+      index.listTrackedIdentitiesPage(run, afterNativeId),
+    );
+    throwIfIndexInterrupted(signal);
+    const page = validateTrackedIdentityPage(rawPage, source, afterNativeId);
+    if (afterNativeId !== undefined && page.identities.length === 0) {
+      throw new TypeError("Session repository returned a non-advancing tracked identity page");
     }
-    if (nativeIds.has(identity.nativeId)) {
-      throw new TypeError("Session repository returned a duplicate tracked identity");
+
+    const missing: SessionIdentity[] = [];
+    for (const identity of page.identities) {
+      let candidate = primaryCandidates[candidateIndex];
+      while (
+        candidate !== undefined &&
+        compareBinaryStrings(candidate.observation.identity.nativeId, identity.nativeId) < 0
+      ) {
+        candidateIndex += 1;
+        candidate = primaryCandidates[candidateIndex];
+      }
+      if (
+        candidate === undefined ||
+        compareBinaryStrings(candidate.observation.identity.nativeId, identity.nativeId) !== 0
+      ) {
+        missing.push(identity);
+      } else {
+        candidateIndex += 1;
+      }
     }
-    nativeIds.add(identity.nativeId);
-    result.push({ source: { ...source }, nativeId: identity.nativeId });
+
+    if (missing.length > 0) {
+      throwIfIndexInterrupted(signal);
+      await timeIndexOperation(timing, "reconciliation", () =>
+        index.recordMissingBatch(run, missing),
+      );
+      throwIfIndexInterrupted(signal);
+    }
+
+    if (!page.hasMore) return;
+    const last = page.identities.at(-1);
+    if (last === undefined) {
+      throw new TypeError("Session repository returned an invalid tracked identity page");
+    }
+    afterNativeId = last.nativeId;
   }
-  return result.sort((left, right) => compareBinaryStrings(left.nativeId, right.nativeId));
+}
+
+function validateFreshnessBatch(
+  value: readonly SessionFreshness[],
+  identities: readonly SessionIdentity[],
+): readonly SessionFreshness[] {
+  if (!Array.isArray(value) || value.length !== identities.length) {
+    throw new TypeError("Session repository returned inconsistent freshness results");
+  }
+  for (const [index, expected] of identities.entries()) {
+    const freshness: unknown = value[index];
+    if (
+      typeof freshness !== "object" ||
+      freshness === null ||
+      !("identity" in freshness) ||
+      !isSessionIdentity(freshness.identity) ||
+      !sameIdentity(freshness.identity, expected)
+    ) {
+      throw new TypeError("Session repository returned inconsistent freshness results");
+    }
+  }
+  return value;
+}
+
+function validateTrackedIdentityPage(
+  value: TrackedIdentityPage,
+  source: SourceInstance,
+  afterNativeId: string | undefined,
+): TrackedIdentityPage {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !Array.isArray(value.identities) ||
+    typeof value.hasMore !== "boolean" ||
+    value.identities.length > SESSION_INDEX_BATCH_LIMIT ||
+    (value.hasMore && value.identities.length !== SESSION_INDEX_BATCH_LIMIT)
+  ) {
+    throw new TypeError("Session repository returned an invalid tracked identity page");
+  }
+
+  const identities: SessionIdentity[] = [];
+  let previousNativeId = afterNativeId;
+  for (const identity of value.identities) {
+    if (
+      !isSessionIdentity(identity) ||
+      !sameSource(identity.source, source) ||
+      (previousNativeId !== undefined &&
+        compareBinaryStrings(previousNativeId, identity.nativeId) >= 0)
+    ) {
+      throw new TypeError("Session repository returned an invalid tracked identity page");
+    }
+    identities.push({ source: { ...source }, nativeId: identity.nativeId });
+    previousNativeId = identity.nativeId;
+  }
+  return Object.freeze({ identities: Object.freeze(identities), hasMore: value.hasMore });
 }
 
 function assertRunResultSource(actual: SourceInstance, selected: SourceInstance): void {
@@ -489,4 +650,8 @@ function timestamp(clock: IndexClock): string {
 
 function sameSource(left: SourceInstance, right: SourceInstance): boolean {
   return left.kind === right.kind && left.instanceId === right.instanceId;
+}
+
+function sameIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
+  return sameSource(left.source, right.source) && left.nativeId === right.nativeId;
 }

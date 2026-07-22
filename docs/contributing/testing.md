@@ -192,9 +192,18 @@ and report only aggregate phase durations, peak process memory, final health,
 and persistent file-state equality. A live result supplements rather than
 replaces deterministic integrity tests.
 
-`pnpm measure:indexing` is the deterministic, provider-free stable-index
-baseline. It compares control and timed runs from the same generic seeded
-library, requires exact semantic equality, and prints aggregate timings only.
+`pnpm measure:indexing` is the deterministic, provider-free 2,000-session
+indexing baseline. Equal seeded clones cover an untimed stable control, a timed
+clean run, a deliberately unproven full-validation run, and a complete empty
+discovery. At the current 128-item bound, each stable run must use exactly 16
+freshness reads, 16 unchanged writes, and 16 tracked-identity page reads with
+zero source reads. Empty discovery must use 16 tracked pages plus 16 missing
+writes, retain every canonical document and representative list/search/entries
+result, report all 2,000 sessions current-but-missing, retain the first 100
+ordered missing run items, and report 1,900 omitted items. The script requires
+exact semantic, health, query, run-bookkeeping, and clean-writer equality where
+applicable and prints aggregate counts and timings only. It has no elapsed-time
+threshold and stays outside `pnpm check`.
 
 `pnpm measure:manifest` is the deterministic, provider-free manifest baseline.
 It indexes 2,000 generic revisions across three source instances through the

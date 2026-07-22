@@ -18,11 +18,10 @@ migration-era, or structurally unsafe evidence must use today's full canonical,
 foreign-key, and FTS validation/repair path. `doctor` remains the explicit
 read-only whole-library semantic audit.
 
-Implement this after
-[`260721-bounded-incremental-indexing.md`](260721-bounded-incremental-indexing.md)
-so the final batch mutation surface is certified once. The change must preserve
-all reports, retained evidence, queries, failure truth, provider-read-only
-behavior, normal clean-proof behavior, and recovery fallback correctness.
+Bounded incremental indexing is complete, so this plan can certify the final
+batch mutation surface once. The change must preserve all reports, retained
+evidence, queries, failure truth, provider-read-only behavior, normal clean-proof
+behavior, and recovery fallback correctness.
 
 ## Recovery receipt
 

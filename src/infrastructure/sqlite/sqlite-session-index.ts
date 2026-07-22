@@ -1,6 +1,8 @@
+import { Buffer } from "node:buffer";
 import type { DatabaseSync } from "node:sqlite";
 
 import {
+  SESSION_INDEX_BATCH_LIMIT,
   createSessionIndexRunId,
   type SessionIndexFailureCode,
   type SessionIndexReader,
@@ -24,8 +26,8 @@ import { readImmutableIndexRunResult } from "./sqlite-index-run-result.ts";
 import {
   findSessionTracking,
   hasCanonicalDocument,
-  lastGoodRevision,
   readSessionFreshness,
+  readSessionFreshnessBatch,
   readSessionSummary,
   sameRevision,
 } from "./sqlite-session-state.ts";
@@ -113,7 +115,7 @@ export function createCoordinatedSqliteSessionIndex(
       throw error;
     }
   };
-  const runLeasedReplacement = <T>(operation: () => T): T => {
+  const runLeasedMutation = <T>(operation: () => T): T => {
     try {
       return runLeasedImmediateTransaction(database, options.lease, options, operation);
     } catch (error) {
@@ -123,11 +125,6 @@ export function createCoordinatedSqliteSessionIndex(
   };
   const index: SessionIndexWriter = {
     ...reader,
-
-    async listTrackedIdentities(source) {
-      assertSource(source);
-      return listTrackedIdentities(database, source);
-    },
 
     async startRun(input) {
       assertSource(input.source);
@@ -159,29 +156,33 @@ export function createCoordinatedSqliteSessionIndex(
       });
     },
 
-    async recordUnchanged(run, observation) {
-      assertIdentity(observation.identity);
-      runTrackedImmediateTransaction(() => {
-        assertLease();
-        const context = assertActiveRun(database, run, observation.identity.source);
-        const tracking = findSessionTracking(database, observation.identity);
-        if (
-          tracking === undefined ||
-          integerAt(tracking.source_instance_id) !== context.sourceInstanceId ||
-          !hasCanonicalDocument(database, integerAt(tracking.session_id)) ||
-          !sameRevision(lastGoodRevision(tracking), observation.revision)
-        ) {
-          throw new SqliteSessionIndexError("invalid-state");
+    async getFreshnessBatch(run, identities) {
+      assertIdentityBatch(run, identities);
+      assertLease();
+      const context = assertActiveRun(database, run, run.source);
+      const freshness = readSessionFreshnessBatch(database, context.sourceInstanceId, identities);
+      assertLease();
+      return freshness;
+    },
+
+    async recordUnchangedBatch(run, observations) {
+      assertObservationBatch(run, observations);
+      runLeasedMutation(() => {
+        const context = assertActiveRun(database, run, run.source);
+        const identities = observations.map((observation) => observation.identity);
+        const freshness = readSessionFreshnessBatch(database, context.sourceInstanceId, identities);
+        for (const [ordinal, state] of freshness.entries()) {
+          const observation = observations[ordinal];
+          if (
+            observation === undefined ||
+            (state.status !== "current" && state.status !== "stale") ||
+            !sameRevision(state.lastGood, observation.revision)
+          ) {
+            throw new SqliteSessionIndexError("invalid-state");
+          }
         }
-        updateLatest(
-          database,
-          integerAt(tracking.session_id),
-          observation,
-          "unchanged",
-          null,
-          run.startedAt,
-        );
-        incrementRun(database, context.runId, "unchanged");
+        updateLatestBatch(database, context, observations, run.startedAt);
+        incrementRun(database, context.runId, "unchanged", observations.length);
       });
     },
 
@@ -198,7 +199,7 @@ export function createCoordinatedSqliteSessionIndex(
       assertIdentity(replacement.observation.identity);
       let activeRunValidated = false;
       try {
-        runLeasedReplacement(() => {
+        runLeasedMutation(() => {
           const context = assertActiveRun(database, run, replacement.observation.identity.source);
           activeRunValidated = true;
           const sessionId = ensureTracking(
@@ -222,7 +223,7 @@ export function createCoordinatedSqliteSessionIndex(
       } catch (operationError) {
         if (!activeRunValidated) throw operationError;
         try {
-          runLeasedReplacement(() => {
+          runLeasedMutation(() => {
             recordFailure(database, run, replacement.observation, "repository-write");
           });
         } catch (failureRecordingError) {
@@ -236,31 +237,24 @@ export function createCoordinatedSqliteSessionIndex(
       }
     },
 
-    async recordMissing(run, identity) {
-      assertIdentity(identity);
-      runTrackedImmediateTransaction(() => {
-        assertLease();
-        const context = assertActiveRun(database, run, identity.source);
-        const tracking = findSessionTracking(database, identity);
-        if (
-          tracking === undefined ||
-          integerAt(tracking.source_instance_id) !== context.sourceInstanceId
-        ) {
-          return;
-        }
-        const sessionId = integerAt(tracking.session_id);
-        assertSingleRowChange(
-          database
-            .prepare(
-              `UPDATE sessions_session_tracking
-             SET presence_status = 'missing',
-                 presence_observed_at = ?
-             WHERE session_id = ?`,
-            )
-            .run(run.startedAt, sessionId),
-        );
-        incrementRun(database, context.runId, "missing");
-        addRunItem(database, context.runId, sessionId, "missing", null);
+    async listTrackedIdentitiesPage(run, afterNativeId) {
+      assertNativeIdCursor(afterNativeId);
+      assertLease();
+      const context = assertActiveRun(database, run, run.source);
+      const page = listTrackedIdentitiesPage(database, run, context, afterNativeId);
+      assertLease();
+      return page;
+    },
+
+    async recordMissingBatch(run, identities) {
+      assertIdentityBatch(run, identities);
+      runLeasedMutation(() => {
+        const context = assertActiveRun(database, run, run.source);
+        const tracked = resolveTrackedBatch(database, context, identities);
+        if (tracked.length === 0) return;
+        updateMissingBatch(database, context, tracked, run.startedAt);
+        incrementRun(database, context.runId, "missing", tracked.length);
+        addMissingRunItems(database, context.runId, tracked);
       });
     },
 
@@ -337,33 +331,53 @@ function assertReplacementIntegrity(
   }
 }
 
-function listTrackedIdentities(
+function listTrackedIdentitiesPage(
   database: DatabaseSync,
-  source: SourceInstance,
-): readonly SessionIdentity[] {
+  run: SessionIndexRun,
+  context: RunContext,
+  afterNativeId: string | undefined,
+): { readonly identities: readonly SessionIdentity[]; readonly hasMore: boolean } {
+  const cursorClause =
+    afterNativeId === undefined ? "" : "AND tracking.native_id > ? COLLATE BINARY";
+  const parameters =
+    afterNativeId === undefined
+      ? [context.sourceInstanceId, SESSION_INDEX_BATCH_LIMIT + 1]
+      : [context.sourceInstanceId, afterNativeId, SESSION_INDEX_BATCH_LIMIT + 1];
   const rows = database
     .prepare(
       `SELECT tracking.native_id
        FROM sessions_session_tracking AS tracking
-       JOIN sessions_source_instances AS source
-         ON source.source_instance_id = tracking.source_instance_id
-       WHERE source.kind = ? AND source.instance_id = ?
-       ORDER BY tracking.native_id COLLATE BINARY`,
+       WHERE tracking.source_instance_id = ?
+         ${cursorClause}
+       ORDER BY tracking.native_id COLLATE BINARY
+       LIMIT ?`,
     )
-    .all(source.kind, source.instanceId) as readonly { readonly native_id?: unknown }[];
-  return Object.freeze(
-    rows.map((row) => {
-      const identity = {
-        source: { ...source },
-        nativeId: row.native_id,
-      };
-      if (!isSessionIdentity(identity)) throw new SqliteSessionIndexError("corrupt-data");
-      return Object.freeze({
-        source: Object.freeze({ ...identity.source }),
-        nativeId: identity.nativeId,
-      });
-    }),
-  );
+    .all(...parameters) as readonly { readonly native_id?: unknown }[];
+  if (rows.length > SESSION_INDEX_BATCH_LIMIT + 1) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  const identities = rows.slice(0, SESSION_INDEX_BATCH_LIMIT).map((row, ordinal) => {
+    const identity = {
+      source: { ...run.source },
+      nativeId: row.native_id,
+    };
+    if (!isSessionIdentity(identity)) throw new SqliteSessionIndexError("corrupt-data");
+    const previous = ordinal === 0 ? afterNativeId : rows[ordinal - 1]?.native_id;
+    if (
+      previous !== undefined &&
+      (typeof previous !== "string" || compareUtf8Binary(previous, identity.nativeId) >= 0)
+    ) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    return Object.freeze({
+      source: Object.freeze({ ...identity.source }),
+      nativeId: identity.nativeId,
+    });
+  });
+  return Object.freeze({
+    identities: Object.freeze(identities),
+    hasMore: rows.length > SESSION_INDEX_BATCH_LIMIT,
+  });
 }
 
 function assertActiveRun(
@@ -414,7 +428,7 @@ function recordFailure(
     run.startedAt,
   );
   const stale = hasCanonicalDocument(database, sessionId);
-  incrementRun(database, context.runId, "failed", stale);
+  incrementRun(database, context.runId, "failed", 1, stale ? 1 : 0);
   addRunItem(database, context.runId, sessionId, "failed", failure);
 }
 
@@ -492,40 +506,146 @@ function ensureTracking(
   return integerAt(tracking.session_id);
 }
 
-function updateLatest(
+function updateLatestBatch(
   database: DatabaseSync,
-  sessionId: number,
-  observation: SessionObservation,
-  outcome: "unchanged" | "failed",
-  failure: SessionIndexFailureCode | null,
+  context: RunContext,
+  observations: readonly SessionObservation[],
   observedAt: string,
 ): void {
-  const revision = observation.revision;
-  assertSingleRowChange(
+  const values = observations.map(() => "(?, ?, ?, ?)").join(", ");
+  const parameters = observations.flatMap((observation) => [
+    observation.identity.nativeId,
+    observation.revision.aggregateFingerprint.scheme,
+    observation.revision.aggregateFingerprint.digest,
+    observation.revision.adapterVersion,
+  ]);
+  assertChangeCount(
     database
       .prepare(
-        `UPDATE sessions_session_tracking
-       SET latest_fingerprint_scheme = ?,
-           latest_fingerprint_digest = ?,
-           latest_adapter_version = ?,
-           latest_outcome = ?,
-           latest_failure_code = ?,
-           presence_status = 'present',
-           presence_observed_at = ?,
-           last_seen_at = ?
-       WHERE session_id = ?`,
+        `WITH input(native_id, fingerprint_scheme, fingerprint_digest, adapter_version) AS (
+           VALUES ${values}
+         )
+         UPDATE sessions_session_tracking AS tracking
+         SET latest_fingerprint_scheme = (
+               SELECT fingerprint_scheme FROM input
+               WHERE input.native_id = tracking.native_id COLLATE BINARY
+             ),
+             latest_fingerprint_digest = (
+               SELECT fingerprint_digest FROM input
+               WHERE input.native_id = tracking.native_id COLLATE BINARY
+             ),
+             latest_adapter_version = (
+               SELECT adapter_version FROM input
+               WHERE input.native_id = tracking.native_id COLLATE BINARY
+             ),
+             latest_outcome = 'unchanged',
+             latest_failure_code = NULL,
+             presence_status = 'present',
+             presence_observed_at = ?,
+             last_seen_at = ?
+         WHERE tracking.source_instance_id = ?
+           AND tracking.native_id IN (SELECT native_id FROM input)`,
       )
-      .run(
-        revision.aggregateFingerprint.scheme,
-        revision.aggregateFingerprint.digest,
-        revision.adapterVersion,
-        outcome,
-        failure,
-        observedAt,
-        observedAt,
-        sessionId,
-      ),
+      .run(...parameters, observedAt, observedAt, context.sourceInstanceId),
+    observations.length,
   );
+}
+
+interface TrackedBatchItem {
+  readonly ordinal: number;
+  readonly sessionId: number;
+  readonly identity: SessionIdentity;
+}
+
+function resolveTrackedBatch(
+  database: DatabaseSync,
+  context: RunContext,
+  identities: readonly SessionIdentity[],
+): readonly TrackedBatchItem[] {
+  const values = identities.map(() => "(?, ?)").join(", ");
+  const parameters = identities.flatMap((identity, ordinal) => [ordinal, identity.nativeId]);
+  const rows = database
+    .prepare(
+      `WITH requested(ordinal, native_id) AS (VALUES ${values})
+       SELECT requested.ordinal, tracking.session_id, tracking.native_id
+       FROM requested
+       JOIN sessions_session_tracking AS tracking
+         ON tracking.source_instance_id = ?
+        AND tracking.native_id = requested.native_id COLLATE BINARY
+       ORDER BY requested.ordinal`,
+    )
+    .all(...parameters, context.sourceInstanceId) as unknown as readonly TrackedBatchRow[];
+  if (rows.length > identities.length) throw new SqliteSessionIndexError("corrupt-data");
+
+  return Object.freeze(
+    rows.map((row) => {
+      const ordinal = integerAt(row.ordinal);
+      const identity = identities[ordinal];
+      if (identity === undefined || row.native_id !== identity.nativeId) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      return Object.freeze({
+        ordinal,
+        sessionId: integerAt(row.session_id),
+        identity,
+      });
+    }),
+  );
+}
+
+function updateMissingBatch(
+  database: DatabaseSync,
+  context: RunContext,
+  tracked: readonly TrackedBatchItem[],
+  observedAt: string,
+): void {
+  const values = tracked.map(() => "(?)").join(", ");
+  assertChangeCount(
+    database
+      .prepare(
+        `WITH input(session_id) AS (VALUES ${values})
+         UPDATE sessions_session_tracking
+         SET presence_status = 'missing',
+             presence_observed_at = ?
+         WHERE source_instance_id = ?
+           AND session_id IN (SELECT session_id FROM input)`,
+      )
+      .run(...tracked.map((item) => item.sessionId), observedAt, context.sourceInstanceId),
+    tracked.length,
+  );
+}
+
+function addMissingRunItems(
+  database: DatabaseSync,
+  runId: number,
+  tracked: readonly TrackedBatchItem[],
+): void {
+  const position = readRunItemPosition(database, runId);
+  const remainingOrdinals = Math.max(0, 100 - (position.maximum + 1));
+  const remainingItems = Math.max(0, 100 - position.count);
+  const detailCount = Math.min(tracked.length, remainingOrdinals, remainingItems);
+  const detailed = tracked.slice(0, detailCount);
+  if (detailed.length > 0) {
+    const values = detailed.map(() => "(?, ?, ?, 'missing', NULL)").join(", ");
+    const parameters = detailed.flatMap((item, offset) => [
+      runId,
+      position.maximum + 1 + offset,
+      item.sessionId,
+    ]);
+    assertChangeCount(
+      database
+        .prepare(
+          `INSERT INTO sessions_index_run_items (
+             run_id, ordinal, session_id, outcome, failure_code
+           ) VALUES ${values}`,
+        )
+        .run(...parameters),
+      detailed.length,
+    );
+  }
+
+  const omitted = tracked.length - detailed.length;
+  if (omitted > 0) incrementOmittedRunItems(database, runId, omitted);
 }
 
 function updateSuccessfulRevision(
@@ -572,25 +692,35 @@ function incrementRun(
   database: DatabaseSync,
   runId: number,
   outcome: "unchanged" | "indexed" | "failed" | "missing",
-  stale = false,
+  amount = 1,
+  staleAmount = 0,
 ): void {
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount <= 0 ||
+    !Number.isSafeInteger(staleAmount) ||
+    staleAmount < 0 ||
+    staleAmount > amount
+  ) {
+    throw new TypeError("Invalid index run increment");
+  }
   const columns = {
     unchanged: "unchanged_count",
     indexed: "indexed_count",
     failed: "failed_count",
     missing: "missing_count",
   } as const;
-  const discovered = outcome === "missing" ? 0 : 1;
+  const discovered = outcome === "missing" ? 0 : amount;
   assertSingleRowChange(
     database
       .prepare(
         `UPDATE sessions_index_runs
-     SET discovered_count = discovered_count + ${discovered},
-         ${columns[outcome]} = ${columns[outcome]} + 1,
-         stale_count = stale_count + ${stale ? 1 : 0}
-     WHERE run_id = ? AND status = 'active'`,
+         SET discovered_count = discovered_count + ?,
+             ${columns[outcome]} = ${columns[outcome]} + ?,
+             stale_count = stale_count + ?
+         WHERE run_id = ? AND status = 'active'`,
       )
-      .run(runId),
+      .run(discovered, amount, staleAmount, runId),
   );
 }
 
@@ -601,27 +731,11 @@ function addRunItem(
   outcome: "failed" | "missing",
   failure: SessionIndexFailureCode | null,
 ): void {
-  const row = database
-    .prepare(
-      `SELECT COUNT(*) AS count, COALESCE(MAX(ordinal), -1) AS maximum
-       FROM sessions_index_run_items
-       WHERE run_id = ?`,
-    )
-    .get(runId) as { readonly count?: unknown; readonly maximum?: unknown } | undefined;
-  const count = integerAt(row?.count);
-  if (count >= 100) {
-    assertSingleRowChange(
-      database
-        .prepare(
-          `UPDATE sessions_index_runs
-         SET omitted_item_count = omitted_item_count + 1
-         WHERE run_id = ?`,
-        )
-        .run(runId),
-    );
+  const position = readRunItemPosition(database, runId);
+  if (position.count >= 100 || position.maximum >= 99) {
+    incrementOmittedRunItems(database, runId, 1);
     return;
   }
-  const maximum = signedIntegerAt(row?.maximum);
   database
     .prepare(
       `INSERT INTO sessions_index_run_items (
@@ -632,7 +746,41 @@ function addRunItem(
          failure_code
        ) VALUES (?, ?, ?, ?, ?)`,
     )
-    .run(runId, maximum + 1, sessionId, outcome, failure);
+    .run(runId, position.maximum + 1, sessionId, outcome, failure);
+}
+
+function readRunItemPosition(
+  database: DatabaseSync,
+  runId: number,
+): { readonly count: number; readonly maximum: number } {
+  const row = database
+    .prepare(
+      `SELECT COUNT(*) AS count, COALESCE(MAX(ordinal), -1) AS maximum
+       FROM sessions_index_run_items
+       WHERE run_id = ?`,
+    )
+    .get(runId) as { readonly count?: unknown; readonly maximum?: unknown } | undefined;
+  const count = integerAt(row?.count);
+  const maximum = signedIntegerAt(row?.maximum);
+  if (count > 100 || maximum < -1 || maximum > 99 || (count === 0) !== (maximum === -1)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return { count, maximum };
+}
+
+function incrementOmittedRunItems(database: DatabaseSync, runId: number, amount: number): void {
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new TypeError("Invalid omitted run-item increment");
+  }
+  assertSingleRowChange(
+    database
+      .prepare(
+        `UPDATE sessions_index_runs
+         SET omitted_item_count = omitted_item_count + ?
+         WHERE run_id = ? AND status = 'active'`,
+      )
+      .run(amount, runId),
+  );
 }
 
 function pruneFinishedRuns(database: DatabaseSync, sourceInstanceId: number): void {
@@ -652,6 +800,48 @@ function pruneFinishedRuns(database: DatabaseSync, sourceInstanceId: number): vo
 
 function assertIdentity(identity: SessionIdentity): void {
   if (!isSessionIdentity(identity)) throw new TypeError("Invalid session identity");
+}
+
+function assertIdentityBatch(run: SessionIndexRun, identities: readonly SessionIdentity[]): void {
+  if (
+    !Array.isArray(identities) ||
+    identities.length === 0 ||
+    identities.length > SESSION_INDEX_BATCH_LIMIT
+  ) {
+    throw new TypeError(`Session identity batch must contain 1-${SESSION_INDEX_BATCH_LIMIT} items`);
+  }
+  for (const [ordinal, identity] of identities.entries()) {
+    assertIdentity(identity);
+    if (!sameSource(identity.source, run.source)) {
+      throw new TypeError("Session identity batch must match the index run source");
+    }
+    const previous = identities[ordinal - 1];
+    if (previous !== undefined && compareUtf8Binary(previous.nativeId, identity.nativeId) >= 0) {
+      throw new TypeError("Session identity batch must use unique binary native-ID order");
+    }
+  }
+}
+
+function assertObservationBatch(
+  run: SessionIndexRun,
+  observations: readonly SessionObservation[],
+): void {
+  if (!Array.isArray(observations)) {
+    throw new TypeError("Session observation batch must be an array");
+  }
+  assertIdentityBatch(
+    run,
+    observations.map((observation) => observation.identity),
+  );
+}
+
+function assertNativeIdCursor(value: string | undefined): void {
+  if (
+    value !== undefined &&
+    (typeof value !== "string" || value.length === 0 || !value.isWellFormed())
+  ) {
+    throw new TypeError("Tracked identity cursor must be a non-empty well-formed string");
+  }
 }
 
 function assertSource(source: SourceInstance): void {
@@ -686,6 +876,10 @@ function sameSource(left: SourceInstance, right: SourceInstance): boolean {
   return left.kind === right.kind && left.instanceId === right.instanceId;
 }
 
+function compareUtf8Binary(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
 function integerAt(value: unknown): number {
   const result = typeof value === "bigint" ? Number(value) : value;
   if (typeof result !== "number" || !Number.isSafeInteger(result) || result < 0) {
@@ -708,10 +902,23 @@ function assertSingleRowChange(result: { readonly changes: number | bigint }): v
   }
 }
 
+function assertChangeCount(result: { readonly changes: number | bigint }, expected: number): void {
+  const changes = typeof result.changes === "bigint" ? Number(result.changes) : result.changes;
+  if (!Number.isSafeInteger(changes) || changes !== expected) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+}
+
 interface RunRow {
   readonly source_instance_id: number | bigint;
   readonly status: string;
   readonly started_at: string;
   readonly kind: string;
   readonly instance_id: string;
+}
+
+interface TrackedBatchRow {
+  readonly ordinal: unknown;
+  readonly session_id: unknown;
+  readonly native_id: unknown;
 }

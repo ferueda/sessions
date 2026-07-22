@@ -17,6 +17,8 @@ import type {
 } from "../../src/application/ports/session-source.ts";
 import { runIndex } from "../../src/application/run-index.ts";
 import { SourceFailureError } from "../../src/application/source-failure.ts";
+import { createSessionListQuery } from "../../src/domain/session-query.ts";
+import { formatSessionIdentity } from "../../src/domain/session-identity.ts";
 import type { SessionDocument, SessionIdentity } from "../../src/domain/session.ts";
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { readWriterLeaseHealth } from "../../src/infrastructure/sqlite/writer-lease.ts";
@@ -596,6 +598,180 @@ describe("runIndex with SQLite", () => {
     await reader.close();
   });
 
+  test("preserves exact mixed state across freshness and reconciliation batch boundaries", async () => {
+    const paths = await fixturePaths();
+    const lifecycle = createSqliteIndexLifecycle();
+    const source = createFakeIndexingSource();
+    const nativeIds = Array.from(
+      { length: 259 },
+      (_, index) => `session-${String(index).padStart(3, "0")}`,
+    );
+    const baseline = new Map(
+      nativeIds.map((nativeId) => [nativeId, source.candidate(nativeId, "baseline")]),
+    );
+    const retainedMissing = "session-000";
+    const changed = ["session-127", "session-128"] as const;
+    const failed = ["session-129", "session-257"] as const;
+    const retainedMissingTail = "session-258";
+
+    source.setDocument(
+      retainedMissing,
+      document(sessionIdentity(source.instance, retainedMissing), "retained missing head"),
+    );
+    source.setDocument(
+      retainedMissingTail,
+      document(sessionIdentity(source.instance, retainedMissingTail), "retained missing tail"),
+    );
+    for (const nativeId of failed) {
+      source.setDocument(
+        nativeId,
+        document(sessionIdentity(source.instance, nativeId), `retained ${nativeId}`),
+      );
+    }
+    source.setDiscovery(nativeIds.map((nativeId) => requireCandidate(baseline, nativeId)));
+    const seeded = await index(lifecycle, paths, source.selected);
+    expect(seeded.counts).toEqual({
+      discovered: 259,
+      unchanged: 0,
+      updated: 259,
+      failed: 0,
+      missing: 0,
+      stale: 0,
+    });
+    const readsAfterSeed = source.readNativeIds.length;
+
+    const omitted = new Set([retainedMissing, retainedMissingTail]);
+    source.setDiscovery(
+      nativeIds
+        .filter((nativeId) => !omitted.has(nativeId))
+        .map((nativeId) =>
+          changed.includes(nativeId as (typeof changed)[number]) ||
+          failed.includes(nativeId as (typeof failed)[number])
+            ? source.candidate(nativeId, "changed")
+            : requireCandidate(baseline, nativeId),
+        ),
+    );
+    for (const nativeId of changed) {
+      source.setDocument(
+        nativeId,
+        document(sessionIdentity(source.instance, nativeId), `changed ${nativeId}`),
+      );
+    }
+    for (const nativeId of failed) source.failRead(nativeId, "malformed");
+
+    const report = await index(lifecycle, paths, source.selected);
+
+    const expectedCounts = {
+      discovered: 257,
+      unchanged: 253,
+      updated: 2,
+      failed: 2,
+      missing: 2,
+      stale: 2,
+    } as const;
+    expect(report).toEqual({
+      schemaVersion: 1,
+      command: "index",
+      startedAt: "2026-07-13T12:00:00.000Z",
+      finishedAt: "2026-07-13T12:00:03.000Z",
+      counts: expectedCounts,
+      sources: [
+        {
+          schemaVersion: 1,
+          source: source.instance,
+          status: "completed",
+          startedAt: "2026-07-13T12:00:01.000Z",
+          finishedAt: "2026-07-13T12:00:02.000Z",
+          counts: expectedCounts,
+          coverage: { status: "complete", observedAt: "2026-07-13T12:00:01.000Z" },
+          items: [
+            {
+              identity: reportIdentity(sessionIdentity(source.instance, failed[0])),
+              outcome: "failed",
+              failure: "malformed",
+            },
+            {
+              identity: reportIdentity(sessionIdentity(source.instance, failed[1])),
+              outcome: "failed",
+              failure: "malformed",
+            },
+            {
+              identity: reportIdentity(sessionIdentity(source.instance, retainedMissing)),
+              outcome: "missing",
+            },
+            {
+              identity: reportIdentity(sessionIdentity(source.instance, retainedMissingTail)),
+              outcome: "missing",
+            },
+          ],
+          omittedItemCount: 0,
+        },
+      ],
+      incompleteSources: 0,
+      skippedSources: 0,
+      omittedItemCount: 0,
+    });
+    expect(source.readNativeIds.slice(readsAfterSeed)).toEqual([...changed, ...failed].sort());
+    expect(readLatestRunItems(paths)).toEqual([
+      { native_id: failed[0], outcome: "failed", failure_code: "malformed" },
+      { native_id: failed[1], outcome: "failed", failure_code: "malformed" },
+      { native_id: retainedMissing, outcome: "missing", failure_code: null },
+      { native_id: retainedMissingTail, outcome: "missing", failure_code: null },
+    ]);
+
+    const reader = await lifecycle.openReader(paths);
+    await expect(
+      reader.sessions.getDocument(sessionIdentity(source.instance, changed[0])),
+    ).resolves.toMatchObject({ title: `changed ${changed[0]}` });
+    await expect(
+      reader.sessions.getDocument(sessionIdentity(source.instance, failed[0])),
+    ).resolves.toMatchObject({ title: `retained ${failed[0]}` });
+    await expect(
+      reader.sessions.getSummary(sessionIdentity(source.instance, failed[0])),
+    ).resolves.toMatchObject({ freshness: "stale", sourceState: "present" });
+    await expect(
+      reader.sessions.getDocument(sessionIdentity(source.instance, retainedMissing)),
+    ).resolves.toMatchObject({ title: "retained missing head" });
+    await expect(
+      reader.sessions.getSummary(sessionIdentity(source.instance, retainedMissing)),
+    ).resolves.toMatchObject({ freshness: "current", sourceState: "missing" });
+    await expect(
+      reader.query.list(createSessionListQuery({ filter: { sourceState: "missing" }, limit: 10 })),
+    ).resolves.toMatchObject({
+      sessions: [
+        { identity: sessionIdentity(source.instance, retainedMissing) },
+        { identity: sessionIdentity(source.instance, retainedMissingTail) },
+      ],
+      captureScope: { status: "complete" },
+    });
+    await reader.close();
+
+    await expect(lifecycle.inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      captureScope: {
+        status: "incomplete",
+        trackedSessions: 259,
+        retainedSessions: { current: 257, stale: 2 },
+        unindexedSessions: 0,
+        sourceState: { present: 257, missing: 2, unknown: 0 },
+        sourceCoverage: { complete: 1, unknown: 0 },
+        latestFailures: {
+          unavailable: 0,
+          unreadable: 0,
+          malformed: 2,
+          sourceChanged: 0,
+          unsupportedFormat: 0,
+          repositoryWrite: 0,
+        },
+      },
+      canonicalIntegrity: "ok",
+      runRecords: "ok",
+      writerLease: "free",
+      activeRuns: 0,
+    });
+    await expect(readWriterCleanProof(paths.database)).resolves.toBeDefined();
+  });
+
   test("cooperative cancellation preserves committed and untouched last-good documents", async () => {
     const paths = await fixturePaths();
     const lifecycle = createSqliteIndexLifecycle();
@@ -811,6 +987,10 @@ function sessionIdentity(
   return { source, nativeId };
 }
 
+function reportIdentity(identity: SessionIdentity) {
+  return { canonicalId: formatSessionIdentity(identity), ...identity };
+}
+
 function document(identity: SessionIdentity, title: string): SessionDocument {
   return { identity, title, lineageCoverage: "unknown", relations: [], entries: [] };
 }
@@ -848,6 +1028,36 @@ function readTrackingState(paths: IndexPaths, identity: SessionIdentity): Record
       | undefined;
     if (row === undefined) throw new Error("Expected tracked session state");
     return row;
+  } finally {
+    database.close();
+  }
+}
+
+function requireCandidate(
+  candidates: ReadonlyMap<string, DiscoveredSession>,
+  nativeId: string,
+): DiscoveredSession {
+  const candidate = candidates.get(nativeId);
+  if (candidate === undefined) throw new Error(`Expected candidate ${nativeId}`);
+  return candidate;
+}
+
+function readLatestRunItems(paths: IndexPaths): readonly Record<string, unknown>[] {
+  const url = pathToFileURL(paths.database);
+  url.searchParams.set("mode", "ro");
+  url.searchParams.set("immutable", "1");
+  const database = new DatabaseSync(url.href, { readOnly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT tracking.native_id, item.outcome, item.failure_code
+         FROM sessions_index_run_items AS item
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = item.session_id
+         WHERE item.run_id = (SELECT MAX(run_id) FROM sessions_index_runs)
+         ORDER BY item.ordinal`,
+      )
+      .all() as unknown as readonly Record<string, unknown>[];
   } finally {
     database.close();
   }

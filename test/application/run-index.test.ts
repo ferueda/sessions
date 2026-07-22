@@ -1,16 +1,18 @@
 import { describe, expect, test, vi } from "vitest";
 
+import { compareBinaryStrings } from "../../src/application/discover-sessions.ts";
 import { IndexInterruptedError } from "../../src/application/index-interruption.ts";
 import type { IndexLifecycle } from "../../src/application/ports/index-lifecycle.ts";
-import type {
-  FinishIndexRunInput,
-  IndexRunFailureCode,
-  IndexRunItem,
-  IndexRunResult,
-  RecordableSessionFailureCode,
-  SessionFreshness,
-  SessionIndexRun,
-  SessionIndexWriter,
+import {
+  SESSION_INDEX_BATCH_LIMIT,
+  type FinishIndexRunInput,
+  type IndexRunFailureCode,
+  type IndexRunItem,
+  type IndexRunResult,
+  type RecordableSessionFailureCode,
+  type SessionFreshness,
+  type SessionIndexRun,
+  type SessionIndexWriter,
 } from "../../src/application/ports/session-index.ts";
 import type {
   SelectedSessionSource,
@@ -390,6 +392,56 @@ describe("runIndex", () => {
     expect(third.counts).toMatchObject({ discovered: 1, updated: 1, unchanged: 0 });
   });
 
+  test("batches freshness while flushing unchanged work around a changed candidate", async () => {
+    const source = createFakeIndexingSource();
+    const baseline = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 2 }, (_, ordinal) =>
+      source.candidate(`session-${String(ordinal).padStart(3, "0")}`, "revision-one"),
+    );
+    source.setDiscovery(baseline);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const readsBefore = source.readNativeIds.length;
+
+    const changedOrdinal = 64;
+    const changed = source.candidate(baseline[changedOrdinal]!.identity.nativeId, "revision-two");
+    source.setDiscovery(
+      baseline.map((candidate, ordinal) => (ordinal === changedOrdinal ? changed : candidate)),
+    );
+    const freshness = vi.spyOn(harness.index, "getFreshnessBatch");
+    const events: string[] = [];
+    const originalUnchanged = harness.index.recordUnchangedBatch.bind(harness.index);
+    vi.spyOn(harness.index, "recordUnchangedBatch").mockImplementation(
+      async (run, observations) => {
+        events.push(`unchanged:${observations.length}`);
+        await originalUnchanged(run, observations);
+      },
+    );
+    const originalReplace = harness.index.replaceSession.bind(harness.index);
+    vi.spyOn(harness.index, "replaceSession").mockImplementation(async (run, replacement) => {
+      events.push(`replace:${replacement.observation.identity.nativeId}`);
+      await originalReplace(run, replacement);
+    });
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toMatchObject({
+      discovered: SESSION_INDEX_BATCH_LIMIT + 2,
+      unchanged: SESSION_INDEX_BATCH_LIMIT + 1,
+      updated: 1,
+    });
+    expect(freshness.mock.calls.map(([, identities]) => identities.length)).toEqual([
+      SESSION_INDEX_BATCH_LIMIT,
+      2,
+    ]);
+    expect(events).toEqual([
+      "unchanged:64",
+      `replace:${changed.identity.nativeId}`,
+      `unchanged:${SESSION_INDEX_BATCH_LIMIT - 65}`,
+      "unchanged:2",
+    ]);
+    expect(source.readNativeIds.slice(readsBefore)).toEqual([changed.identity.nativeId]);
+  });
+
   test("preserves last-good evidence when the source rejects an adapter-version replacement", async () => {
     const source = createFakeIndexingSource();
     source.setDiscovery([source.candidate("session", "revision-one", "adapter-v1")]);
@@ -618,6 +670,39 @@ describe("runIndex", () => {
     expect(harness.index.recordFailureCalls).toBe(0);
   });
 
+  test("batches freshness across the primary and fresh retry passes", async () => {
+    const source = createFakeIndexingSource();
+    const primary = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 1 }, (_, ordinal) =>
+      source.candidate(`retry-${String(ordinal).padStart(3, "0")}`, "primary-revision"),
+    );
+    const fresh = primary.map((candidate) =>
+      source.candidate(candidate.identity.nativeId, "fresh-revision"),
+    );
+    source.queueDiscoveries({ candidates: primary }, { candidates: fresh });
+    for (const candidate of primary) {
+      source.failNextRead(candidate.identity.nativeId, "source-changed");
+    }
+    const harness = createIndexHarness();
+    const freshness = vi.spyOn(harness.index, "getFreshnessBatch");
+
+    const report = await execute(harness, [source.selected]);
+
+    expect(report.counts).toMatchObject({
+      discovered: SESSION_INDEX_BATCH_LIMIT + 1,
+      unchanged: 0,
+      updated: SESSION_INDEX_BATCH_LIMIT + 1,
+      failed: 0,
+    });
+    expect(freshness.mock.calls.map(([, identities]) => identities.length)).toEqual([
+      SESSION_INDEX_BATCH_LIMIT,
+      1,
+      SESSION_INDEX_BATCH_LIMIT,
+      1,
+    ]);
+    expect(source.discoveryWorkspaces).toHaveLength(2);
+    expect(source.readNativeIds).toHaveLength((SESSION_INDEX_BATCH_LIMIT + 1) * 2);
+  });
+
   test("uses fresh last-good state while keeping retry-only identities out of coverage", async () => {
     const source = createFakeIndexingSource();
     const lastGood = source.candidate("kept", "revision-one");
@@ -818,6 +903,95 @@ describe("runIndex", () => {
     expect(await harness.index.listTrackedIdentities(source.instance)).toHaveLength(2);
   });
 
+  test("merge-walks bounded tracked pages and records only primary-scan absences", async () => {
+    const source = createFakeIndexingSource();
+    const baseline = Array.from({ length: SESSION_INDEX_BATCH_LIMIT * 2 + 1 }, (_, ordinal) =>
+      source.candidate(`tracked-${String(ordinal).padStart(3, "0")}`, "stable-revision"),
+    );
+    source.setDiscovery(baseline);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const readsBefore = source.readNativeIds.length;
+
+    source.setDiscovery(baseline.filter((_, ordinal) => ordinal % 2 === 0));
+    const pages = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
+    const missing = vi.spyOn(harness.index, "recordMissingBatch");
+
+    const report = await execute(harness, [source.selected]);
+
+    const missingIdentities = baseline
+      .filter((_, ordinal) => ordinal % 2 === 1)
+      .map(({ identity: sessionIdentity }) => sessionIdentity);
+    expect(report.counts).toMatchObject({
+      discovered: SESSION_INDEX_BATCH_LIMIT + 1,
+      unchanged: SESSION_INDEX_BATCH_LIMIT + 1,
+      updated: 0,
+      missing: SESSION_INDEX_BATCH_LIMIT,
+    });
+    expect(pages).toHaveBeenCalledTimes(3);
+    expect(pages.mock.calls.map(([, afterNativeId]) => afterNativeId)).toEqual([
+      undefined,
+      "tracked-127",
+      "tracked-255",
+    ]);
+    expect(missing.mock.calls.map(([, identities]) => identities.length)).toEqual([64, 64]);
+    expect(
+      report.sources[0]?.items.map(({ identity: sessionIdentity, outcome }) => ({
+        nativeId: sessionIdentity.nativeId,
+        outcome,
+      })),
+    ).toEqual(
+      missingIdentities.slice(0, 100).map((sessionIdentity) => ({
+        nativeId: sessionIdentity.nativeId,
+        outcome: "missing",
+      })),
+    );
+    expect(report.sources[0]?.omittedItemCount).toBe(SESSION_INDEX_BATCH_LIMIT - 100);
+    expect(source.readNativeIds).toHaveLength(readsBefore);
+  });
+
+  test("rejects freshness results that do not align with their candidate batch", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([source.candidate("misaligned")]);
+    const harness = createIndexHarness();
+    vi.spyOn(harness.index, "getFreshnessBatch").mockResolvedValue([]);
+    const replacement = vi.spyOn(harness.index, "replaceSession");
+    const reconciliation = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
+
+    await expect(execute(harness, [source.selected])).rejects.toThrow(
+      "Session repository returned inconsistent freshness results",
+    );
+
+    expect(source.readNativeIds).toEqual([]);
+    expect(replacement).not.toHaveBeenCalled();
+    expect(reconciliation).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns.at(-1)).toMatchObject({
+      completion: { status: "incomplete", failure: "repository-write" },
+      result: { coverage: { status: "unknown" }, counts: emptyCounts() },
+    });
+  });
+
+  test("rejects an unordered tracked page without sorting it", async () => {
+    const source = createFakeIndexingSource();
+    source.setDiscovery([]);
+    const harness = createIndexHarness();
+    vi.spyOn(harness.index, "listTrackedIdentitiesPage").mockResolvedValue({
+      identities: [identity(source.instance, "zeta"), identity(source.instance, "alpha")],
+      hasMore: false,
+    });
+    const missing = vi.spyOn(harness.index, "recordMissingBatch");
+
+    await expect(execute(harness, [source.selected])).rejects.toThrow(
+      "Session repository returned an invalid tracked identity page",
+    );
+
+    expect(missing).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns.at(-1)).toMatchObject({
+      completion: { status: "incomplete", failure: "repository-write" },
+      result: { coverage: { status: "unknown" }, counts: emptyCounts() },
+    });
+  });
+
   test("does not record a second failure after repository replacement rejects", async () => {
     const source = createFakeIndexingSource();
     source.setDiscovery([source.candidate("session")]);
@@ -904,7 +1078,7 @@ describe("runIndex", () => {
       },
     };
     source.setDiscovery([candidate]);
-    const tracked = vi.spyOn(harness.index, "listTrackedIdentities");
+    const tracked = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
 
     await expect(
       runIndex({
@@ -966,7 +1140,7 @@ describe("runIndex", () => {
       await originalReplace(run, replacement);
       controller.abort();
     });
-    const tracked = vi.spyOn(harness.index, "listTrackedIdentities");
+    const tracked = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
 
     await expect(
       runIndex({
@@ -993,13 +1167,15 @@ describe("runIndex", () => {
     await execute(harness, [source.selected]);
     source.setDiscovery([]);
     const controller = new AbortController();
-    const originalList = harness.index.listTrackedIdentities.bind(harness.index);
-    vi.spyOn(harness.index, "listTrackedIdentities").mockImplementation(async (instance) => {
-      const result = await originalList(instance);
-      controller.abort();
-      return result;
-    });
-    const missing = vi.spyOn(harness.index, "recordMissing");
+    const originalList = harness.index.listTrackedIdentitiesPage.bind(harness.index);
+    vi.spyOn(harness.index, "listTrackedIdentitiesPage").mockImplementation(
+      async (run, afterNativeId) => {
+        const result = await originalList(run, afterNativeId);
+        controller.abort();
+        return result;
+      },
+    );
+    const missing = vi.spyOn(harness.index, "recordMissingBatch");
 
     await expect(
       runIndex({
@@ -1012,6 +1188,85 @@ describe("runIndex", () => {
     ).rejects.toBeInstanceOf(IndexInterruptedError);
 
     expect(missing).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toHaveLength(1);
+  });
+
+  test("cancellation after an unchanged batch preserves only that committed batch", async () => {
+    const source = createFakeIndexingSource();
+    const candidates = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 1 }, (_, ordinal) =>
+      source.candidate(`stable-${String(ordinal).padStart(3, "0")}`),
+    );
+    source.setDiscovery(candidates);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    const controller = new AbortController();
+    const originalUnchanged = harness.index.recordUnchangedBatch.bind(harness.index);
+    const unchanged = vi
+      .spyOn(harness.index, "recordUnchangedBatch")
+      .mockImplementation(async (run, observations) => {
+        await originalUnchanged(run, observations);
+        controller.abort();
+      });
+    const reconciliation = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(unchanged).toHaveBeenCalledOnce();
+    expect(unchanged.mock.calls[0]?.[1]).toHaveLength(SESSION_INDEX_BATCH_LIMIT);
+    await expect(harness.index.getFreshness(candidates[0]!.identity)).resolves.toMatchObject({
+      latest: { outcome: "unchanged" },
+    });
+    await expect(harness.index.getFreshness(candidates.at(-1)!.identity)).resolves.toMatchObject({
+      latest: { outcome: "indexed" },
+    });
+    expect(reconciliation).not.toHaveBeenCalled();
+    expect(harness.index.finishedRuns).toHaveLength(1);
+  });
+
+  test("cancellation after a missing batch preserves a bounded missing prefix", async () => {
+    const source = createFakeIndexingSource();
+    const candidates = Array.from({ length: SESSION_INDEX_BATCH_LIMIT + 1 }, (_, ordinal) =>
+      source.candidate(`missing-${String(ordinal).padStart(3, "0")}`),
+    );
+    source.setDiscovery(candidates);
+    const harness = createIndexHarness();
+    await execute(harness, [source.selected]);
+    source.setDiscovery([]);
+    const controller = new AbortController();
+    const originalMissing = harness.index.recordMissingBatch.bind(harness.index);
+    const missing = vi
+      .spyOn(harness.index, "recordMissingBatch")
+      .mockImplementation(async (run, identities) => {
+        await originalMissing(run, identities);
+        controller.abort();
+      });
+    const pages = vi.spyOn(harness.index, "listTrackedIdentitiesPage");
+
+    await expect(
+      runIndex({
+        paths,
+        sources: [source.selected],
+        lifecycle: harness.lifecycle,
+        clock: clock(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(IndexInterruptedError);
+
+    expect(missing).toHaveBeenCalledOnce();
+    expect(missing.mock.calls[0]?.[1]).toHaveLength(SESSION_INDEX_BATCH_LIMIT);
+    expect(pages).toHaveBeenCalledOnce();
+    expect(harness.index.presenceOf(candidates[0]!.identity)).toBe("missing");
+    expect(harness.index.presenceOf(candidates[SESSION_INDEX_BATCH_LIMIT]!.identity)).toBe(
+      "present",
+    );
     expect(harness.index.finishedRuns).toHaveLength(1);
   });
 
@@ -1130,6 +1385,7 @@ interface MemoryRun {
   readonly run: SessionIndexRun;
   readonly counts: MutableCounts;
   readonly items: IndexRunItem[];
+  omittedItemCount: number;
 }
 
 interface MutableCounts {
@@ -1183,6 +1439,18 @@ class MemorySessionIndex implements SessionIndexWriter {
     };
   }
 
+  async getFreshnessBatch(
+    run: SessionIndexRun,
+    identities: readonly SessionIdentity[],
+  ): Promise<readonly SessionFreshness[]> {
+    this.#run(run);
+    return Promise.all(identities.map((sessionIdentity) => this.getFreshness(sessionIdentity)));
+  }
+
+  presenceOf(sessionIdentity: SessionIdentity): StoredSession["presence"] | undefined {
+    return this.#sessions.get(formatSessionIdentity(sessionIdentity))?.presence;
+  }
+
   async getSummary() {
     return undefined;
   }
@@ -1203,9 +1471,19 @@ class MemorySessionIndex implements SessionIndexWriter {
     return [...this.#sessions.values()]
       .filter((stored) => sameSource(stored.identity.source, source))
       .map(({ identity: value }) => value)
-      .sort((left, right) =>
-        left.nativeId < right.nativeId ? -1 : left.nativeId > right.nativeId ? 1 : 0,
-      );
+      .sort((left, right) => compareBinaryStrings(left.nativeId, right.nativeId));
+  }
+
+  async listTrackedIdentitiesPage(run: SessionIndexRun, afterNativeId?: string) {
+    this.#run(run);
+    const identities = (await this.listTrackedIdentities(run.source)).filter(
+      ({ nativeId }) =>
+        afterNativeId === undefined || compareBinaryStrings(nativeId, afterNativeId) > 0,
+    );
+    return {
+      identities: identities.slice(0, SESSION_INDEX_BATCH_LIMIT),
+      hasMore: identities.length > SESSION_INDEX_BATCH_LIMIT,
+    };
   }
 
   async startRun(input: { readonly source: SourceInstance; readonly startedAt: string }) {
@@ -1215,16 +1493,22 @@ class MemorySessionIndex implements SessionIndexWriter {
       startedAt: input.startedAt,
     };
     this.startedSources.push(run.source);
-    this.#runs.set(run.id, { run, counts: emptyCounts(), items: [] });
+    this.#runs.set(run.id, { run, counts: emptyCounts(), items: [], omittedItemCount: 0 });
     return run;
   }
 
-  async recordUnchanged(run: SessionIndexRun, observation: SessionObservation) {
+  async recordUnchangedBatch(run: SessionIndexRun, observations: readonly SessionObservation[]) {
     const active = this.#run(run);
-    const stored = this.#requireStored(observation.identity);
-    stored.latest = { outcome: "unchanged", revision: observation.revision };
-    active.counts.discovered += 1;
-    active.counts.unchanged += 1;
+    const stored = observations.map(({ identity: sessionIdentity }) =>
+      this.#requireStored(sessionIdentity),
+    );
+    for (const [index, observation] of observations.entries()) {
+      const session = stored[index];
+      if (session === undefined) throw new Error("missing memory fixture session");
+      session.latest = { outcome: "unchanged", revision: observation.revision };
+    }
+    active.counts.discovered += observations.length;
+    active.counts.unchanged += observations.length;
   }
 
   async recordFailure(
@@ -1252,13 +1536,15 @@ class MemorySessionIndex implements SessionIndexWriter {
     active.counts.updated += 1;
   }
 
-  async recordMissing(run: SessionIndexRun, sessionIdentity: SessionIdentity) {
+  async recordMissingBatch(run: SessionIndexRun, identities: readonly SessionIdentity[]) {
     const active = this.#run(run);
-    const stored = this.#sessions.get(formatSessionIdentity(sessionIdentity));
-    if (stored === undefined) return;
-    stored.presence = "missing";
-    active.counts.missing += 1;
-    active.items.push({ identity: sessionIdentity, outcome: "missing" });
+    for (const sessionIdentity of identities) {
+      const stored = this.#sessions.get(formatSessionIdentity(sessionIdentity));
+      if (stored === undefined) continue;
+      stored.presence = "missing";
+      active.counts.missing += 1;
+      this.#appendItem(active, { identity: sessionIdentity, outcome: "missing" });
+    }
   }
 
   async finishRun(run: SessionIndexRun, completion: FinishIndexRunInput): Promise<IndexRunResult> {
@@ -1270,7 +1556,7 @@ class MemorySessionIndex implements SessionIndexWriter {
       finishedAt: completion.finishedAt,
       counts: { ...active.counts },
       items: [...active.items],
-      omittedItemCount: 0,
+      omittedItemCount: active.omittedItemCount,
     };
     const result: IndexRunResult =
       completion.status === "completed"
@@ -1308,7 +1594,15 @@ class MemorySessionIndex implements SessionIndexWriter {
     active.counts.discovered += 1;
     active.counts.failed += 1;
     if (stale) active.counts.stale += 1;
-    active.items.push({ identity: observation.identity, outcome: "failed", failure });
+    this.#appendItem(active, { identity: observation.identity, outcome: "failed", failure });
+  }
+
+  #appendItem(run: MemoryRun, item: IndexRunItem): void {
+    if (run.items.length < 100) {
+      run.items.push(item);
+    } else {
+      run.omittedItemCount += 1;
+    }
   }
 
   #run(run: SessionIndexRun): MemoryRun {

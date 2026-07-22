@@ -335,8 +335,10 @@ sequence:
 1. Validate, deduplicate, and deterministically order exact selected source instances before opening a writer.
 2. Start a durable source run, then probe the selected adapter.
 3. Fully exhaust, snapshot, validate, deduplicate, and deterministically order discovery before session mutation.
-4. Compare identity, complete-input fingerprint, and adapter format version with repository freshness.
-5. Record unchanged candidates without calling `read()`.
+4. Compare identity, complete-input fingerprint, and adapter format version with
+   repository freshness in fixed 128-candidate slices.
+5. Buffer consecutive unchanged candidates within each slice and record them in
+   bounded writes without calling `read()`.
 6. Read and validate changed candidates, atomically replacing the latest
    successful canonical snapshot and its derived search rows while holding
    first-attempt `source-changed` outcomes through the primary pass.
@@ -346,9 +348,10 @@ sequence:
    mark the candidate present, and report staleness.
 9. Record discovered candidates as present without changing their capture time
    when their normalized document is unchanged.
-10. Only after a complete primary scan for that exact source instance, mark every
-    unseen tracked session missing while retaining canonical snapshots and
-    tracking-only failure evidence.
+10. Only after a complete primary scan for that exact source instance, page
+    tracked identities 128 at a time and merge them against the ordered primary
+    discovery. Record bounded missing batches while retaining canonical snapshots
+    and tracking-only failure evidence.
 11. Finalize provider-neutral counts and bounded ordered diagnostics from durable
     repository state.
 
@@ -361,6 +364,15 @@ affected original identities. Retry-only identities are ignored. The primary
 discovery remains the sole coverage and missing-reconciliation snapshot, and an
 incomplete or vanished retry target records one final failure without changing
 that coverage result.
+
+The complete primary discovery remains the one corpus-sized source snapshot
+needed to prove coverage. Freshness reads, consecutive unchanged writes,
+tracked-identity pages, and missing writes are bounded to 128 identities per
+repository call. Reconciliation streams tracked pages against the already
+ordered primary candidates, so it does not add a second corpus-sized `seen` set
+or tracked-identity list. Batch writes are transactional. A failed batch rolls
+back as a unit; earlier committed batches can remain as a repeat-safe prefix,
+while the run and source coverage remain incomplete/unknown.
 
 Properties:
 
@@ -1145,6 +1157,21 @@ reads. Both local budgets passed. Dirty/recovery opens have no speed budget;
 correctness remains their only gate. The fixed generic measurement also consumes
 the proof on an equal clone, requires semantic equality with the clean run and
 zero stable source reads, and reports the dominant full-validation phase.
+
+A later local before/after run of that same deterministic 2,000-session corpus
+measured the bounded incremental change. The clean stable path moved from 2,000
+freshness calls / 44.062 ms and 2,000 unchanged writes / 189.058 ms to 16 calls /
+6.703 ms and 16 calls / 23.253 ms. Reconciliation changed from one set-based call
+/ 0.592 ms to 16 bounded page reads / 1.547 ms. Clean total time moved from
+282.121 ms to 52.691 ms; the equal full-validation clone moved from 357.277 ms
+to 167.882 ms, and seed time remained comparable at 1,086.983 ms before and
+1,074.647 ms after. The new complete-empty-discovery clone completed 2,000
+missing observations through 16 page reads plus 16 missing writes in 20.649 ms,
+with 11.015 ms owned by reconciliation. Exact state, query, health, clean-proof,
+ordered 100-item diagnostic retention, and 1,900-item omission assertions passed.
+These local elapsed values are implementation evidence, not a performance gate
+or public guarantee; the deterministic call bounds and correctness assertions
+are the regression contract.
 
 ### Phase 7 — Equivalent second adapter (complete)
 

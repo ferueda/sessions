@@ -141,6 +141,13 @@ export interface StartIndexRunInput {
   readonly startedAt: string;
 }
 
+export const SESSION_INDEX_BATCH_LIMIT = 128;
+
+export interface TrackedIdentityPage {
+  readonly identities: readonly SessionIdentity[];
+  readonly hasMore: boolean;
+}
+
 export interface SessionIndexReader {
   getFreshness(identity: SessionIdentity): Promise<SessionFreshness>;
   getSummary(identity: SessionIdentity): Promise<IndexedSessionSummary | undefined>;
@@ -149,16 +156,26 @@ export interface SessionIndexReader {
 }
 
 export interface SessionIndexWriter extends SessionIndexReader {
-  listTrackedIdentities(source: SourceInstance): Promise<readonly SessionIdentity[]>;
   startRun(input: StartIndexRunInput): Promise<SessionIndexRun>;
-  recordUnchanged(run: SessionIndexRun, observation: SessionObservation): Promise<void>;
+  getFreshnessBatch(
+    run: SessionIndexRun,
+    identities: readonly SessionIdentity[],
+  ): Promise<readonly SessionFreshness[]>;
+  recordUnchangedBatch(
+    run: SessionIndexRun,
+    observations: readonly SessionObservation[],
+  ): Promise<void>;
   recordFailure(
     run: SessionIndexRun,
     observation: SessionObservation,
     failure: RecordableSessionFailureCode,
   ): Promise<void>;
   replaceSession(run: SessionIndexRun, replacement: ValidatedSessionReplacement): Promise<void>;
-  recordMissing(run: SessionIndexRun, identity: SessionIdentity): Promise<void>;
+  listTrackedIdentitiesPage(
+    run: SessionIndexRun,
+    afterNativeId?: string,
+  ): Promise<TrackedIdentityPage>;
+  recordMissingBatch(run: SessionIndexRun, identities: readonly SessionIdentity[]): Promise<void>;
   finishRun(run: SessionIndexRun, completion: FinishIndexRunInput): Promise<IndexRunResult>;
 }
 

@@ -670,10 +670,12 @@ describe("SQLite writer coordination", () => {
             source: sessionIdentity.source,
             startedAt: "2026-07-13T12:01:00.000Z",
           }),
-        () => first.recordUnchanged(run, sessionObservation),
+        () => first.getFreshnessBatch(run, [sessionIdentity]),
+        () => first.listTrackedIdentitiesPage(run),
+        () => first.recordUnchangedBatch(run, [sessionObservation]),
         () => first.recordFailure(run, sessionObservation, "malformed"),
         () => first.replaceSession(run, replacement),
-        () => first.recordMissing(run, sessionIdentity),
+        () => first.recordMissingBatch(run, [sessionIdentity]),
         () =>
           first.finishRun(run, {
             status: "incomplete",
