@@ -10,6 +10,7 @@ import {
   describeCursorEntry,
   listCursorDirectory,
 } from "./filesystem.ts";
+import { mapCursorInventoryInOrder } from "./ordered-concurrency.ts";
 
 const STORE_SHM_NAMES = new Set(["store.db-shm"]);
 const CATALOG_SHM_NAMES = new Set(["index.db-shm"]);
@@ -108,40 +109,55 @@ async function inventoryChats(
     entries.push(scopeEntry);
     if (scopeEntry.kind !== "directory") continue;
     const scope = lastComponent(scopeEntry);
-    for (const chatEntry of await children(paths, ["chats", scope])) {
-      entries.push(chatEntry);
-      if (chatEntry.kind !== "directory") continue;
-      const nativeId = lastComponent(chatEntry);
-      const chatComponents = ["chats", scope, nativeId] as const;
-      const childrenByName = await childMap(paths, chatComponents, entries, STORE_SHM_NAMES);
-      const metadataEntry =
-        childrenByName.get("meta.json") ??
-        (await describeCursorEntry(paths.cursorHome, [...chatComponents, "meta.json"]));
-      let metadata: CapturedCursorFile | undefined;
-      if (metadataEntry.kind === "regular-file") {
-        metadata = await captureCursorFile(
-          paths.cursorHome,
-          metadataEntry.components,
-          metadataEntry,
-        );
-        replaceEntry(entries, metadataEntry, metadata.descriptor);
-      }
-      const main =
-        childrenByName.get("store.db") ??
-        (await describeCursorEntry(paths.cursorHome, [...chatComponents, "store.db"]));
-      const wal =
-        childrenByName.get("store.db-wal") ??
-        (await describeCursorEntry(paths.cursorHome, [...chatComponents, "store.db-wal"]));
-      chats.push(
-        Object.freeze({
-          scope,
-          nativeId,
-          ...(metadata === undefined ? {} : { metadata }),
-          store: Object.freeze({ main, wal }),
-        }),
-      );
+    const fragments = await mapCursorInventoryInOrder(
+      await children(paths, ["chats", scope]),
+      async (chatEntry) => inventoryChatLeaf(paths, scope, chatEntry),
+    );
+    for (const fragment of fragments) {
+      entries.push(...fragment.entries);
+      if (fragment.chat !== undefined) chats.push(fragment.chat);
     }
   }
+}
+
+interface CursorChatFragment {
+  readonly entries: readonly CursorEntryDescriptor[];
+  readonly chat?: CursorChatInventory;
+}
+
+async function inventoryChatLeaf(
+  paths: ResolvedCursorPaths,
+  scope: string,
+  chatEntry: CursorEntryDescriptor,
+): Promise<CursorChatFragment> {
+  const entries = [chatEntry];
+  if (chatEntry.kind !== "directory") return { entries };
+  const nativeId = lastComponent(chatEntry);
+  const chatComponents = ["chats", scope, nativeId] as const;
+  const childrenByName = await childMap(paths, chatComponents, entries, STORE_SHM_NAMES);
+  const metadataEntry =
+    childrenByName.get("meta.json") ??
+    (await describeCursorEntry(paths.cursorHome, [...chatComponents, "meta.json"]));
+  let metadata: CapturedCursorFile | undefined;
+  if (metadataEntry.kind === "regular-file") {
+    metadata = await captureCursorFile(paths.cursorHome, metadataEntry.components, metadataEntry);
+    replaceEntry(entries, metadataEntry, metadata.descriptor);
+  }
+  const main =
+    childrenByName.get("store.db") ??
+    (await describeCursorEntry(paths.cursorHome, [...chatComponents, "store.db"]));
+  const wal =
+    childrenByName.get("store.db-wal") ??
+    (await describeCursorEntry(paths.cursorHome, [...chatComponents, "store.db-wal"]));
+  return {
+    entries,
+    chat: Object.freeze({
+      scope,
+      nativeId,
+      ...(metadata === undefined ? {} : { metadata }),
+      store: Object.freeze({ main, wal }),
+    }),
+  };
 }
 
 async function inventoryProjects(
@@ -198,34 +214,13 @@ async function inventoryProjects(
         (await describeCursorEntry(paths.cursorHome, [...scopeEntry.components, "agents"]));
       const stores: CursorAgentStoreInventory[] = [];
       if (agentsDirectory.kind === "directory") {
-        for (const storeDirectory of await children(paths, agentsDirectory.components)) {
-          entries.push(storeDirectory);
-          if (storeDirectory.kind !== "directory") continue;
-          const storeChildren = await childMap(
-            paths,
-            storeDirectory.components,
-            entries,
-            STORE_SHM_NAMES,
-          );
-          const main =
-            storeChildren.get("store.db") ??
-            (await describeCursorEntry(paths.cursorHome, [
-              ...storeDirectory.components,
-              "store.db",
-            ]));
-          const wal =
-            storeChildren.get("store.db-wal") ??
-            (await describeCursorEntry(paths.cursorHome, [
-              ...storeDirectory.components,
-              "store.db-wal",
-            ]));
-          stores.push(
-            Object.freeze({
-              directoryName: lastComponent(storeDirectory),
-              directory: storeDirectory,
-              store: Object.freeze({ main, wal }),
-            }),
-          );
+        const fragments = await mapCursorInventoryInOrder(
+          await children(paths, agentsDirectory.components),
+          async (storeDirectory) => inventoryAgentStoreLeaf(paths, storeDirectory),
+        );
+        for (const fragment of fragments) {
+          entries.push(...fragment.entries);
+          if (fragment.store !== undefined) stores.push(fragment.store);
         }
       }
       catalogs.push(
@@ -239,6 +234,34 @@ async function inventoryProjects(
   }
 }
 
+interface CursorAgentStoreFragment {
+  readonly entries: readonly CursorEntryDescriptor[];
+  readonly store?: CursorAgentStoreInventory;
+}
+
+async function inventoryAgentStoreLeaf(
+  paths: ResolvedCursorPaths,
+  storeDirectory: CursorEntryDescriptor,
+): Promise<CursorAgentStoreFragment> {
+  const entries = [storeDirectory];
+  if (storeDirectory.kind !== "directory") return { entries };
+  const storeChildren = await childMap(paths, storeDirectory.components, entries, STORE_SHM_NAMES);
+  const main =
+    storeChildren.get("store.db") ??
+    (await describeCursorEntry(paths.cursorHome, [...storeDirectory.components, "store.db"]));
+  const wal =
+    storeChildren.get("store.db-wal") ??
+    (await describeCursorEntry(paths.cursorHome, [...storeDirectory.components, "store.db-wal"]));
+  return {
+    entries,
+    store: Object.freeze({
+      directoryName: lastComponent(storeDirectory),
+      directory: storeDirectory,
+      store: Object.freeze({ main, wal }),
+    }),
+  };
+}
+
 async function inventoryAgentTranscripts(
   paths: ResolvedCursorPaths,
   root: CursorEntryDescriptor,
@@ -246,55 +269,59 @@ async function inventoryAgentTranscripts(
   transcripts: CursorAgentTranscriptInventory[],
   invalidEntries: CursorEntryDescriptor[],
 ): Promise<void> {
-  for (const identityEntry of await children(paths, root.components)) {
-    entries.push(identityEntry);
-    const identityName = lastComponent(identityEntry);
-    if (!isCursorTopLevelTranscriptId(identityName)) {
-      invalidEntries.push(identityEntry);
-      continue;
-    }
-    if (identityEntry.kind !== "directory") {
-      invalidEntries.push(identityEntry);
-      continue;
-    }
+  const fragments = await mapCursorInventoryInOrder(
+    await children(paths, root.components),
+    async (identityEntry) => inventoryAgentTranscriptLeaf(paths, identityEntry),
+  );
+  for (const fragment of fragments) {
+    entries.push(...fragment.entries);
+    transcripts.push(...fragment.transcripts);
+    invalidEntries.push(...fragment.invalidEntries);
+  }
+}
 
-    for (const child of await children(paths, identityEntry.components)) {
-      entries.push(child);
-      if (lastComponent(child) === `${identityName}.jsonl`) {
-        transcripts.push(
-          Object.freeze({
-            nativeId: identityName,
-            placement: "top-level",
-            file: child,
-          }),
-        );
+interface CursorAgentTranscriptFragment {
+  readonly entries: readonly CursorEntryDescriptor[];
+  readonly transcripts: readonly CursorAgentTranscriptInventory[];
+  readonly invalidEntries: readonly CursorEntryDescriptor[];
+}
+
+async function inventoryAgentTranscriptLeaf(
+  paths: ResolvedCursorPaths,
+  identityEntry: CursorEntryDescriptor,
+): Promise<CursorAgentTranscriptFragment> {
+  const entries = [identityEntry];
+  const transcripts: CursorAgentTranscriptInventory[] = [];
+  const invalidEntries: CursorEntryDescriptor[] = [];
+  const identityName = lastComponent(identityEntry);
+  if (!isCursorTopLevelTranscriptId(identityName) || identityEntry.kind !== "directory") {
+    invalidEntries.push(identityEntry);
+    return { entries, transcripts, invalidEntries };
+  }
+
+  for (const child of await children(paths, identityEntry.components)) {
+    entries.push(child);
+    if (lastComponent(child) === `${identityName}.jsonl`) {
+      transcripts.push(
+        Object.freeze({ nativeId: identityName, placement: "top-level", file: child }),
+      );
+      continue;
+    }
+    if (lastComponent(child) !== "subagents" || child.kind !== "directory") {
+      invalidEntries.push(child);
+      continue;
+    }
+    for (const subagent of await children(paths, child.components)) {
+      entries.push(subagent);
+      const nativeId = jsonlNativeId(lastComponent(subagent));
+      if (nativeId === undefined || !isCursorSubagentTranscriptId(nativeId)) {
+        invalidEntries.push(subagent);
         continue;
       }
-      if (lastComponent(child) !== "subagents") {
-        invalidEntries.push(child);
-        continue;
-      }
-      if (child.kind !== "directory") {
-        invalidEntries.push(child);
-        continue;
-      }
-      for (const subagent of await children(paths, child.components)) {
-        entries.push(subagent);
-        const nativeId = jsonlNativeId(lastComponent(subagent));
-        if (nativeId === undefined || !isCursorSubagentTranscriptId(nativeId)) {
-          invalidEntries.push(subagent);
-          continue;
-        }
-        transcripts.push(
-          Object.freeze({
-            nativeId,
-            placement: "subagent",
-            file: subagent,
-          }),
-        );
-      }
+      transcripts.push(Object.freeze({ nativeId, placement: "subagent", file: subagent }));
     }
   }
+  return { entries, transcripts, invalidEntries };
 }
 
 function isCursorTopLevelTranscriptId(value: string): boolean {

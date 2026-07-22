@@ -30,6 +30,16 @@ export class SqliteSourceSnapshotError extends Error {
 export interface SqliteSourceSnapshotHooks {
   /** Test seam for deterministic provider mutation between copy and verification. */
   readonly beforePostVerification?: (attempt: number) => void | Promise<void>;
+  /** Test seam after identities are observed but before post-copy bytes are hashed. */
+  readonly beforePostHash?: (observation: SqliteSourceSnapshotBytePass) => void | Promise<void>;
+  /** Sanitized test observation emitted after one complete provider byte pass. */
+  readonly onBytePass?: (observation: SqliteSourceSnapshotBytePass) => void | Promise<void>;
+}
+
+export interface SqliteSourceSnapshotBytePass {
+  readonly attempt: number;
+  readonly phase: "copy" | "verify";
+  readonly kind: "database" | "wal";
 }
 
 export interface SqliteSourceSnapshotOptions<T> {
@@ -55,10 +65,6 @@ interface OpenProviderFile {
   readonly handle: FileHandle;
   readonly pathIdentity: FileIdentity;
   readonly handleIdentity: FileIdentity;
-}
-
-interface HashedProviderFile extends OpenProviderFile {
-  readonly digest: string;
 }
 
 interface PrivateCopy {
@@ -106,10 +112,14 @@ async function captureAttempt<T>(
   }
 
   try {
-    const hashedFiles = await hashProviderFiles(providerFiles);
-    const privateCopy = await copyProviderFiles(hashedFiles, privateDirectory);
+    const privateCopy = await copyProviderFiles(
+      providerFiles,
+      privateDirectory,
+      attempt,
+      options.hooks,
+    );
     await options.hooks?.beforePostVerification?.(attempt);
-    await verifyProviderFiles(hashedFiles, privateCopy.copiedDigests);
+    await verifyProviderFiles(providerFiles, privateCopy.copiedDigests, attempt, options.hooks);
     return materializePrivateCopy(privateCopy.databasePath, options.materialize);
   } finally {
     await closeAll(providerFiles);
@@ -170,42 +180,44 @@ function readOnlyNoFollowFlags(): number {
     : constants.O_RDONLY | constants.O_NOFOLLOW;
 }
 
-async function hashProviderFiles(
-  providerFiles: readonly OpenProviderFile[],
-): Promise<readonly HashedProviderFile[]> {
-  const hashed: HashedProviderFile[] = [];
-  for (const file of providerFiles) {
-    hashed.push({ ...file, digest: await hashHandle(file.handle) });
-  }
-  return hashed;
-}
-
 async function copyProviderFiles(
-  providerFiles: readonly HashedProviderFile[],
+  providerFiles: readonly OpenProviderFile[],
   privateDirectory: string,
+  attempt: number,
+  hooks: SqliteSourceSnapshotHooks | undefined,
 ): Promise<PrivateCopy> {
   const privateDatabasePath = path.join(privateDirectory, PRIVATE_DATABASE_NAME);
   const copiedDigests = new Map<OpenProviderFile["kind"], string>();
 
   try {
     await chmod(privateDirectory, 0o700);
-    for (const file of providerFiles) {
-      const destination =
-        file.kind === "database" ? privateDatabasePath : `${privateDatabasePath}-wal`;
-      copiedDigests.set(file.kind, await copyHandle(file.handle, destination));
-      if (copiedDigests.get(file.kind) !== file.digest) throw new SnapshotChangedError();
-    }
   } catch (error) {
     if (error instanceof SnapshotChangedError) throw error;
     throw new SqliteSourceSnapshotError("staging-failed");
+  }
+
+  for (const file of providerFiles) {
+    const destination =
+      file.kind === "database" ? privateDatabasePath : `${privateDatabasePath}-wal`;
+    let copiedDigest: string;
+    try {
+      copiedDigest = await copyHandle(file.handle, destination);
+    } catch (error) {
+      if (error instanceof SnapshotChangedError) throw error;
+      throw new SqliteSourceSnapshotError("staging-failed");
+    }
+    copiedDigests.set(file.kind, copiedDigest);
+    await hooks?.onBytePass?.({ attempt, phase: "copy", kind: file.kind });
   }
 
   return { databasePath: privateDatabasePath, copiedDigests };
 }
 
 async function verifyProviderFiles(
-  originalFiles: readonly HashedProviderFile[],
+  originalFiles: readonly OpenProviderFile[],
   copiedDigests: ReadonlyMap<OpenProviderFile["kind"], string>,
+  attempt: number,
+  hooks: SqliteSourceSnapshotHooks | undefined,
 ): Promise<void> {
   let postFiles: readonly OpenProviderFile[];
   try {
@@ -221,24 +233,36 @@ async function verifyProviderFiles(
       const post = postFiles[index];
       if (post === undefined || post.kind !== original.kind) throw new SnapshotChangedError();
 
-      const originalHandleIdentity = toIdentity(await original.handle.stat({ bigint: true }));
-      const originalPathIdentity = toIdentity(await lstat(original.path, { bigint: true }));
-      const postDigest = await hashHandle(post.handle);
+      let originalHandleIdentity: FileIdentity;
+      let originalPathIdentity: FileIdentity;
+      try {
+        originalHandleIdentity = toIdentity(await original.handle.stat({ bigint: true }));
+        originalPathIdentity = toIdentity(await lstat(original.path, { bigint: true }));
+      } catch {
+        throw new SnapshotChangedError();
+      }
+      const observation = { attempt, phase: "verify" as const, kind: original.kind };
+      await hooks?.beforePostHash?.(observation);
+      let postDigest: string;
+      try {
+        postDigest = await hashHandle(post.handle);
+      } catch {
+        throw new SnapshotChangedError();
+      }
+      await hooks?.onBytePass?.(observation);
+      const copiedDigest = copiedDigests.get(original.kind);
 
       if (
         !sameIdentity(original.handleIdentity, originalHandleIdentity) ||
         !sameIdentity(original.pathIdentity, originalPathIdentity) ||
         !sameIdentity(original.pathIdentity, post.pathIdentity) ||
         !sameIdentity(original.handleIdentity, post.handleIdentity) ||
-        original.digest !== copiedDigests.get(original.kind) ||
-        original.digest !== postDigest
+        copiedDigest === undefined ||
+        copiedDigest !== postDigest
       ) {
         throw new SnapshotChangedError();
       }
     }
-  } catch (error) {
-    if (error instanceof SnapshotChangedError) throw error;
-    throw new SnapshotChangedError();
   } finally {
     await closeAll(postFiles);
   }

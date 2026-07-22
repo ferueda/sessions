@@ -299,11 +299,17 @@ Contract rules:
   input before and after reading, or use an equivalent stable snapshot.
 - Codex uses the stable-snapshot branch once per complete discovery: through a
   provider-neutral private-directory callback exposed only by the leased writer,
-  it copies provider database/WAL bytes from verified read-only handles, opens
-  SQLite only there, materializes
-  an immutable row/edge generation, and removes staging before yielding. Reads
-  use frozen state and verify only the live rollout. Provider SQLite/SHM is never
-  opened by Sessions.
+  it copies provider database/WAL bytes from verified read-only handles while
+  hashing them, requires a matching hash from one freshly opened post-copy set,
+  opens SQLite only on the private copy, materializes an immutable row/edge
+  generation with one ordered spawn-edge set query, and removes staging before
+  yielding. Reads use frozen state and verify only the live rollout. Provider
+  SQLite/SHM is never opened by Sessions.
+- Cursor runs only independent chat, agent-store, or transcript-identity leaves
+  through one fixed eight-worker ordered pool. It stores leaf results and
+  failures by binary input ordinal, waits for all started work, and keeps parent
+  scopes, SQLite snapshots, complete inventory passes, and changed reads
+  sequential.
 - The internal `IndexWriter` owns that capability and passes the exact same
   run-owned object to discovery and changed reads after writer acquisition. The
   application performs freshness admission first, so unchanged candidates never
@@ -1276,6 +1282,13 @@ recovery status for long operations, and lower routine storage cost remain
 priorities. Performance work must preserve canonical equality, capture scope,
 failure truth, and provider-read-only behavior; it must not weaken integrity
 checks merely to meet a time budget.
+
+Provider discovery now removes three structural costs without changing admitted
+evidence: a generated 2,000-thread Codex cohort uses one spawn-edge query instead
+of 2,000; a stable provider SQLite main/WAL file uses two full byte passes instead
+of three; and each eligible Cursor leaf family admits up to eight independent
+operations while returning the original binary order. These deterministic
+counts are correctness and scaling evidence, not machine-time budgets.
 
 ### Evidence-gated candidates
 

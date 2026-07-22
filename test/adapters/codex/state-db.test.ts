@@ -111,6 +111,174 @@ describe("Codex state schema gateway", () => {
     );
   });
 
+  test("executes one ordered edge query for a large admitted cohort", () => {
+    withDatabase(
+      `
+        CREATE TABLE threads (id TEXT, rollout_path TEXT);
+        CREATE TABLE thread_spawn_edges (
+          parent_thread_id TEXT, child_thread_id TEXT, status TEXT
+        );
+      `,
+      (database) => {
+        const insertThread = database.prepare("INSERT INTO threads VALUES (?, ?)");
+        const insertEdge = database.prepare("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)");
+        database.exec("BEGIN");
+        try {
+          for (let ordinal = 0; ordinal < 2_000; ordinal += 1) {
+            const id = `thread-${ordinal.toString().padStart(4, "0")}`;
+            insertThread.run(id, `sessions/${id}.jsonl`);
+            if (ordinal > 0) {
+              const parentId = `thread-${(ordinal - 1).toString().padStart(4, "0")}`;
+              insertEdge.run(parentId, id, "ready");
+            }
+          }
+          database.exec("COMMIT");
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+
+        const edgeQueryExecutions = instrumentEdgeQueryExecutions(database);
+        const generation = materializeCodexState(database);
+
+        expect(edgeQueryExecutions()).toBe(1);
+        expect(generation.threads).toHaveLength(2_000);
+        expect(generation.threads[0]).toMatchObject({
+          id: "thread-0000",
+          spawnEdgeCoverage: "complete",
+          edgeTuple: ["codex-parent-edge-v1", "row-absent", "status-present"],
+        });
+        expect(generation.threads.at(-1)).toMatchObject({
+          id: "thread-1999",
+          parentId: "thread-1998",
+          edgeTuple: [
+            "codex-parent-edge-v1",
+            "row",
+            "thread-1998",
+            "thread-1999",
+            "status-present",
+            "ready",
+          ],
+        });
+      },
+    );
+  });
+
+  test("ignores malformed orphan edges but rejects malformed admitted edges", () => {
+    withDatabase(
+      `
+        CREATE TABLE threads (id TEXT, rollout_path TEXT);
+        CREATE TABLE thread_spawn_edges (
+          parent_thread_id TEXT, child_thread_id TEXT, status TEXT
+        );
+        INSERT INTO threads VALUES ('a', 'sessions/a.jsonl');
+        INSERT INTO threads VALUES ('b', 'sessions/b.jsonl');
+        INSERT INTO thread_spawn_edges VALUES ('parent', 'a', 'ready');
+        INSERT INTO thread_spawn_edges VALUES (NULL, 'orphan', 7);
+      `,
+      (database) => {
+        expect(materializeCodexState(database).threads).toMatchObject([
+          {
+            id: "a",
+            parentId: "parent",
+            edgeTuple: ["codex-parent-edge-v1", "row", "parent", "a", "status-present", "ready"],
+          },
+          {
+            id: "b",
+            edgeTuple: ["codex-parent-edge-v1", "row-absent", "status-present"],
+          },
+        ]);
+
+        database.exec(`INSERT INTO thread_spawn_edges VALUES ('one', 'b', 'ready')`);
+        database.exec(`INSERT INTO thread_spawn_edges VALUES ('two', 'b', 'ready')`);
+        expect(() => materializeCodexState(database)).toThrowError(
+          expect.objectContaining({ kind: "malformed" }) as CodexStateSchemaError,
+        );
+      },
+    );
+  });
+
+  test("keeps case-distinct thread ids when the thread key has non-binary collation", () => {
+    withDatabase(
+      `
+        CREATE TABLE threads (id TEXT COLLATE NOCASE, rollout_path TEXT);
+        CREATE TABLE thread_spawn_edges (
+          parent_thread_id TEXT, child_thread_id TEXT, status TEXT
+        );
+        INSERT INTO threads VALUES ('a', 'sessions/lower.jsonl');
+        INSERT INTO threads VALUES ('A', 'sessions/upper.jsonl');
+        INSERT INTO thread_spawn_edges VALUES ('lower-parent', 'a', 'lower');
+        INSERT INTO thread_spawn_edges VALUES ('upper-parent', 'A', 'upper');
+      `,
+      (database) => {
+        expect(
+          materializeCodexState(database).threads.map(({ id, edgeTuple }) => ({ id, edgeTuple })),
+        ).toEqual([
+          {
+            id: "A",
+            edgeTuple: [
+              "codex-parent-edge-v1",
+              "row",
+              "upper-parent",
+              "A",
+              "status-present",
+              "upper",
+            ],
+          },
+          {
+            id: "a",
+            edgeTuple: [
+              "codex-parent-edge-v1",
+              "row",
+              "lower-parent",
+              "a",
+              "status-present",
+              "lower",
+            ],
+          },
+        ]);
+      },
+    );
+  });
+
+  test("uses the edge key collation while retaining exact child validation", () => {
+    withDatabase(
+      `
+        CREATE TABLE threads (id TEXT, rollout_path TEXT);
+        CREATE TABLE thread_spawn_edges (
+          parent_thread_id TEXT, child_thread_id TEXT COLLATE NOCASE
+        );
+        INSERT INTO threads VALUES ('A', 'sessions/upper.jsonl');
+        INSERT INTO threads VALUES ('a', 'sessions/lower.jsonl');
+        INSERT INTO threads VALUES ('child', 'sessions/child.jsonl');
+        INSERT INTO thread_spawn_edges VALUES ('parent', 'child');
+      `,
+      (database) => {
+        expect(
+          materializeCodexState(database).threads.map(({ id, edgeTuple }) => ({ id, edgeTuple })),
+        ).toEqual([
+          {
+            id: "A",
+            edgeTuple: ["codex-parent-edge-v1", "row-absent", "status-absent"],
+          },
+          {
+            id: "a",
+            edgeTuple: ["codex-parent-edge-v1", "row-absent", "status-absent"],
+          },
+          {
+            id: "child",
+            edgeTuple: ["codex-parent-edge-v1", "row", "parent", "child", "status-absent", null],
+          },
+        ]);
+
+        database.exec(`UPDATE thread_spawn_edges SET child_thread_id = 'CHILD'`);
+        expect(() => materializeCodexState(database)).toThrowError(
+          expect.objectContaining({ kind: "malformed" }) as CodexStateSchemaError,
+        );
+      },
+    );
+  });
+
   test.each([
     `CREATE TABLE other (id TEXT);`,
     `CREATE TABLE threads (id TEXT);`,
@@ -169,4 +337,21 @@ function withDatabase(schema: string, run: (database: DatabaseSync) => void): vo
   } finally {
     database.close();
   }
+}
+
+function instrumentEdgeQueryExecutions(database: DatabaseSync): () => number {
+  const prepare = database.prepare.bind(database);
+  let executions = 0;
+  database.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (sql.includes("JOIN thread_spawn_edges AS edges")) {
+      const all = statement.all.bind(statement);
+      statement.all = () => {
+        executions += 1;
+        return all();
+      };
+    }
+    return statement;
+  };
+  return () => executions;
 }

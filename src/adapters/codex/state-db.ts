@@ -1,4 +1,4 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 
 import type { LineageCoverage } from "../../domain/session.ts";
 
@@ -28,6 +28,9 @@ export interface CodexThreadState {
 export interface CodexStateGeneration {
   readonly threads: readonly CodexThreadState[];
 }
+
+type RawEdgeRow = Readonly<Record<string, unknown>>;
+type RawEdgeGroups = ReadonlyMap<unknown, readonly RawEdgeRow[]>;
 
 const THREAD_OPTIONAL_COLUMNS = [
   "title",
@@ -59,20 +62,12 @@ export function materializeCodexState(database: DatabaseSync): CodexStateGenerat
     throw new CodexStateSchemaError("unsupported-format");
   }
   const statusCapability = edgeColumns?.has("status") ?? false;
-  const edgeStatement =
-    edgeColumns === undefined
-      ? undefined
-      : prepareBigIntStatement(
-          database,
-          `SELECT parent_thread_id, child_thread_id${statusCapability ? ", status" : ""}
-           FROM thread_spawn_edges
-           WHERE child_thread_id = ?
-           ORDER BY parent_thread_id COLLATE BINARY`,
-        );
+  const edgeGroups =
+    edgeColumns === undefined ? undefined : readEdgeGroups(database, statusCapability);
 
   const admittedIds = new Set<string>();
   const threads = rows.map((row) => {
-    const thread = readThread(row, threadColumns, edgeStatement, statusCapability);
+    const thread = readThread(row, threadColumns, edgeGroups, statusCapability);
     if (admittedIds.has(thread.id)) throw new CodexStateSchemaError("malformed");
     admittedIds.add(thread.id);
     return thread;
@@ -83,7 +78,7 @@ export function materializeCodexState(database: DatabaseSync): CodexStateGenerat
 function readThread(
   row: Readonly<Record<string, unknown>>,
   columns: ReadonlySet<string>,
-  edgeStatement: StatementSync | undefined,
+  edgeGroups: RawEdgeGroups | undefined,
   statusCapability: boolean,
 ): CodexThreadState {
   const id = requiredText(row.id);
@@ -92,7 +87,7 @@ function readThread(
   const workspace = optionalText(row.cwd, columns.has("cwd"));
   const created = timestampValue(row, columns, "created_at_ms", "created_at");
   const updated = timestampValue(row, columns, "updated_at_ms", "updated_at");
-  const edge = readEdge(edgeStatement, id, statusCapability);
+  const edge = readEdge(edgeGroups, id, statusCapability);
   return Object.freeze({
     id,
     rolloutPath,
@@ -116,7 +111,7 @@ function readThread(
 }
 
 function readEdge(
-  statement: StatementSync | undefined,
+  groups: RawEdgeGroups | undefined,
   childId: string,
   statusCapability: boolean,
 ): {
@@ -124,13 +119,13 @@ function readEdge(
   readonly coverage: LineageCoverage;
   readonly tuple: readonly unknown[];
 } {
-  if (statement === undefined) {
+  if (groups === undefined) {
     return {
       coverage: "unknown",
       tuple: Object.freeze(["codex-parent-edge-v1", "table-absent"]),
     };
   }
-  const rows = statement.all(childId) as readonly Record<string, unknown>[];
+  const rows = groups.get(childId) ?? [];
   if (rows.length > 1) throw new CodexStateSchemaError("malformed");
   const capability = statusCapability ? "status-present" : "status-absent";
   const row = rows[0];
@@ -156,6 +151,32 @@ function readEdge(
       status,
     ]),
   };
+}
+
+function readEdgeGroups(database: DatabaseSync, statusCapability: boolean): RawEdgeGroups {
+  const statement = database.prepare(
+    `SELECT admitted.admitted_child_id,
+            edges.parent_thread_id,
+            edges.child_thread_id${statusCapability ? ", edges.status" : ""}
+     FROM (
+       SELECT DISTINCT id COLLATE BINARY AS admitted_child_id
+       FROM threads
+     ) AS admitted
+     JOIN thread_spawn_edges AS edges
+       ON edges.child_thread_id = admitted.admitted_child_id
+     ORDER BY admitted.admitted_child_id COLLATE BINARY,
+              edges.parent_thread_id COLLATE BINARY`,
+  );
+  statement.setReadBigInts(true);
+  const rows = statement.all() as readonly RawEdgeRow[];
+  const groups = new Map<unknown, RawEdgeRow[]>();
+  for (const row of rows) {
+    const key = row.admitted_child_id;
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [row]);
+    else group.push(row);
+  }
+  return groups;
 }
 
 function tableColumns(database: DatabaseSync, table: string, required: true): ReadonlySet<string>;
@@ -188,12 +209,6 @@ function tableColumns(
     names.add(row.name);
   }
   return names;
-}
-
-function prepareBigIntStatement(database: DatabaseSync, sql: string): StatementSync {
-  const statement = database.prepare(sql);
-  statement.setReadBigInts(true);
-  return statement;
 }
 
 function requiredText(value: unknown): string {
