@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -177,6 +177,135 @@ describe("Cursor filesystem inventory", () => {
 
     expect(first.agentTranscripts).toHaveLength(1);
     expect(second.fingerprint).not.toBe(first.fingerprint);
+  });
+
+  test("keeps large parallel leaf families in exact binary inventory order", async () => {
+    const root = await temporaryCursorRoot();
+    const chatIds = Array.from(
+      { length: 12 },
+      (_, index) => `chat-${index.toString().padStart(2, "0")}`,
+    );
+    const agentIds = Array.from(
+      { length: 12 },
+      (_, index) => `agent-${index.toString().padStart(2, "0")}`,
+    );
+    const transcriptIds = Array.from(
+      { length: 12 },
+      (_, index) => `10000000-0000-4000-8000-${index.toString().padStart(12, "0")}`,
+    );
+    await Promise.all([
+      ...chatIds.map(async (nativeId) => writeChat(root, "scope", nativeId)),
+      ...agentIds.map(async (nativeId) => writeCatalog(root, "project", "scope", nativeId)),
+      ...transcriptIds.map(async (nativeId) => writeAgentTranscript(root, "project", nativeId)),
+      ...Array.from({ length: 12 }, async (_, index) =>
+        mkdir(
+          join(
+            root,
+            "projects",
+            "project",
+            "agent-transcripts",
+            `invalid-${index.toString().padStart(2, "0")}`,
+          ),
+          {
+            recursive: true,
+          },
+        ),
+      ),
+    ]);
+    const chatShm = join(root, "chats", "scope", chatIds[0]!, "store.db-shm");
+    const catalogShm = join(
+      root,
+      "projects",
+      "project",
+      "sdk-agent-store",
+      "scope",
+      "index.db-shm",
+    );
+    const agentShm = join(
+      root,
+      "projects",
+      "project",
+      "sdk-agent-store",
+      "scope",
+      "agents",
+      cursorAgentStoreDirectory(agentIds[0]!),
+      "store.db-shm",
+    );
+    await Promise.all([
+      writeFile(chatShm, "chat-sidecar"),
+      writeFile(catalogShm, "catalog-sidecar"),
+      writeFile(agentShm, "agent-sidecar"),
+    ]);
+    const paths = await resolveCursorPaths({ home: root, cursorHome: root });
+
+    const first = await inventoryCursorSource(paths);
+    const second = await inventoryCursorSource(paths);
+    const catalog = first.catalogs[0]!;
+    const mapping = mapCursorDiscovery(first, [
+      materializedCatalog(
+        catalog,
+        agentIds.map((nativeId) => agent(nativeId)),
+      ),
+    ]);
+
+    expect(second.fingerprint).toBe(first.fingerprint);
+    expect(first.chats.map(({ nativeId }) => nativeId)).toEqual(chatIds);
+    expect(catalog.stores.map(({ directoryName }) => directoryName)).toEqual(
+      agentIds.map(cursorAgentStoreDirectory).toSorted(compareCursorComponents),
+    );
+    expect(first.agentTranscripts.map(({ nativeId }) => nativeId)).toEqual(transcriptIds);
+    expect(first.invalidAgentTranscriptEntries.map(({ components }) => components.at(-1))).toEqual(
+      Array.from({ length: 12 }, (_, index) => `invalid-${index.toString().padStart(2, "0")}`),
+    );
+    expect(mapping.candidates.map(({ nativeId }) => nativeId)).toEqual([
+      ...chatIds,
+      ...agentIds,
+      ...transcriptIds,
+    ]);
+    expect(mapping.issues).toEqual([{ kind: "invalid-agent-transcript" }]);
+    await expect(
+      Promise.all([
+        readFile(join(root, "chats", "scope", chatIds[0]!, "store.db"), "utf8"),
+        readFile(join(root, "projects", "project", "sdk-agent-store", "scope", "index.db"), "utf8"),
+        readFile(
+          join(
+            root,
+            "projects",
+            "project",
+            "agent-transcripts",
+            transcriptIds[0]!,
+            `${transcriptIds[0]!}.jsonl`,
+          ),
+          "utf8",
+        ),
+        readFile(chatShm, "utf8"),
+        readFile(catalogShm, "utf8"),
+        readFile(agentShm, "utf8"),
+      ]),
+    ).resolves.toEqual([
+      "store",
+      "catalog",
+      '{"type":"turn_ended","status":"success"}',
+      "chat-sidecar",
+      "catalog-sidecar",
+      "agent-sidecar",
+    ]);
+
+    await expect(
+      captureStableCursorInventory(paths, async () => {
+        await writeFile(
+          join(
+            root,
+            "projects",
+            "project",
+            "agent-transcripts",
+            transcriptIds[9]!,
+            `${transcriptIds[9]!}.jsonl`,
+          ),
+          '{"type":"turn_ended","status":"error"}',
+        );
+      }),
+    ).rejects.toBeInstanceOf(CursorInventoryChangedError);
   });
 });
 

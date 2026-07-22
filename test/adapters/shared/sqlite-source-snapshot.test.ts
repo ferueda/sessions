@@ -6,6 +6,8 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
+  type FileHandle,
   readFile,
   readdir,
   rename,
@@ -23,6 +25,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { SourceCaptureWorkspace } from "../../../src/application/ports/session-source.ts";
 import {
   materializeSqliteSourceSnapshot,
+  type SqliteSourceSnapshotBytePass,
   SqliteSourceSnapshotError,
 } from "../../../src/adapters/shared/sqlite-source-snapshot.ts";
 
@@ -49,15 +52,25 @@ describe("SQLite source snapshot", () => {
     const databasePath = await closedGenerationFixture(7);
     const workspace = await testWorkspace();
     const before = await snapshotProviderFiles(databasePath);
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
 
     await expect(
       materializeSqliteSourceSnapshot({
         databasePath,
         workspace,
+        hooks: {
+          onBytePass(observation) {
+            bytePasses.push(observation);
+          },
+        },
         materialize: readGeneration,
       }),
     ).resolves.toEqual({ left: 7, right: 7 });
 
+    expect(bytePasses).toEqual([
+      { attempt: 1, phase: "copy", kind: "database" },
+      { attempt: 1, phase: "verify", kind: "database" },
+    ]);
     expect(await snapshotProviderFiles(databasePath)).toEqual(before);
     expect(await readdir(workspace.root)).toEqual([]);
   });
@@ -94,10 +107,16 @@ describe("SQLite source snapshot", () => {
     let openedPath: string | undefined;
     let privateEntriesBeforeRead: readonly string[] = [];
     let privateEntries: readonly string[] = [];
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
 
     const generation = await materializeSqliteSourceSnapshot({
       databasePath: fixture.databasePath,
       workspace,
+      hooks: {
+        onBytePass(observation) {
+          bytePasses.push(observation);
+        },
+      },
       materialize(database) {
         openedPath = databasePath(database);
         expect(pragmaNumber(database, "query_only")).toBe(1);
@@ -113,6 +132,12 @@ describe("SQLite source snapshot", () => {
     expect(openedPath).not.toBe(fixture.databasePath);
     expect(privateEntriesBeforeRead).toEqual(["state.sqlite", "state.sqlite-wal"]);
     expect(privateEntries).toEqual(["state.sqlite", "state.sqlite-shm", "state.sqlite-wal"]);
+    expect(bytePasses).toEqual([
+      { attempt: 1, phase: "copy", kind: "database" },
+      { attempt: 1, phase: "copy", kind: "wal" },
+      { attempt: 1, phase: "verify", kind: "database" },
+      { attempt: 1, phase: "verify", kind: "wal" },
+    ]);
     expect(await snapshotProviderFiles(fixture.databasePath)).toEqual(before);
     expect(await readdir(workspace.root)).toEqual([]);
   });
@@ -146,6 +171,7 @@ describe("SQLite source snapshot", () => {
     const fixture = await activeWalFixture();
     const workspace = await testWorkspace();
     let materializations = 0;
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
 
     const result = await materializeSqliteSourceSnapshot({
       databasePath: fixture.databasePath,
@@ -153,6 +179,9 @@ describe("SQLite source snapshot", () => {
       hooks: {
         beforePostVerification(attempt) {
           if (attempt === 1) writeGeneration(fixture.database, 2);
+        },
+        onBytePass(observation) {
+          bytePasses.push(observation);
         },
       },
       materialize(database) {
@@ -164,6 +193,16 @@ describe("SQLite source snapshot", () => {
     expect(result).toEqual({ left: 2, right: 2 });
     expect(workspace.attemptDirectories).toHaveLength(2);
     expect(materializations).toBe(1);
+    expect(bytePasses).toEqual([
+      { attempt: 1, phase: "copy", kind: "database" },
+      { attempt: 1, phase: "copy", kind: "wal" },
+      { attempt: 1, phase: "verify", kind: "database" },
+      { attempt: 1, phase: "verify", kind: "wal" },
+      { attempt: 2, phase: "copy", kind: "database" },
+      { attempt: 2, phase: "copy", kind: "wal" },
+      { attempt: 2, phase: "verify", kind: "database" },
+      { attempt: 2, phase: "verify", kind: "wal" },
+    ]);
     expect(workspace.attemptDirectories.every((directory) => !existsSync(directory))).toBe(true);
   });
 
@@ -209,6 +248,7 @@ describe("SQLite source snapshot", () => {
     await copyFile(`${origin.databasePath}-wal`, `${databasePath}-wal`);
     const workspace = await testWorkspace();
     let materializations = 0;
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
 
     const result = await materializeSqliteSourceSnapshot({
       databasePath,
@@ -218,6 +258,9 @@ describe("SQLite source snapshot", () => {
           if (attempt === 1) {
             await rm(`${databasePath}-wal`);
           }
+        },
+        onBytePass(observation) {
+          bytePasses.push(observation);
         },
       },
       materialize(database) {
@@ -229,8 +272,107 @@ describe("SQLite source snapshot", () => {
     expect(result).toEqual({ left: 0, right: 0 });
     expect(workspace.attemptDirectories).toHaveLength(2);
     expect(materializations).toBe(1);
+    expect(bytePasses).toEqual([
+      { attempt: 1, phase: "copy", kind: "database" },
+      { attempt: 1, phase: "copy", kind: "wal" },
+      { attempt: 2, phase: "copy", kind: "database" },
+      { attempt: 2, phase: "verify", kind: "database" },
+    ]);
     expect(existsSync(`${databasePath}-shm`)).toBe(false);
     expect(await readdir(workspace.root)).toEqual([]);
+  });
+
+  test("retries WAL appearance before hashing a mismatched provider set", async () => {
+    const databasePath = await closedGenerationFixture(1);
+    const workspace = await testWorkspace();
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
+    let providerDatabase: DatabaseSync | undefined;
+    let materializations = 0;
+
+    const result = await materializeSqliteSourceSnapshot({
+      databasePath,
+      workspace,
+      hooks: {
+        beforePostVerification(attempt) {
+          if (attempt !== 1) return;
+          providerDatabase = new DatabaseSync(databasePath);
+          openDatabases.push(providerDatabase);
+          providerDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+          writeGeneration(providerDatabase, 2);
+        },
+        onBytePass(observation) {
+          bytePasses.push(observation);
+        },
+      },
+      materialize(database) {
+        materializations += 1;
+        return readGeneration(database);
+      },
+    });
+
+    expect(result).toEqual({ left: 2, right: 2 });
+    expect(providerDatabase).toBeDefined();
+    expect(existsSync(`${databasePath}-wal`)).toBe(true);
+    expect(workspace.attemptDirectories).toHaveLength(2);
+    expect(materializations).toBe(1);
+    expect(bytePasses).toEqual([
+      { attempt: 1, phase: "copy", kind: "database" },
+      { attempt: 2, phase: "copy", kind: "database" },
+      { attempt: 2, phase: "copy", kind: "wal" },
+      { attempt: 2, phase: "verify", kind: "database" },
+      { attempt: 2, phase: "verify", kind: "wal" },
+    ]);
+    expect(await readdir(workspace.root)).toEqual([]);
+  });
+
+  test("rejects unequal post-copy bytes when identity checks cannot distinguish them", async () => {
+    const databasePath = await closedGenerationFixture(7);
+    const workspace = await testWorkspace();
+    const stableBytes = await readFile(databasePath);
+    const changedBytes = Buffer.from(stableBytes);
+    const changedIndex = changedBytes.length - 1;
+    changedBytes[changedIndex] = changedBytes[changedIndex]! ^ 0xff;
+    const provider = await open(databasePath, "r+");
+    const bytePasses: SqliteSourceSnapshotBytePass[] = [];
+    let materializations = 0;
+
+    try {
+      const error = await materializeSqliteSourceSnapshot({
+        databasePath,
+        workspace,
+        hooks: {
+          async beforePostHash() {
+            await overwriteHandle(provider, changedBytes);
+          },
+          async onBytePass(observation) {
+            bytePasses.push(observation);
+            if (observation.phase === "verify") await overwriteHandle(provider, stableBytes);
+          },
+        },
+        materialize(database) {
+          materializations += 1;
+          return readGeneration(database);
+        },
+      }).then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+
+      expect(error).toBeInstanceOf(SqliteSourceSnapshotError);
+      expect(error).toMatchObject({ kind: "source-changed" });
+      expect(materializations).toBe(0);
+      expect(workspace.attemptDirectories).toHaveLength(3);
+      expect(bytePasses).toEqual(
+        Array.from({ length: 3 }, (_, index) => [
+          { attempt: index + 1, phase: "copy", kind: "database" },
+          { attempt: index + 1, phase: "verify", kind: "database" },
+        ]).flat(),
+      );
+      expect(await readFile(databasePath)).toEqual(stableBytes);
+      expect(await readdir(workspace.root)).toEqual([]);
+    } finally {
+      await provider.close();
+    }
   });
 
   test("fails closed after exactly three changing attempts", async () => {
@@ -363,6 +505,15 @@ describe("SQLite source snapshot", () => {
 interface Generation {
   readonly left: number;
   readonly right: number;
+}
+
+async function overwriteHandle(handle: FileHandle, bytes: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset, offset);
+    if (bytesWritten === 0) throw new Error("Provider test write made no progress");
+    offset += bytesWritten;
+  }
 }
 
 interface ActiveWalFixture {

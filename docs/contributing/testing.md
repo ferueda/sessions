@@ -175,6 +175,26 @@ redact output to aggregates, and clean up owned state. Keep them outside Vitest,
 pre-commit, `pnpm check`, and routine CI. Live results are operational evidence,
 not deterministic regression coverage.
 
+Provider-discovery regression tests use only generated provider state. A
+2,000-thread Codex cohort requires one ordered spawn-edge query rather than one
+query per thread, including exact collation, orphan, and malformed-edge cases.
+Shared SQLite snapshot tests count one copy-time hash and one mandatory
+post-copy verification hash for every main/WAL file that reaches byte proof;
+identity or file-set instability may fail earlier. Cursor tests require a fixed
+maximum of eight active leaf operations, input-ordered results and failures,
+settlement of all started work, unchanged large-family fingerprints and
+candidates, excluded SHM sidecars, provider-tree immutability, and exact
+source-change classification. These operation counts are deterministic shape
+evidence, not elapsed-time release budgets.
+
+One provider-free local comparison used 2,000 generated Codex threads and a
+generated Cursor tree with 256 leaves in each of the three parallel families.
+Across two alternating runs, the warm Codex median moved from 64.5–65.9 ms to
+4.0–4.9 ms, while the Cursor median moved from 85.8–87.2 ms to 41.2–41.3 ms.
+Every run retained its full cohort, final parent, and repeated inventory
+fingerprint. These local aggregates show the intended direction; CI relies on
+the exact structural contracts above and applies no machine-time threshold.
+
 Doctor performance proof remains deterministic and provider-free in tests.
 SQLite health tests require exact corruption detection and keep the number of
 authorized `SELECT` statements constant as synthetic session count grows. FTS

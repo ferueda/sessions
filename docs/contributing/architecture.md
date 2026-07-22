@@ -153,15 +153,25 @@ Codex discovery snapshots `state_5.sqlite` and any active WAL bytes into a rando
 private child of the Sessions `.scratch` workspace. The adapter never opens the
 provider database with SQLite and never receives the workspace root or writer
 lease. Snapshot validation fails closed if concurrent checkpoint/reset evidence
-cannot prove one complete generation. Rollout reads stream plain JSONL or Zstd,
-verify live file identity before and after consumption, and admit no partial
-document after change or parse failure.
+cannot prove one complete generation. The admitted snapshot copies each
+identity-checked provider file while hashing it, then hashes one freshly opened
+post-copy provider set and requires both digests to match. Codex materializes
+the admitted thread cohort and its spawn edges with one binary-ordered set query;
+orphan edges remain outside the cohort. Rollout reads stream plain JSONL or
+Zstd, verify live file identity before and after consumption, and admit no
+partial document after change or parse failure.
 
 Cursor discovery traverses only its documented local store grammar. It snapshots
 selected SQLite main/WAL bytes into the same private workspace, never opens
 provider SHM, and normalizes the two rich store families or streams one exact
 recognized JSONL fallback from the
 [Cursor format support reference](../reference/cursor-format-support.md).
+Within one already ordered parent scope, chat directories, agent-store
+directories, and transcript identity directories use a fixed eight-worker pool.
+Each leaf returns a local fragment, and the adapter waits for all started work
+and flattens successful fragments or selects failures in original binary order.
+Parent scopes, catalog snapshots, changed reads, and the two complete inventory
+passes remain sequential.
 Rich evidence owns a shared native ID. Reduced JSONL can promote to rich but
 cannot replace a retained rich snapshot; the provider-neutral engine records an
 unsupported candidate and keeps last-good evidence stale. Duplicate unowned
