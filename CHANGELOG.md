@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/ferueda/sessions/compare/v0.4.0...v0.5.0) (2026-07-22)
+
+
+### Features
+
+* guard reads by document digest ([37eb63d](https://github.com/ferueda/sessions/commit/37eb63dcf0cedb21e116a79b14b7b0560884e22d))
+
 ## [0.4.0](https://github.com/ferueda/sessions/compare/v0.3.1...v0.4.0) (2026-07-22)
 
 
