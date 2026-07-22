@@ -452,9 +452,13 @@ remain durable and a fresh invocation safely restarts. No limit, cursor, partial
 result, or automatic repair policy is public.
 
 Doctor also keeps semantic FTS validation immutable. It loads canonical rows in
-bounded keyset batches into one contentless, memory-only TEMP expected FTS index,
-then compares exact terms, positions, and docsize in both directions. The clean
-writer fast path does not weaken this explicit full-library check.
+bounded keyset batches into one complete, contentless, memory-only TEMP expected
+FTS index. It streams matching row vocabularies in binary term order, then
+compares exact term instances in both directions through ranges capped at
+1,000,000 occurrences per side or one oversized term. Exact docsize equality is
+checked separately. The complete expected index remains corpus-sized, and no
+expected or comparison state spills to disk. The clean writer fast path does not
+weaken this explicit full-library check.
 
 The application exposes immutable provider-neutral list/search/entries/manifest
 query values and one query repository beside canonical reconstruction on each
@@ -776,10 +780,14 @@ or a writer or persists state. The exact audit does read every Sessions-owned
 retained canonical transcript and may take minutes on a large library. Canonical
 health uses ordered whole-library scans while retaining at most one reconstructed
 document at a time, then applies the same validation, public digest, and metrics
-checks as point reads. Semantic FTS health still builds a complete memory-only
-TEMP expected index and compares exact docsize, terms, and positions in both
-directions; one private savepoint avoids per-row autocommit work but does not
-make peak expected-index memory constant.
+checks as point reads. Semantic FTS health still builds a complete, corpus-sized,
+memory-only TEMP expected index under one private savepoint. It streams actual
+and expected row vocabularies, requires exact term, document-count, and
+occurrence-count equality, and partitions the bidirectional instance `EXCEPT`
+at 1,000,000 occurrences per side or one oversized term. Exact docsize remains a
+separate bidirectional comparison. This bounds each normal comparison range but
+does not spill to disk or make total memory constant because the expected index
+and one oversized term remain corpus-dependent.
 
 `SESSIONS_DOCTOR_TIMINGS=1` adds one best-effort
 `sessions:doctor-timings` JSON record to stderr after success or failure. The
@@ -1115,7 +1123,8 @@ writes retain exact affected-row assertions. Forget, orphan repair, and
 compaction may conservatively leave the library dirty until they prove equivalent
 local postconditions. `doctor` remains the explicit read-only full-library
 integrity check and compares canonical-derived exact terms, positions, and
-docsize through a memory-only TEMP expected FTS index.
+docsize through a complete memory-only TEMP expected FTS index and bounded exact
+term-instance ranges.
 
 This accepts one tradeoff: direct modification of the permission-hardened
 Sessions SQLite database is unsupported. A clean marker cannot detect every
@@ -1231,13 +1240,15 @@ honest coverage, never inferred facts.
 
 Measured indexing and query work may proceed alongside the ordered milestones
 when it preserves evidence semantics. Read-only doctor now avoids per-session
-canonical reads, batches the TEMP FTS load transactionally, reports interactive
-phases, and supports aggregate opt-in timings without weakening its exact proof.
-Remaining priorities are lower-memory exact FTS validation, faster dirty/recovery
-validation, clear recovery status for long operations, and lower routine storage
-cost. Performance work must preserve canonical equality, capture scope, failure
-truth, and provider-read-only behavior; it must not weaken integrity checks
-merely to meet a time budget.
+canonical reads, batches the TEMP FTS load transactionally, partitions exact FTS
+instance comparison by a fixed occurrence target, reports interactive phases,
+and supports aggregate opt-in timings without weakening its exact proof. The
+complete expected index and one oversized term remain corpus-dependent, so
+further lower total-memory work, faster dirty/recovery validation, clear
+recovery status for long operations, and lower routine storage cost remain
+priorities. Performance work must preserve canonical equality, capture scope,
+failure truth, and provider-read-only behavior; it must not weaken integrity
+checks merely to meet a time budget.
 
 ### Evidence-gated candidates
 

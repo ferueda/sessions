@@ -10,15 +10,19 @@ import {
   type IndexTimingPhase,
   type IndexTimingRecorder,
 } from "../../application/index-timing.ts";
+import { closeSqliteIterators, type CapturedIteratorFailure } from "./iterator-cleanup.ts";
 import { runLeasedImmediateTransaction, type WriterLeaseIdentity } from "./writer-lease.ts";
 
 export const SESSIONS_CONTENT_FTS_TABLE = "sessions_content_fts";
 
 const DOCTOR_CONTENT_WINDOW_SIZE = 512;
 const DOCTOR_EXPECTED_FTS_TABLE = "sessions_doctor_expected_fts";
-const DOCTOR_EXPECTED_VOCAB_TABLE = "sessions_doctor_expected_fts_vocab";
-const DOCTOR_ACTUAL_VOCAB_TABLE = "sessions_doctor_actual_fts_vocab";
+const DOCTOR_EXPECTED_INSTANCE_VOCAB_TABLE = "sessions_doctor_expected_fts_vocab";
+const DOCTOR_ACTUAL_INSTANCE_VOCAB_TABLE = "sessions_doctor_actual_fts_vocab";
+const DOCTOR_EXPECTED_ROW_VOCAB_TABLE = "sessions_doctor_expected_fts_row_vocab";
+const DOCTOR_ACTUAL_ROW_VOCAB_TABLE = "sessions_doctor_actual_fts_row_vocab";
 const DOCTOR_EXPECTED_LOAD_SAVEPOINT = "sessions_doctor_expected_fts_load";
+const DOCTOR_TERM_INSTANCE_RANGE_TARGET = 1_000_000n;
 const SQLITE_INTEGER_MIN = -9_223_372_036_854_775_808n;
 const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
 
@@ -231,10 +235,19 @@ export function ftsProjectionContentIsValid(database: DatabaseSync): boolean {
   return mismatch === undefined;
 }
 
+interface DoctorSemanticValidationOptions {
+  readonly maxTermInstances?: bigint;
+  readonly observeTermRange?: (instances: bigint) => void;
+}
+
 /** Compare canonical text with the real FTS term and position index without writing main. */
-export function ftsProjectionSemanticContentIsValidReadOnly(database: DatabaseSync): boolean {
+export function ftsProjectionSemanticContentIsValidReadOnly(
+  database: DatabaseSync,
+  options: DoctorSemanticValidationOptions = {},
+): boolean {
   let valid = false;
   try {
+    const maxTermInstances = doctorTermInstanceRangeTarget(options.maxTermInstances);
     database.exec("PRAGMA temp_store = MEMORY");
     if (!tempStorageIsMemory(database)) return false;
 
@@ -245,26 +258,32 @@ export function ftsProjectionSemanticContentIsValidReadOnly(database: DatabaseSy
   tokenize='unicode61'
 );
 
-CREATE VIRTUAL TABLE temp.${DOCTOR_EXPECTED_VOCAB_TABLE}
+CREATE VIRTUAL TABLE temp.${DOCTOR_EXPECTED_INSTANCE_VOCAB_TABLE}
 USING fts5vocab(temp, ${DOCTOR_EXPECTED_FTS_TABLE}, 'instance');
 
-CREATE VIRTUAL TABLE temp.${DOCTOR_ACTUAL_VOCAB_TABLE}
-USING fts5vocab(main, ${SESSIONS_CONTENT_FTS_TABLE}, 'instance');`);
+CREATE VIRTUAL TABLE temp.${DOCTOR_ACTUAL_INSTANCE_VOCAB_TABLE}
+USING fts5vocab(main, ${SESSIONS_CONTENT_FTS_TABLE}, 'instance');
+
+CREATE VIRTUAL TABLE temp.${DOCTOR_EXPECTED_ROW_VOCAB_TABLE}
+USING fts5vocab(temp, ${DOCTOR_EXPECTED_FTS_TABLE}, 'row');
+
+CREATE VIRTUAL TABLE temp.${DOCTOR_ACTUAL_ROW_VOCAB_TABLE}
+USING fts5vocab(main, ${SESSIONS_CONTENT_FTS_TABLE}, 'row');`);
 
     loadExpectedDoctorProjection(database);
+    const docsizeMatches = tablesMatchExactly(
+      database,
+      "main.sessions_content_fts_docsize",
+      `temp.${DOCTOR_EXPECTED_FTS_TABLE}_docsize`,
+      "id, sz",
+    );
+    const termRanges = docsizeMatches
+      ? matchingDoctorTermRanges(database, maxTermInstances)
+      : undefined;
     valid =
-      tablesMatchExactly(
-        database,
-        "main.sessions_content_fts_docsize",
-        `temp.${DOCTOR_EXPECTED_FTS_TABLE}_docsize`,
-        "id, sz",
-      ) &&
-      tablesMatchExactly(
-        database,
-        `temp.${DOCTOR_ACTUAL_VOCAB_TABLE}`,
-        `temp.${DOCTOR_EXPECTED_VOCAB_TABLE}`,
-        "term, doc, col, offset",
-      );
+      docsizeMatches &&
+      termRanges !== undefined &&
+      instanceVocabulariesMatchExactly(database, termRanges, options.observeTermRange);
   } catch {
     valid = false;
   } finally {
@@ -355,6 +374,24 @@ interface DoctorContentRow {
   readonly text: unknown;
 }
 
+interface DoctorTermSummaryRow {
+  readonly term: unknown;
+  readonly doc: unknown;
+  readonly cnt: unknown;
+}
+
+interface DoctorTermSummary {
+  readonly term: string;
+  readonly documents: bigint;
+  readonly instances: bigint;
+}
+
+interface DoctorTermRange {
+  readonly firstTerm: string;
+  readonly lastTerm: string;
+  readonly instances: bigint;
+}
+
 function loadExpectedDoctorProjection(database: DatabaseSync): void {
   database.exec(`SAVEPOINT ${DOCTOR_EXPECTED_LOAD_SAVEPOINT}`);
   try {
@@ -430,6 +467,148 @@ function rollbackDoctorExpectedLoad(database: DatabaseSync, operationError: unkn
   );
 }
 
+function matchingDoctorTermRanges(
+  database: DatabaseSync,
+  maxTermInstances: bigint,
+): readonly DoctorTermRange[] | undefined {
+  const actualStatement = database.prepare(
+    `SELECT term, doc, cnt
+     FROM temp.${DOCTOR_ACTUAL_ROW_VOCAB_TABLE}
+     ORDER BY term COLLATE BINARY`,
+  );
+  const expectedStatement = database.prepare(
+    `SELECT term, doc, cnt
+     FROM temp.${DOCTOR_EXPECTED_ROW_VOCAB_TABLE}
+     ORDER BY term COLLATE BINARY`,
+  );
+  actualStatement.setReadBigInts(true);
+  expectedStatement.setReadBigInts(true);
+
+  let actualIterator: Iterator<DoctorTermSummaryRow> | undefined;
+  let expectedIterator: Iterator<DoctorTermSummaryRow> | undefined;
+  let operationFailure: CapturedIteratorFailure = { caught: false };
+  try {
+    actualIterator = actualStatement.iterate() as Iterator<DoctorTermSummaryRow>;
+    expectedIterator = expectedStatement.iterate() as Iterator<DoctorTermSummaryRow>;
+    const ranges: DoctorTermRange[] = [];
+    let firstTerm: string | undefined;
+    let lastTerm: string | undefined;
+    let rangeInstances = 0n;
+    let previousTerm: string | undefined;
+
+    while (true) {
+      const actualNext = actualIterator.next();
+      const expectedNext = expectedIterator.next();
+      if (actualNext.done || expectedNext.done) {
+        if (actualNext.done !== expectedNext.done) return undefined;
+        if (firstTerm !== undefined && lastTerm !== undefined) {
+          ranges.push({ firstTerm, lastTerm, instances: rangeInstances });
+        }
+        return ranges;
+      }
+
+      const actual = doctorTermSummary(actualNext.value);
+      const expected = doctorTermSummary(expectedNext.value);
+      if (
+        actual.term !== expected.term ||
+        actual.documents !== expected.documents ||
+        actual.instances !== expected.instances ||
+        (previousTerm !== undefined && compareUtf8Binary(previousTerm, actual.term) >= 0)
+      ) {
+        return undefined;
+      }
+
+      if (firstTerm !== undefined && rangeInstances + actual.instances > maxTermInstances) {
+        if (lastTerm === undefined) throw new Error("SQLite doctor term range is malformed");
+        ranges.push({ firstTerm, lastTerm, instances: rangeInstances });
+        firstTerm = actual.term;
+        rangeInstances = actual.instances;
+      } else {
+        firstTerm ??= actual.term;
+        rangeInstances += actual.instances;
+      }
+      lastTerm = actual.term;
+      previousTerm = actual.term;
+    }
+  } catch (error) {
+    operationFailure = { caught: true, error };
+    throw error;
+  } finally {
+    closeSqliteIterators([expectedIterator, actualIterator], operationFailure);
+  }
+}
+
+function doctorTermSummary(row: DoctorTermSummaryRow): DoctorTermSummary {
+  const { term, doc, cnt } = row;
+  if (
+    typeof term !== "string" ||
+    term.length === 0 ||
+    typeof doc !== "bigint" ||
+    doc <= 0n ||
+    doc > SQLITE_INTEGER_MAX ||
+    typeof cnt !== "bigint" ||
+    cnt <= 0n ||
+    cnt > SQLITE_INTEGER_MAX ||
+    doc > cnt
+  ) {
+    throw new Error("SQLite doctor FTS vocabulary is malformed");
+  }
+  return { term, documents: doc, instances: cnt };
+}
+
+function compareUtf8Binary(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
+function instanceVocabulariesMatchExactly(
+  database: DatabaseSync,
+  ranges: readonly DoctorTermRange[],
+  observeRange: ((instances: bigint) => void) | undefined,
+): boolean {
+  const actualOnly = database.prepare(
+    `SELECT 1 AS mismatch
+     FROM (
+       SELECT term, doc, col, offset
+       FROM temp.${DOCTOR_ACTUAL_INSTANCE_VOCAB_TABLE}
+       WHERE term >= ? AND term <= ?
+       EXCEPT
+       SELECT term, doc, col, offset
+       FROM temp.${DOCTOR_EXPECTED_INSTANCE_VOCAB_TABLE}
+       WHERE term >= ? AND term <= ?
+     )
+     LIMIT 1`,
+  );
+  const expectedOnly = database.prepare(
+    `SELECT 1 AS mismatch
+     FROM (
+       SELECT term, doc, col, offset
+       FROM temp.${DOCTOR_EXPECTED_INSTANCE_VOCAB_TABLE}
+       WHERE term >= ? AND term <= ?
+       EXCEPT
+       SELECT term, doc, col, offset
+       FROM temp.${DOCTOR_ACTUAL_INSTANCE_VOCAB_TABLE}
+       WHERE term >= ? AND term <= ?
+     )
+     LIMIT 1`,
+  );
+
+  for (const range of ranges) {
+    observeRange?.(range.instances);
+    const parameters = [range.firstTerm, range.lastTerm, range.firstTerm, range.lastTerm] as const;
+    if (actualOnly.get(...parameters) !== undefined) return false;
+    if (expectedOnly.get(...parameters) !== undefined) return false;
+  }
+  return true;
+}
+
+function doctorTermInstanceRangeTarget(value: bigint | undefined): bigint {
+  const target = value ?? DOCTOR_TERM_INSTANCE_RANGE_TARGET;
+  if (typeof target !== "bigint" || target <= 0n) {
+    throw new TypeError("SQLite doctor FTS term range target must be a positive bigint");
+  }
+  return target;
+}
+
 function tablesMatchExactly(
   database: DatabaseSync,
   left: string,
@@ -471,8 +650,10 @@ function tempStorageIsMemory(database: DatabaseSync): boolean {
 }
 
 function dropDoctorProjection(database: DatabaseSync): void {
-  database.exec(`DROP TABLE IF EXISTS temp.${DOCTOR_ACTUAL_VOCAB_TABLE};
-DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_VOCAB_TABLE};
+  database.exec(`DROP TABLE IF EXISTS temp.${DOCTOR_ACTUAL_ROW_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_ROW_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${DOCTOR_ACTUAL_INSTANCE_VOCAB_TABLE};
+DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_INSTANCE_VOCAB_TABLE};
 DROP TABLE IF EXISTS temp.${DOCTOR_EXPECTED_FTS_TABLE};`);
 }
 
