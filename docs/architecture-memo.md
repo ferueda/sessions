@@ -2,7 +2,7 @@
 
 - Status: accepted design baseline
 - Date: 2026-07-13
-- Last updated: 2026-07-18
+- Last updated: 2026-07-22
 - Scope: standalone repository through V1
 
 ## Executive summary
@@ -664,9 +664,11 @@ sessions search <text> [filters] [--match all|any] [--limit N] [--context N]
 sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN]
                            [--format human|json|jsonl]
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
+                             [--expected-document-digest DIGEST]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
                                [--full | --from-entry N --to-entry N]
+                               [--expected-document-digest DIGEST]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -754,7 +756,9 @@ existing entry window. Show/export may instead select one inclusive paired entry
 range of at most 200 entries. Ranges never clamp, cannot combine with focused
 show or full export, and still reconstruct and verify the complete retained
 document before selection. A ranged result keeps that complete document digest;
-entry selection does not remove later segment/text truncation. Selection
+entry selection does not remove later segment/text truncation. An optional
+expected digest fails before actual bounds are resolved or transcript output,
+without changing matching schema-1 results. Selection
 truncates only at Unicode code-point boundaries and never shortens structural
 identity, hash, or linkage values. Every bounded
 JSON/JSONL result is completely encoded and validated before stdout and may not
@@ -870,8 +874,10 @@ Every playbook follows the shared `evidence-protocol.md` contract:
 3. Start with narrow, bounded JSON/JSONL queries and read each page's or manifest
    cohort's capture scope from the same snapshot before interpreting retained
    results.
-4. Record commands, filters, cursors, canonical IDs, and entry ordinals.
-5. Inspect linked calls/results and nearby context.
+4. Record commands, filters, cursors, canonical IDs, revision digests, and entry
+   ordinals.
+5. Inspect linked calls/results and nearby context; use the expected-document
+   guard whenever a show/export hydrates a manifest revision.
 6. Report facts before interpretation.
 7. Separate capture availability from occurrence, unique content, known roots,
    and unknown lineage support.
@@ -1283,18 +1289,30 @@ from one library generation. The versioned JSON/JSONL result binds explicit
 selection bounds to canonical session IDs and document digests, and carries the
 capture scope, source state, counts, and lineage needed to interpret and repeat
 the selection without exposing diagnostic paths. A manifest does not retain an
-older document body. Until guarded reads ship, a consumer hydrating a manifest
-must compare each returned document digest and retry or re-key on mismatch.
+older document body. A consumer hydrates one revision through a digest-guarded
+`show` or `export` read and retries the manifest or re-keys on mismatch.
 
-### 2. Digest-guarded coordinate reads
+### 2. Digest-guarded coordinate reads — current
 
-Add exact entry-coordinate and bounded range reads conditioned on the caller's
-expected canonical document digest. A read returns evidence only from the
-matching retained snapshot and fails distinctly if a later index changed it.
-The first gate is contract correctness and stable structured behavior. Avoid
-promising cheaper physical reads until measurement shows that full-document
-reconstruction is a real bottleneck and an optimization preserves the existing
-canonical digest proof.
+Existing `show` and `export` reads accept an optional canonical
+`--expected-document-digest`. Sessions validates the fixed-scheme lowercase
+digest before library inspection, reconstructs and verifies one complete
+canonical document from an immutable reader operation, then compares the caller
+condition before resolving an exact entry or bounded range. A mismatch returns
+no transcript evidence and takes precedence over facts about the newer
+document's entry bounds. Matching reads keep the existing human and schema-1
+JSON/JSONL output unchanged.
+
+The guard binds canonical identity plus the complete public-document content,
+not capture attribution, a writer generation, or an archived revision. Current
+freshness, source state, observation time, adapter version, and root attribution
+may differ while equal evidence still matches. A mismatch exposes neither
+digest and requires an explicit new manifest or re-key; it never retrieves an
+older body or automatically accepts the newer one. The current implementation
+preserves full-document reconstruction and digest/metrics validation, so ranges
+bound returned evidence rather than SQLite read cost. Any cheaper physical read
+still requires measurement and a design that preserves the complete canonical
+digest proof.
 
 ### 3. Related evidence and privacy-safe project facets
 

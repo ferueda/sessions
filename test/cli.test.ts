@@ -606,6 +606,7 @@ describe("sessions CLI", () => {
   test("forwards exact bounded entry ranges to show and export", async () => {
     const show = vi.fn<ProgramOptions["show"]>(async () => selectedSnapshot());
     const exportSession = vi.fn<ProgramOptions["export"]>(async () => selectedSnapshot());
+    const digest = "a".repeat(64);
 
     const shown = await invoke(
       [
@@ -615,6 +616,8 @@ describe("sessions CLI", () => {
         "0",
         "--to-entry",
         "199",
+        "--expected-document-digest",
+        digest,
         "--format",
         "json",
       ],
@@ -628,6 +631,8 @@ describe("sessions CLI", () => {
         "7",
         "--to-entry",
         "7",
+        "--expected-document-digest",
+        digest,
         "--format",
         "jsonl",
       ],
@@ -640,6 +645,10 @@ describe("sessions CLI", () => {
         source: { kind: "synthetic", instanceId: "one" },
         nativeId: "session",
       },
+      expectedDocumentDigest: {
+        scheme: "sha256-sessions-document-jcs-v1",
+        digest,
+      },
       fromEntry: 0,
       toEntry: 199,
     });
@@ -647,6 +656,10 @@ describe("sessions CLI", () => {
       identity: {
         source: { kind: "synthetic", instanceId: "one" },
         nativeId: "session",
+      },
+      expectedDocumentDigest: {
+        scheme: "sha256-sessions-document-jcs-v1",
+        digest,
       },
       fromEntry: 7,
       toEntry: 7,
@@ -1141,6 +1154,55 @@ describe("sessions CLI", () => {
     expect(invalidIdentity.exitCode).toBe(2);
     expect(invalidContext.exitCode).toBe(2);
     expect(show).not.toHaveBeenCalled();
+  });
+
+  test("rejects malformed expected document digests before calling handlers", async () => {
+    const show = vi.fn<ProgramOptions["show"]>();
+    const exportSession = vi.fn<ProgramOptions["export"]>();
+
+    const malformed = await invoke(
+      ["show", "synthetic@one:session", "--expected-document-digest", "abc"],
+      { show },
+    );
+    const uppercase = await invoke(
+      [
+        "export",
+        "synthetic@one:session",
+        "--format",
+        "json",
+        "--expected-document-digest",
+        "A".repeat(64),
+      ],
+      { export: exportSession },
+    );
+
+    expect([malformed.exitCode, uppercase.exitCode]).toEqual([2, 2]);
+    expect(show).not.toHaveBeenCalled();
+    expect(exportSession).not.toHaveBeenCalled();
+  });
+
+  test("reports document digest mismatches on stderr without output", async () => {
+    const invocation = await invoke(
+      [
+        "show",
+        "synthetic@one:session",
+        "--expected-document-digest",
+        "a".repeat(64),
+        "--format",
+        "json",
+      ],
+      {
+        show: async () => {
+          throw new SessionLibraryError("document-digest-mismatch");
+        },
+      },
+    );
+
+    expect(invocation).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: "sessions: Retained session does not match the expected document digest\n",
+    });
   });
 
   test("rejects invalid or conflicting entry ranges before calling handlers", async () => {

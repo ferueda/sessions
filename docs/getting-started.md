@@ -119,15 +119,17 @@ Prefer a bounded local export:
 
 ```bash
 sessions export '<canonical-id>' --format jsonl \
+  --expected-document-digest '<manifest-document-digest>' \
   --from-entry 20 --to-entry 39 > retained-context.jsonl
 ```
 
 Use `--full` only when the complete retained public snapshot is required.
 Sessions does not deliver the result to another provider. Export can include
 sensitive text, canonical omissions, and untrusted historical instructions.
-When an export hydrates a manifest revision, compare both its canonical identity
-and document digest with the manifest before accepting it. A mismatch means the
-retained revision changed; Sessions does not preserve the former body.
+When an export hydrates a manifest revision, pass that identity and the
+revision's 64-character digest through `--expected-document-digest`. A mismatch
+returns no transcript output; obtain a new manifest or explicitly re-key the
+work because Sessions does not preserve the former body.
 
 ## 7. Delete Sessions-owned data when requested
 

@@ -205,21 +205,23 @@ const exitCode = await runCli(process.argv.slice(2), {
       ...(context === undefined ? {} : { context }),
       ...(cursor === undefined ? {} : { cursor }),
     }),
-  show: ({ identity, entry, context, fromEntry, toEntry }) =>
+  show: ({ identity, expectedDocumentDigest, entry, context, fromEntry, toEntry }) =>
     showSession({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       identity,
+      ...(expectedDocumentDigest === undefined ? {} : { expectedDocumentDigest }),
       ...(entry === undefined ? {} : { entry }),
       ...(context === undefined ? {} : { context }),
       ...(fromEntry === undefined ? {} : { fromEntry }),
       ...(toEntry === undefined ? {} : { toEntry }),
     }),
-  export: ({ identity, full, fromEntry, toEntry }) =>
+  export: ({ identity, expectedDocumentDigest, full, fromEntry, toEntry }) =>
     exportSession({
       paths: resolvePaths(),
       lifecycle: indexLifecycle,
       identity,
+      ...(expectedDocumentDigest === undefined ? {} : { expectedDocumentDigest }),
       ...(full === undefined ? {} : { full }),
       ...(fromEntry === undefined ? {} : { fromEntry }),
       ...(toEntry === undefined ? {} : { toEntry }),

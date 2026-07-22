@@ -98,7 +98,8 @@ sessions search 'verification failed' --context 2
 sessions entries --actor human --select first
 sessions manifest --format json
 sessions show '<canonical-id>'
-sessions export '<canonical-id>' --format jsonl
+sessions export '<canonical-id>' --format jsonl \
+  --expected-document-digest '<manifest-document-digest>'
 ```
 
 Use a provider-native thread or session ID to find its canonical Sessions ID:
@@ -125,8 +126,8 @@ sessions list --source codex --native-id '<provider-thread-id>'
   bounded context, deterministic ordering, and opaque pagination cursors.
 - Export reads one retained snapshot. It does not deliver context to another
   provider or expose omitted media and raw provider payloads. When hydrating a
-  manifest, accept the export only if both its canonical identity and document
-  digest still match.
+  manifest, supply its digest through `--expected-document-digest`; mismatching
+  transcript content is rejected before output.
 
 See the [CLI contract](docs/reference/cli-contract.md) and
 [structured output contract](docs/reference/structured-output.md) for exact

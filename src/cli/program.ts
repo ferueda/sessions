@@ -25,6 +25,11 @@ import { MAX_LIST_LIMIT } from "../application/list-sessions.ts";
 import { MAX_SEARCH_CONTEXT, MAX_SEARCH_LIMIT } from "../application/search-sessions.ts";
 import { MAX_SHOW_CONTEXT } from "../application/show-session.ts";
 import { isCanonicalTimestamp } from "../domain/canonical-timestamp.ts";
+import {
+  isSessionDocumentDigest,
+  SESSION_DOCUMENT_DIGEST_SCHEME,
+  type SessionDocumentDigest,
+} from "../domain/public-session-document.ts";
 import type {
   SessionManifestFilterInput,
   SessionManifestResult,
@@ -113,6 +118,7 @@ export interface ProgramOptions {
   }) => Promise<SearchSessionsResult>;
   readonly show: (input: {
     readonly identity: SessionIdentity;
+    readonly expectedDocumentDigest?: SessionDocumentDigest;
     readonly entry?: number;
     readonly context?: number;
     readonly fromEntry?: number;
@@ -120,6 +126,7 @@ export interface ProgramOptions {
   }) => Promise<ShowSessionResult>;
   readonly export: (input: {
     readonly identity: SessionIdentity;
+    readonly expectedDocumentDigest?: SessionDocumentDigest;
     readonly full?: boolean;
     readonly fromEntry?: number;
     readonly toEntry?: number;
@@ -377,6 +384,7 @@ export function createProgram(options: ProgramOptions): Command {
     .command("show <canonical-id>")
     .description("Show a retained session transcript")
     .addOption(retainedQueryFormatOption())
+    .addOption(expectedDocumentDigestOption())
     .addOption(
       new Option("--entry <number>", "focus entry ordinal").argParser((value) =>
         parseInteger(value, { minimum: 0 }),
@@ -397,6 +405,9 @@ export function createProgram(options: ProgramOptions): Command {
     const identity = parseIdentity(canonicalId);
     const result = await options.show({
       identity,
+      ...(values.expectedDocumentDigest === undefined
+        ? {}
+        : { expectedDocumentDigest: values.expectedDocumentDigest }),
       ...(values.entry === undefined ? {} : { entry: values.entry }),
       ...(values.context === undefined ? {} : { context: values.context }),
       ...range,
@@ -408,6 +419,7 @@ export function createProgram(options: ProgramOptions): Command {
     .command("export <canonical-id>")
     .description("Export one retained session as portable structured context")
     .addOption(machineFormatOption())
+    .addOption(expectedDocumentDigestOption())
     .option("--full", "include every export-eligible field without presentation bounds");
   addEntryRangeOptions(exportCommand).action(
     async (canonicalId: string, values: ExportOptionValues) => {
@@ -418,6 +430,9 @@ export function createProgram(options: ProgramOptions): Command {
       const identity = parseIdentity(canonicalId);
       const result = await options.export({
         identity,
+        ...(values.expectedDocumentDigest === undefined
+          ? {}
+          : { expectedDocumentDigest: values.expectedDocumentDigest }),
         ...(values.full === true ? { full: true } : {}),
         ...range,
       });
@@ -542,6 +557,7 @@ interface EntriesOptionValues extends SessionOptionValues {
 
 interface ShowOptionValues {
   readonly format: RetainedQueryOutputFormat;
+  readonly expectedDocumentDigest?: SessionDocumentDigest;
   readonly entry?: number;
   readonly context?: number;
   readonly fromEntry?: number;
@@ -550,6 +566,7 @@ interface ShowOptionValues {
 
 interface ExportOptionValues {
   readonly format: ExportOutputFormat;
+  readonly expectedDocumentDigest?: SessionDocumentDigest;
   readonly full?: boolean;
   readonly fromEntry?: number;
   readonly toEntry?: number;
@@ -729,6 +746,13 @@ function addEntryRangeOptions(command: Command): Command {
     );
 }
 
+function expectedDocumentDigestOption(): Option {
+  return new Option(
+    "--expected-document-digest <digest>",
+    "require the retained document digest",
+  ).argParser(parseExpectedDocumentDigest);
+}
+
 function entryRangeInput(
   values: EntryRangeOptionValues,
 ): { readonly fromEntry: number; readonly toEntry: number } | undefined {
@@ -817,6 +841,17 @@ function parseTimestamp(value: string): string {
     throw new InvalidArgumentError("expected a canonical UTC timestamp");
   }
   return value;
+}
+
+function parseExpectedDocumentDigest(value: string): SessionDocumentDigest {
+  const candidate = {
+    scheme: SESSION_DOCUMENT_DIGEST_SCHEME,
+    digest: value,
+  };
+  if (!isSessionDocumentDigest(candidate)) {
+    throw new InvalidArgumentError("expected a 64-character lowercase hexadecimal document digest");
+  }
+  return Object.freeze(candidate);
 }
 
 function parseNonEmptyValue(value: string): string {

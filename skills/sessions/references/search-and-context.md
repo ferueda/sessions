@@ -20,12 +20,16 @@ research, recall, or context-transfer question.
 jsonl` or tool/kind filters when textless structure narrows the corpus better
    than another text query.
 4. Inspect exact evidence with `sessions show '<canonical-id>' --entry <n>
---context <n> --format json` or a bounded `--from-entry`/`--to-entry` range.
+--context <n> --format json` or a bounded `--from-entry`/`--to-entry` range. When
+   the identity came from a manifest, also pass
+   `--expected-document-digest '<manifest-document-digest>'`.
 
 ## Prepare context
 
 - Prefer a bounded local extraction:
-  `sessions export '<canonical-id>' --format jsonl --from-entry <a> --to-entry <b>`.
+  `sessions export '<canonical-id>' --format jsonl --from-entry <a> --to-entry <b>
+--expected-document-digest '<manifest-document-digest>'` when hydrating a
+  manifest revision.
 - Use `--full` only when the user explicitly needs the complete retained public
   snapshot and accepts the sensitivity and size.
 - Return the exact canonical ID and export command. Write a local artifact only

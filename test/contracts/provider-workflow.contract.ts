@@ -235,6 +235,21 @@ async function exerciseProviderWorkflow(fixture: ProviderWorkflowFixture): Promi
   });
   expect(shown.snapshot).toMatchObject({ lineageCoverage: fixture.expectedLineageCoverage });
   expect(shown.entries.map((entry) => entry.ordinal)).toEqual([0]);
+  const guardedInitial = json(
+    await invokeReadOnly(fixture, invoke, [
+      "show",
+      targetId,
+      "--entry",
+      "0",
+      "--context",
+      "0",
+      "--expected-document-digest",
+      fixture.expectedDocumentDigests.initial,
+      "--format",
+      "json",
+    ]),
+  );
+  expect(guardedInitial).toEqual(shown);
 
   const exported = json(
     await invokeReadOnly(fixture, invoke, ["export", targetId, "--format", "json", "--full"]),
@@ -264,6 +279,41 @@ async function exerciseProviderWorkflow(fixture: ProviderWorkflowFixture): Promi
     scheme: DOCUMENT_DIGEST_SCHEME,
     digest: fixture.expectedDocumentDigests.changed,
   });
+  const rejectedInitial = await invokeWithoutProviderMutation(fixture, invoke, [
+    "show",
+    targetId,
+    "--from-entry",
+    "0",
+    "--to-entry",
+    "0",
+    "--expected-document-digest",
+    fixture.expectedDocumentDigests.initial,
+    "--format",
+    "json",
+  ]);
+  expect(rejectedInitial).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: "sessions: Retained session does not match the expected document digest\n",
+  });
+  const guardedChanged = json(
+    await invokeReadOnly(fixture, invoke, [
+      "export",
+      targetId,
+      "--from-entry",
+      "0",
+      "--to-entry",
+      "0",
+      "--expected-document-digest",
+      fixture.expectedDocumentDigests.changed,
+      "--format",
+      "json",
+    ]),
+  );
+  expect(guardedChanged).toMatchObject({
+    snapshot: { documentDigest: changedDigest },
+    entries: [{ ordinal: 0 }],
+  });
 
   await fixture.omitTarget();
   const missing = json(
@@ -277,7 +327,16 @@ async function exerciseProviderWorkflow(fixture: ProviderWorkflowFixture): Promi
   );
   expect(missing.counts).toEqual(counts({ discovered: 1, unchanged: 1, missing: 1 }));
   expect(
-    json(await invokeReadOnly(fixture, invoke, ["show", targetId, "--format", "json"])).snapshot,
+    json(
+      await invokeReadOnly(fixture, invoke, [
+        "show",
+        targetId,
+        "--expected-document-digest",
+        fixture.expectedDocumentDigests.changed,
+        "--format",
+        "json",
+      ]),
+    ).snapshot,
   ).toMatchObject({
     documentDigest: changedDigest,
     freshness: "current",
@@ -441,11 +500,19 @@ async function invokeReadOnly(
   invoke: (argv: readonly string[]) => Promise<InvocationResult>,
   argv: readonly string[],
 ): Promise<InvocationResult> {
+  const result = await invokeWithoutProviderMutation(fixture, invoke, argv);
+  expect(result.stderr).toBe("");
+  return result;
+}
+
+async function invokeWithoutProviderMutation(
+  fixture: ProviderWorkflowFixture,
+  invoke: (argv: readonly string[]) => Promise<InvocationResult>,
+  argv: readonly string[],
+): Promise<InvocationResult> {
   const before = await fixture.snapshotProvider();
   try {
-    const result = await invoke(argv);
-    expect(result.stderr).toBe("");
-    return result;
+    return await invoke(argv);
   } finally {
     expect(await fixture.snapshotProvider()).toEqual(before);
   }

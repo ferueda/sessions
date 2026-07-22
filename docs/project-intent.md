@@ -1,7 +1,7 @@
 # Project intent
 
 - Status: accepted product baseline
-- Last updated: 2026-07-21
+- Last updated: 2026-07-22
 
 ## Purpose
 
@@ -38,11 +38,12 @@ portable historical context. Markdown presentation remains post-V1 work.
 ## Post-V1 direction
 
 Sessions now makes batch selection coherent through atomic, transcript-free
-revision manifests. The next ordered work is digest-guarded coordinate reads,
-then provider-neutral related-session traversal and an explicit privacy-safe
-local project-context projection. Sessions remains the local evidence layer
-that records what was retained and where. The Agent Skill and other consumers
-own meaning, causality, outcomes, and recommendations.
+revision manifests and conditionally hydrates exact entries or bounded ranges
+only when the caller's expected document digest still matches. The next ordered
+work is provider-neutral related-session traversal, then an explicit
+privacy-safe local project-context projection. Sessions remains the local
+evidence layer that records what was retained and where. The Agent Skill and
+other consumers own meaning, causality, outcomes, and recommendations.
 
 Historical revision pinning or archives, canonical schema and coverage
 expansion, and chunked or streamed full export remain evidence-gated. Each must

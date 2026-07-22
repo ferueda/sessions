@@ -49,10 +49,11 @@ question requires.
    explicitly requests one and supplies or approves an in-scope destination.
 5. Inspect the most relevant hits with bounded `show` ranges. Check nearby
    context and directly linked observed tool calls/results before interpreting a
-   snippet. When hydrating a manifest revision with `show` or `export`, accept it
-   only if both the canonical identity and complete document digest match the
-   manifest. On mismatch, retry the manifest or re-key the work; never claim the
-   former body remains retained.
+   snippet. When hydrating a manifest revision with `show` or `export`, use its
+   canonical identity and pass its 64-character digest through
+   `--expected-document-digest`. On mismatch no transcript is returned: retry
+   the manifest or explicitly re-key the work; never claim the former body
+   remains retained.
 6. Report observed facts before interpretation.
 7. Keep support units distinct:
    - occurrence count: every matching text appearance;

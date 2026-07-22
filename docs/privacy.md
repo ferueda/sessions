@@ -1,7 +1,7 @@
 # Privacy contract
 
 - Status: current supported behavior
-- Last updated: 2026-07-21
+- Last updated: 2026-07-22
 
 Sessions handles sensitive local history. Privacy behavior is a product contract,
 not a best-effort feature.
@@ -20,6 +20,9 @@ not a best-effort feature.
   Neither case automatically deletes retained content.
 - List, search, entries, manifest, show, and export use only the Sessions library
   after indexing. They never reopen a provider transcript.
+- Show and export can require an expected complete public-document digest. A
+  mismatch returns no transcript output, reveals neither digest, and never
+  retrieves an older revision or silently retries against the current one.
 - No TTL or automatic pruning exists. Only explicit `sessions forget`,
   `sessions data repair-orphans`, or `sessions data clear --yes` removes
   canonical content.
@@ -231,6 +234,9 @@ Retained query attribution now requires successful capture time, effective
 source-observation time, last-good adapter version, source state/freshness, and
 the stored digest. Show reads attribution and the document under one immutable
 library snapshot and verifies the digest before returning canonical content.
+Show/export can additionally compare a caller's expected digest before resolving
+actual entry bounds. The guard covers the public document, so attribution-only
+changes can still match and are reported as current values.
 List/search/entries/manifest read the stored digest directly and do not reopen providers.
 Activity bounds use retained `updatedAt`, falling back to retained `createdAt`;
 they add no provider read or stored field.
@@ -252,8 +258,8 @@ lineage coverage, and the exact stored document metrics. It excludes title,
 workspace, transcript/excerpts, content hashes, relation graphs, locators,
 source metadata, provider paths, attachment references, library identity, writer
 generation, leases, and fingerprints. A manifest is not a lease or archive. A
-later show/export must match both canonical identity and document digest or the
-consumer must retry or re-key the work.
+later show/export can supply its digest guard so mismatching content is rejected
+before output; the consumer must then retry the manifest or re-key the work.
 
 Every transcript-bearing JSON/JSONL record is labeled
 `disposition: "untrusted-history"`. This label and JSON escaping do not make

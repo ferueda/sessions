@@ -1,9 +1,13 @@
 import { SessionLibraryError } from "./library-error.ts";
+import { admitExpectedDocumentDigest, requireExpectedSession } from "./guard-session-document.ts";
 import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
 import { admitSessionEntryRange, resolveSessionEntryWindow } from "./session-entry-range.ts";
 import { selectSessionTranscript, type SelectedSessionTranscript } from "./session-presentation.ts";
-import { projectPublicSessionDocument } from "../domain/public-session-document.ts";
+import {
+  projectPublicSessionDocument,
+  type SessionDocumentDigest,
+} from "../domain/public-session-document.ts";
 import type { SessionIdentity } from "../domain/session.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
 
@@ -17,12 +21,14 @@ export async function showSession(input: {
   readonly paths: IndexPaths;
   readonly lifecycle: IndexLifecycle;
   readonly identity: SessionIdentity;
+  readonly expectedDocumentDigest?: SessionDocumentDigest;
   readonly entry?: number;
   readonly context?: number;
   readonly fromEntry?: number;
   readonly toEntry?: number;
 }): Promise<ShowSessionResult> {
   formatSessionIdentity(input.identity);
+  const expectedDocumentDigest = admitExpectedDocumentDigest(input.expectedDocumentDigest);
   const entryRange = admitSessionEntryRange(input);
   validateSelection(input.entry, input.context, entryRange !== undefined);
   const state = await input.lifecycle.inspect(input.paths);
@@ -30,8 +36,10 @@ export async function showSession(input: {
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
   return withReader(input.lifecycle, input.paths, async (reader) => {
-    const indexed = await reader.sessions.getSession(input.identity);
-    if (indexed === undefined) throw new SessionLibraryError("session-not-found");
+    const indexed = requireExpectedSession(
+      await reader.sessions.getSession(input.identity),
+      expectedDocumentDigest,
+    );
     const total = indexed.document.entries.length;
     let start = 0;
     let end = Math.min(total, DEFAULT_SHOW_ENTRY_COUNT);

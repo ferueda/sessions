@@ -61,8 +61,8 @@ evidence availability. `paths` does not prove canonical or FTS integrity; the
 exact whole-library doctor remains an explicit audit for suspected damage and
 post-repair or post-maintenance verification. The protocol also requires
 explicit indexing authority, bounded JSON/JSONL queries, a reproducible evidence
-ledger, facts before interpretation, honest support units and unknowns, and no
-automatic mutation.
+ledger, digest-guarded manifest hydration, facts before interpretation, honest
+support units and unknowns, and no automatic mutation.
 
 ## Evidence limits
 

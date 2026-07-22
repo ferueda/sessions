@@ -1,4 +1,5 @@
 export type SessionLibraryErrorCode =
+  | "document-digest-mismatch"
   | "entry-not-found"
   | "library-busy"
   | "library-unavailable"
@@ -16,6 +17,8 @@ export class SessionLibraryError extends Error {
 
 function libraryErrorMessage(code: SessionLibraryErrorCode): string {
   switch (code) {
+    case "document-digest-mismatch":
+      return "Retained session does not match the expected document digest";
     case "entry-not-found":
       return "Session entry was not found";
     case "library-busy":
