@@ -22,6 +22,7 @@ import {
   applyMigrations,
   CURRENT_INDEX_SCHEMA_VERSION,
 } from "../../src/infrastructure/sqlite/migrations.ts";
+import { INDEX_GENERATION_RECEIPT_TABLE } from "../../src/infrastructure/sqlite/migrations/0003-index-generation-receipt.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
 import { decodeSqliteDocumentDigest } from "../../src/infrastructure/sqlite/sqlite-document-digest.ts";
 import { createCoordinatedSqliteSessionIndex } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
@@ -37,6 +38,93 @@ import {
 
 describe("SQLite session index", () => {
   runSessionIndexContract(createFixture);
+
+  test("advances the recovery receipt once for every durable writer mutation", async () => {
+    const database = migratedDatabase();
+    const index = createIndex(database);
+    try {
+      const baselineIdentity = identity("receipt-boundary-profile", "baseline");
+      const replacementIdentity = identity("receipt-boundary-profile", "replacement");
+      const failedIdentity = identity("receipt-boundary-profile", "failed");
+      const baseline = replacement(
+        baselineIdentity,
+        "baseline-a",
+        minimalDocument(baselineIdentity),
+      );
+      const admitted = replacement(
+        replacementIdentity,
+        "replacement-a",
+        minimalDocument(replacementIdentity),
+      );
+
+      expect(receiptSequence(database)).toBe(0);
+      const seedRun = await index.startRun({
+        source: baselineIdentity.source,
+        startedAt: "2026-07-13T09:00:00.000Z",
+      });
+      expect(receiptSequence(database)).toBe(1);
+      await index.replaceSession(seedRun, baseline);
+      expect(receiptSequence(database)).toBe(2);
+      await finishCompleted(index, seedRun, counts({ discovered: 1, updated: 1 }));
+      expect(receiptSequence(database)).toBe(3);
+
+      const run = await index.startRun({
+        source: baselineIdentity.source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      expect(receiptSequence(database)).toBe(4);
+      await index.recordUnchangedBatch(run, [baseline.observation]);
+      expect(receiptSequence(database)).toBe(5);
+      await index.recordFailure(run, observation(failedIdentity, "failed-a"), "malformed");
+      expect(receiptSequence(database)).toBe(6);
+      await index.replaceSession(run, admitted);
+      expect(receiptSequence(database)).toBe(7);
+      await index.recordMissingBatch(run, [baselineIdentity]);
+      expect(receiptSequence(database)).toBe(8);
+      await finishCompleted(
+        index,
+        run,
+        counts({ discovered: 3, unchanged: 1, updated: 1, failed: 1, missing: 1 }),
+      );
+      expect(receiptSequence(database)).toBe(9);
+
+      const failedReplacementRun = await index.startRun({
+        source: baselineIdentity.source,
+        startedAt: "2026-07-13T11:00:00.000Z",
+      });
+      expect(receiptSequence(database)).toBe(10);
+      database.exec(
+        `CREATE TEMP TRIGGER test_abort_receipt_matrix_replacement
+         BEFORE UPDATE OF last_good_fingerprint_digest ON sessions_session_tracking
+         BEGIN
+           SELECT RAISE(ABORT, 'forced receipt matrix replacement failure');
+         END`,
+      );
+      const next = replacement(baselineIdentity, "baseline-b", minimalDocument(baselineIdentity));
+
+      await expect(index.replaceSession(failedReplacementRun, next)).rejects.toThrow(
+        /forced receipt matrix replacement failure/u,
+      );
+
+      // The failed replacement rolls back. Its separately committed
+      // repository-write failure is the one certified mutation.
+      expect(receiptSequence(database)).toBe(11);
+      await expect(index.getDocument(baselineIdentity)).resolves.toEqual(baseline.document);
+      await expect(index.getFreshness(baselineIdentity)).resolves.toMatchObject({
+        status: "stale",
+        latest: { outcome: "failed", failure: "repository-write" },
+      });
+      database.exec("DROP TRIGGER test_abort_receipt_matrix_replacement");
+      await finishCompleted(
+        index,
+        failedReplacementRun,
+        counts({ discovered: 1, failed: 1, stale: 1 }),
+      );
+      expect(receiptSequence(database)).toBe(12);
+    } finally {
+      database.close();
+    }
+  });
 
   test("bounds freshness and tracked pages across 128, 129, and 257 identities", async () => {
     const database = migratedDatabase();
@@ -839,6 +927,7 @@ describe("SQLite session index", () => {
         finishedAt: "2026-07-13T12:31:00.000Z",
       });
       expect(otherResult.counts).toEqual(counts());
+      const sequenceBeforeRetention = receiptSequence(database);
       for (let ordinal = 0; ordinal < 25; ordinal += 1) {
         const day = String(ordinal + 1).padStart(2, "0");
         const run = await index.startRun({
@@ -851,6 +940,7 @@ describe("SQLite session index", () => {
         });
         expect(result.counts).toEqual(counts());
       }
+      expect(receiptSequence(database)).toBe(sequenceBeforeRetention + 50);
 
       expect(
         database
@@ -929,13 +1019,69 @@ describe("SQLite session index", () => {
            SELECT RAISE(IGNORE);
          END`,
       );
+      const sequenceBeforeFailure = receiptSequence(database);
 
       await expect(
         index.startRun({ source, startedAt: "2026-07-13T11:00:00.000Z" }),
       ).rejects.toMatchObject({ code: "corrupt-data" });
 
       expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeFailure);
       expect(rowCount(database, "sessions_index_runs")).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back finish state and receipt when its coverage postcondition fails", async () => {
+    const database = migratedDatabase();
+    let integrityUncertain = false;
+    const index = createIndex(database, () => {
+      integrityUncertain = true;
+    });
+    try {
+      const source = identity("finish-receipt-profile", "seed").source;
+      const run = await index.startRun({
+        source,
+        startedAt: "2026-07-13T10:00:00.000Z",
+      });
+      database.exec(
+        `CREATE TEMP TRIGGER test_ignore_finish_coverage
+         BEFORE UPDATE OF coverage_status ON sessions_source_instances
+         WHEN new.coverage_status = 'complete'
+         BEGIN
+           SELECT RAISE(IGNORE);
+         END`,
+      );
+      const sequenceBeforeFailure = receiptSequence(database);
+
+      await expect(
+        index.finishRun(run, {
+          status: "completed",
+          finishedAt: "2026-07-13T11:00:00.000Z",
+        }),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+
+      expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeFailure);
+      expect(
+        database
+          .prepare("SELECT status, finished_at FROM sessions_index_runs WHERE run_id = ?")
+          .get(Number(run.id)),
+      ).toEqual({ status: "active", finished_at: null });
+      expect(
+        database
+          .prepare(
+            `SELECT coverage_status
+             FROM sessions_source_instances
+             WHERE instance_id = ?`,
+          )
+          .get(source.instanceId),
+      ).toEqual({ coverage_status: "unknown" });
+
+      database.exec("DROP TRIGGER test_ignore_finish_coverage");
+      await finishCompleted(index, run, counts());
+      expect(receiptSequence(database)).toBe(sequenceBeforeFailure + 1);
     } finally {
       database.close();
     }
@@ -967,12 +1113,14 @@ describe("SQLite session index", () => {
            SELECT RAISE(IGNORE);
          END`,
       );
+      const sequenceBeforeFailure = receiptSequence(database);
 
       await expect(index.recordUnchangedBatch(run, [admitted.observation])).rejects.toMatchObject({
         code: "corrupt-data",
       });
 
       expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeFailure);
       await expect(index.getFreshness(sessionIdentity)).resolves.toEqual({
         status: "current",
         identity: sessionIdentity,
@@ -1013,6 +1161,7 @@ describe("SQLite session index", () => {
         source: firstIdentity.source,
         startedAt: "2026-07-13T10:00:00.000Z",
       });
+      const sequenceBeforeUnchangedFailure = receiptSequence(database);
 
       await expect(
         index.recordUnchangedBatch(run, [
@@ -1021,6 +1170,7 @@ describe("SQLite session index", () => {
         ]),
       ).rejects.toMatchObject({ code: "invalid-state" });
       expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeUnchangedFailure);
       await expect(index.getFreshnessBatch(run, [firstIdentity, secondIdentity])).resolves.toEqual([
         {
           status: "current",
@@ -1051,10 +1201,12 @@ describe("SQLite session index", () => {
            SELECT RAISE(ABORT, 'forced missing batch failure');
          END`,
       );
+      const sequenceBeforeMissingFailure = receiptSequence(database);
       await expect(index.recordMissingBatch(run, [firstIdentity, secondIdentity])).rejects.toThrow(
         /forced missing batch failure/u,
       );
       expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeMissingFailure);
       expect(
         database
           .prepare(
@@ -1102,12 +1254,14 @@ describe("SQLite session index", () => {
            SELECT RAISE(IGNORE);
          END`,
       );
+      const sequenceBeforeFailure = receiptSequence(database);
 
       await expect(index.recordMissingBatch(run, [sessionIdentity])).rejects.toMatchObject({
         code: "corrupt-data",
       });
 
       expect(integrityUncertain).toBe(true);
+      expect(receiptSequence(database)).toBe(sequenceBeforeFailure);
       await expect(index.getFreshness(sessionIdentity)).resolves.toMatchObject({
         status: "current",
       });
@@ -1301,6 +1455,24 @@ function rowCount(database: DatabaseSync, table: string): number {
     readonly count: number | bigint;
   };
   return Number(row.count);
+}
+
+function receiptSequence(database: DatabaseSync): number {
+  const row = database
+    .prepare(
+      `SELECT operation_sequence
+       FROM ${INDEX_GENERATION_RECEIPT_TABLE}
+       WHERE singleton = 1`,
+    )
+    .get() as { readonly operation_sequence?: unknown } | undefined;
+  if (
+    typeof row?.operation_sequence !== "number" ||
+    !Number.isSafeInteger(row.operation_sequence) ||
+    row.operation_sequence < 0
+  ) {
+    throw new Error("Expected a valid writer recovery receipt sequence");
+  }
+  return row.operation_sequence;
 }
 
 function readRunMutationCounts(database: DatabaseSync, runId: string): Record<string, unknown> {

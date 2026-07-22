@@ -31,7 +31,10 @@ import {
   startWriterLeaseHeartbeat,
   type WriterLeaseScheduler,
 } from "../../src/infrastructure/sqlite/writer-lease.ts";
-import { initializeWriterRecoveryReceipt } from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
+import {
+  initializeWriterRecoveryReceipt,
+  type WriterRecoveryReceipt,
+} from "../../src/infrastructure/sqlite/writer-recovery-receipt.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -375,6 +378,78 @@ describe("SQLite writer coordination", () => {
         generation: 2,
         purpose: "index",
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back the generation and receipt when acquisition fails before commit", () => {
+    const database = migratedDatabase();
+    const clock = fakeClock("2026-07-13T12:00:00.000Z");
+    try {
+      const abandonedLease = acquireWriterLease(database, "index", {
+        now: clock.now,
+        token: () => "rollback-abandoned-owner",
+      });
+      const runId = insertActiveRun(database);
+      initializeWriterRecoveryReceipt(database, abandonedLease, {
+        now: clock.now,
+        schemaVersion: CURRENT_INDEX_SCHEMA_VERSION,
+      });
+      const leaseBefore = leaseRow(database);
+      const receiptBefore = receiptRow(database);
+      database.exec(`CREATE TEMP TRIGGER test_fail_takeover_receipt_clear
+                     BEFORE DELETE ON sessions_index_generation_receipt
+                     BEGIN
+                       SELECT RAISE(ABORT, 'synthetic acquisition failure');
+                     END`);
+
+      clock.set("2026-07-13T12:01:00.000Z");
+      expect(() =>
+        acquireWriterSchema(database, "index", sqliteMigrations, {
+          now: clock.now,
+          token: () => "rollback-failed-takeover",
+        }),
+      ).toThrow("synthetic acquisition failure");
+
+      expect(leaseRow(database)).toEqual(leaseBefore);
+      expect(receiptRow(database)).toEqual(receiptBefore);
+      expect(
+        database
+          .prepare(
+            `SELECT status, finished_at, failure_code
+             FROM sessions_index_runs
+             WHERE run_id = ?`,
+          )
+          .get(runId),
+      ).toEqual({ status: "active", finished_at: null, failure_code: null });
+
+      database.exec("DROP TRIGGER temp.test_fail_takeover_receipt_clear");
+      const replacement = acquireWriterSchema(database, "index", sqliteMigrations, {
+        now: clock.now,
+        token: () => "rollback-successful-takeover",
+      });
+      expect(replacement).toMatchObject({
+        lease: { generation: abandonedLease.generation + 1, purpose: "index" },
+        certifiedRecoveryCandidate: receiptBefore,
+      });
+      expect(receiptRow(database)).toBeUndefined();
+      expect(
+        database
+          .prepare(
+            `SELECT status, finished_at, failure_code
+             FROM sessions_index_runs
+             WHERE run_id = ?`,
+          )
+          .get(runId),
+      ).toEqual({
+        status: "interrupted",
+        finished_at: "2026-07-13T12:01:00.000Z",
+        failure_code: "interrupted",
+      });
+      expect(
+        interruptOwnedRunsAndReleaseWriterLease(database, replacement.lease, { now: clock.now }),
+      ).toBe(true);
     } finally {
       database.close();
     }
@@ -894,6 +969,34 @@ async function fileBackedDatabases(): Promise<{
 
 function leaseRow(database: DatabaseSync): unknown {
   return database.prepare("SELECT * FROM sessions_writer_lease WHERE singleton = 1").get();
+}
+
+function receiptRow(database: DatabaseSync): WriterRecoveryReceipt | undefined {
+  const row = database
+    .prepare(
+      `SELECT receipt_version, writer_generation, schema_version, schema_cookie,
+              operation_sequence
+       FROM sessions_index_generation_receipt
+       WHERE singleton = 1`,
+    )
+    .get() as
+    | {
+        readonly receipt_version: number;
+        readonly writer_generation: number;
+        readonly schema_version: number;
+        readonly schema_cookie: number;
+        readonly operation_sequence: number;
+      }
+    | undefined;
+  return row === undefined
+    ? undefined
+    : {
+        receiptVersion: 1,
+        writerGeneration: row.writer_generation,
+        schemaVersion: row.schema_version,
+        schemaCookie: row.schema_cookie,
+        operationSequence: row.operation_sequence,
+      };
 }
 
 function insertActiveRun(database: DatabaseSync): number {
