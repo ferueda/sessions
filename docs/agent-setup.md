@@ -11,7 +11,7 @@ The agent may install the CLI and skill after the user approves network access
 and global package changes:
 
 ```bash
-export SESSIONS_VERSION='0.3.1' # x-release-please-version
+export SESSIONS_VERSION='0.4.0' # x-release-please-version
 npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
 DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
   "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \

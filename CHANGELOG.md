@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0](https://github.com/ferueda/sessions/compare/v0.3.1...v0.4.0) (2026-07-22)
+
+
+### Features
+
+* certify crash-safe index recovery ([cae8651](https://github.com/ferueda/sessions/commit/cae8651144bd0c1c89dc41f06900524efa3cb948))
+* certify index crash recovery ([493b797](https://github.com/ferueda/sessions/commit/493b79750b5e55ce14cfb6a17a65e6c394f00aee))
+
+
+### Bug Fixes
+
+* harden certified recovery boundaries ([4c19354](https://github.com/ferueda/sessions/commit/4c193541a80d5416e65082fbf699bc57dbd14978))
+
+
+### Performance Improvements
+
+* streamline provider discovery ([7063492](https://github.com/ferueda/sessions/commit/706349261dd5f05a90e8fda200cf8baec8ab7c75))
+* streamline provider discovery ([11ecc85](https://github.com/ferueda/sessions/commit/11ecc85e5977a0f2c0e33a8d79607e7e3dc1c369))
+
 ## [0.3.1](https://github.com/ferueda/sessions/compare/v0.3.0...v0.3.1) (2026-07-22)
 
 
