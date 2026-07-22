@@ -1,7 +1,7 @@
 # Structured output contract
 
 - Status: current schema 1 behavior
-- Last updated: 2026-07-21
+- Last updated: 2026-07-22
 
 This reference owns the machine-readable output of `sessions list`,
 `sessions search`, `sessions entries`, `sessions manifest`, `sessions show`, and
@@ -27,9 +27,11 @@ sessions entries [filters] [--select all|first|last] [--limit N] [--cursor TOKEN
                            [--format human|json|jsonl]
 sessions manifest [session filters except workspace] --format json|jsonl
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
+                             [--expected-document-digest DIGEST]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
                                [--full | --from-entry N --to-entry N]
+                               [--expected-document-digest DIGEST]
 ```
 
 List, search, entries, and show default to `human`. Manifest and export require
@@ -58,6 +60,13 @@ without normalization. Presentation selection and truncation do not change it.
 It is stable across root identity, output formats, and later source-state
 observations, but it is not identity, authentication, a signature, proof of
 safety, or proof of lineage.
+
+When supplied, `--expected-document-digest` is a read precondition rather than
+an output field. A match leaves the existing schema-1 result unchanged. A
+mismatch is an operational failure with no JSON/JSONL stdout and reveals neither
+digest; the caller must obtain a new manifest or explicitly re-key. The guard
+covers the public document only, so current attribution fields can differ while
+the content still matches.
 
 ## Atomic output and encoded-size limit
 
@@ -88,7 +97,8 @@ Format does not enter list/search/entries query fingerprints. The same opaque
 cursor can continue the same query in human, JSON, or JSONL format. An empty
 list, search, or entries result still emits a page record and exits `0`; an empty
 manifest emits one manifest envelope and exits `0`. An absent show or export
-exits `1`.
+exits `1`. A valid expected-document mismatch also exits `1` before output and
+before an out-of-document coordinate is assessed.
 
 ## Selection and bounds
 
@@ -131,7 +141,9 @@ Range selection changes only which entries enter bounded presentation. Segment
 and text limits can still omit or truncate content inside selected entries. The
 document digest always covers the complete retained document. The current
 reader reconstructs and validates that complete document before selecting a
-range, so a range bounds returned evidence rather than storage read cost.
+range, so a range bounds returned evidence rather than storage read cost. An
+optional expected digest is compared after complete validation and before actual
+entry bounds; it does not change selection metadata or record inventory.
 
 Relations, entries, and segments are processed in canonical order. An omitted
 canonical segment uses a segment slot but no text bytes. An entry already

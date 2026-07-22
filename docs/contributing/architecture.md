@@ -1,8 +1,8 @@
 # Current architecture
 
-Status: the post-V1 revision-manifest milestone and certified index-recovery
-work are complete over the provider-neutral library, query, export, and
-maintenance contracts.
+Status: the post-V1 revision-manifest, digest-guarded coordinate-read, and
+certified index-recovery milestones are complete over the provider-neutral
+library, query, export, and maintenance contracts.
 
 This map describes code that exists now. The
 [architecture memo](../architecture-memo.md) describes the accepted V1 target.
@@ -35,6 +35,7 @@ index
 list / search / entries / manifest / show / export
   -> src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session,export-session}.ts
   -> shared application selection and truncation
+  -> show/export only: optional expected-document-digest guard before bounds
   -> immutable library reader (no adapter)
   -> src/infrastructure/sqlite/sqlite-session-query.ts (list/search/entries)
   -> src/infrastructure/sqlite/sqlite-session-entry-query.ts (entries only)
@@ -62,34 +63,34 @@ remain strict.
 
 ## Ownership
 
-| Path                                                                                                           | Owner                                                                                                                                        |
-| -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/domain/`                                                                                                  | Canonical values, public projection/JCS digest, document metrics, manifest/query values, identity, provenance, capture scope, and validation |
-| `src/application/ports/`                                                                                       | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts                                                             |
-| `src/application/source-*.ts`                                                                                  | Complete input fingerprints and typed source failures                                                                                        |
-| `src/application/validate-session.ts`                                                                          | Immutable adapter-read admission                                                                                                             |
-| `src/application/discover-sessions.ts`                                                                         | Complete discovery admission, duplicate policy, and deterministic ordering                                                                   |
-| `src/application/run-index.ts`                                                                                 | Provider-neutral incremental capture and source-presence reconciliation                                                                      |
-| `src/application/index-timing.ts`                                                                              | Optional best-effort measurement around existing indexing operations                                                                         |
-| `src/application/{doctor-progress,doctor-timing}.ts`                                                           | Fixed best-effort doctor phases and measurement around existing health operations                                                            |
-| `src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                                                                            |
-| `src/application/export-session.ts`                                                                            | Provider-free one-snapshot export and bounded/full selection                                                                                 |
-| `src/application/session-presentation.ts`                                                                      | Shared title, relation, entry, segment, and UTF-8 text selection                                                                             |
-| `src/application/session-root-presentation.ts`                                                                 | Query-derived known/unknown root copying                                                                                                     |
-| `src/application/*report.ts`                                                                                   | Versioned provider-neutral operational reports                                                                                               |
-| `src/adapters/cursor/`                                                                                         | Cursor path/store discovery and canonical normalization                                                                                      |
-| `src/adapters/codex/`                                                                                          | Codex path/state/rollout discovery and canonical normalization                                                                               |
-| `src/infrastructure/state/`                                                                                    | Application-data paths, state inspection, and leased ephemeral capture workspace                                                             |
-| `src/infrastructure/sqlite/`                                                                                   | Schema, canonical/query and capture-scope readers, cursors, FTS repair, clean/recovery proof, leases, and maintenance                        |
-| `src/infrastructure/runtime/index-timings.ts`                                                                  | In-memory allowlisted indexing timing aggregation                                                                                            |
-| `src/infrastructure/runtime/doctor-timings.ts`                                                                 | In-memory allowlisted doctor timing aggregation                                                                                              |
-| `src/cli/structured-output.ts`                                                                                 | Closed schema-1 DTO construction, recursive validation, and freezing                                                                         |
-| `src/cli/*structured*`, `encode-*-output.ts`                                                                   | JSON/JSONL encoding and aggregate output admission                                                                                           |
-| `src/cli/`                                                                                                     | Command grammar, terminal-safe rendering, streams, and exit behavior                                                                         |
-| `src/bin/`                                                                                                     | Sole concrete composition root                                                                                                               |
-| `skills/sessions/`                                                                                             | Model-invoked routing plus evidence-first analysis playbooks over the public CLI                                                             |
-| `scripts/`                                                                                                     | Build and delivery smoke helpers; not published runtime                                                                                      |
-| `test/`                                                                                                        | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence                                                       |
+| Path                                                                                                                                  | Owner                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/domain/`                                                                                                                         | Canonical values, public projection/JCS digest, document metrics, manifest/query values, identity, provenance, capture scope, and validation |
+| `src/application/ports/`                                                                                                              | Source, library, query, lifecycle, maintenance, health, and diagnostic contracts                                                             |
+| `src/application/source-*.ts`                                                                                                         | Complete input fingerprints and typed source failures                                                                                        |
+| `src/application/validate-session.ts`                                                                                                 | Immutable adapter-read admission                                                                                                             |
+| `src/application/discover-sessions.ts`                                                                                                | Complete discovery admission, duplicate policy, and deterministic ordering                                                                   |
+| `src/application/run-index.ts`                                                                                                        | Provider-neutral incremental capture and source-presence reconciliation                                                                      |
+| `src/application/index-timing.ts`                                                                                                     | Optional best-effort measurement around existing indexing operations                                                                         |
+| `src/application/{doctor-progress,doctor-timing}.ts`                                                                                  | Fixed best-effort doctor phases and measurement around existing health operations                                                            |
+| `src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session,guard-session-document}.ts` | Provider-free retained-library reads, query admission, digest guards, and bounds                                                             |
+| `src/application/export-session.ts`                                                                                                   | Provider-free one-snapshot export and bounded/full selection                                                                                 |
+| `src/application/session-presentation.ts`                                                                                             | Shared title, relation, entry, segment, and UTF-8 text selection                                                                             |
+| `src/application/session-root-presentation.ts`                                                                                        | Query-derived known/unknown root copying                                                                                                     |
+| `src/application/*report.ts`                                                                                                          | Versioned provider-neutral operational reports                                                                                               |
+| `src/adapters/cursor/`                                                                                                                | Cursor path/store discovery and canonical normalization                                                                                      |
+| `src/adapters/codex/`                                                                                                                 | Codex path/state/rollout discovery and canonical normalization                                                                               |
+| `src/infrastructure/state/`                                                                                                           | Application-data paths, state inspection, and leased ephemeral capture workspace                                                             |
+| `src/infrastructure/sqlite/`                                                                                                          | Schema, canonical/query and capture-scope readers, cursors, FTS repair, clean/recovery proof, leases, and maintenance                        |
+| `src/infrastructure/runtime/index-timings.ts`                                                                                         | In-memory allowlisted indexing timing aggregation                                                                                            |
+| `src/infrastructure/runtime/doctor-timings.ts`                                                                                        | In-memory allowlisted doctor timing aggregation                                                                                              |
+| `src/cli/structured-output.ts`                                                                                                        | Closed schema-1 DTO construction, recursive validation, and freezing                                                                         |
+| `src/cli/*structured*`, `encode-*-output.ts`                                                                                          | JSON/JSONL encoding and aggregate output admission                                                                                           |
+| `src/cli/`                                                                                                                            | Command grammar, terminal-safe rendering, streams, and exit behavior                                                                         |
+| `src/bin/`                                                                                                                            | Sole concrete composition root                                                                                                               |
+| `skills/sessions/`                                                                                                                    | Model-invoked routing plus evidence-first analysis playbooks over the public CLI                                                             |
+| `scripts/`                                                                                                                            | Build and delivery smoke helpers; not published runtime                                                                                      |
+| `test/`                                                                                                                               | Cross-layer contracts, generated provider fixtures, integration, and delivery evidence                                                       |
 
 Portable JSON/JSONL export, transcript-free JSON/JSONL manifest, and
 transcript-bearing JSON/JSONL list/search/entries/show exist. Agent-efficient
@@ -297,12 +298,16 @@ bounded cohort, capture scope, stored metrics, and whole-library root
 resolution; show/export reconstruct the exact canonical document. Retained summaries
 include successful capture time, effective source-observation time, last-good
 adapter version, and the stored document digest. Show/export read summary and body
-from one immutable snapshot and requires their stored digests to agree. Full
+from one immutable snapshot and require their stored digests to agree. An
+optional expected digest is admitted before library inspection and compared
+after that complete verified read but before actual entry bounds; mismatch
+returns no transcript result and does not disclose either digest. Full
 document reads reconstruct the closed public projection and verify the persisted
 digest plus stored document metrics; a mismatch is canonical corruption, not
 FTS damage. List/search/manifest read the stored digest directly and do not
 reconstruct every document. None resolve or
 reopen a provider, so retained content remains usable after provider disappearance.
+The guard changes neither the SQLite schema nor physical read cost.
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content. Doctor
 stays read-only and reports canonical integrity, content reachability,
@@ -391,7 +396,9 @@ a human or machine renderer. Show keeps its existing focus/default behavior, and
 show/export may select one paired inclusive range of at most 200 entries. Invalid
 or out-of-document ranges are never clamped. Every bounded selection then uses
 the same relation/segment/text limits. The full canonical document is still read
-and verified first, and its digest identifies ranged output. Export full mode
+and verified first, and its digest identifies ranged output. A caller-supplied
+expected digest is compared before actual bounds and changes no matching output.
+Export full mode
 removes presentation selection only; it does not broaden the public projection. The CLI
 maps these safe values and transcript-free manifest revisions field by field
 into closed schema-1 DTOs, recursively

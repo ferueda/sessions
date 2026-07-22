@@ -12,9 +12,9 @@ The durable product roadmap lives in the
 
 ## Active executor plans
 
-No active executor plans remain after the three accepted cross-cutting
-performance changes.
+- [Digest-guarded coordinate reads](260722-digest-guarded-coordinate-reads.md)
+  add a caller-supplied document-digest precondition to existing `show` and
+  `export` reads without adding revision storage or changing successful output.
 
-Digest-guarded coordinate reads remain the next product milestone to shape;
-later product milestones still wait for their predecessor's contract and
-acceptance evidence.
+Later product milestones still wait for this contract and its acceptance
+evidence.

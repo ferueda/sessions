@@ -69,7 +69,9 @@ one paired inclusive range of at most 200 entries. Ranges never clamp and cannot
 combine with focused show or full export. Existing segment/text limits still
 apply inside the range, while the document digest continues to identify the
 complete retained document. This bounds returned evidence; the current reader
-still reconstructs and verifies the complete document first.
+still reconstructs and verifies the complete document first. A range hydrating
+a manifest revision can require its digest through
+`--expected-document-digest`; mismatch fails before bounds or transcript output.
 
 ## Code and proof
 

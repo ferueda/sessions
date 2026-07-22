@@ -91,7 +91,7 @@ describe("Sessions Agent Skill contracts", () => {
       /active analysis context or evidence\s+ledger by default[\s\S]*durable local manifest artifact only when the user\s+explicitly requests one/u,
     );
     expect(protocol).toMatch(
-      /both the canonical identity and complete document digest match[\s\S]*retry the manifest or re-key/u,
+      /canonical identity[\s\S]*--expected-document-digest[\s\S]*retry\s+the manifest or explicitly re-key/u,
     );
     expect(protocol).toMatch(/manifest is not a lease or historical pin/u);
     expect(protocol).toMatch(/Do not omit the evidence ledger or\s+limits/u);

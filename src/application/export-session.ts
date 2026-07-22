@@ -1,10 +1,14 @@
 import { SessionLibraryError } from "./library-error.ts";
+import { admitExpectedDocumentDigest, requireExpectedSession } from "./guard-session-document.ts";
 import { withReader } from "./list-sessions.ts";
 import type { IndexLifecycle, IndexPaths } from "./ports/index-lifecycle.ts";
 import { admitSessionEntryRange, resolveSessionEntryWindow } from "./session-entry-range.ts";
 import { selectSessionTranscript, type SelectedSessionTranscript } from "./session-presentation.ts";
 import { formatSessionIdentity } from "../domain/session-identity.ts";
-import { projectPublicSessionDocument } from "../domain/public-session-document.ts";
+import {
+  projectPublicSessionDocument,
+  type SessionDocumentDigest,
+} from "../domain/public-session-document.ts";
 import type { SessionIdentity } from "../domain/session.ts";
 
 export type ExportSessionResult = SelectedSessionTranscript;
@@ -13,11 +17,13 @@ export async function exportSession(input: {
   readonly paths: IndexPaths;
   readonly lifecycle: IndexLifecycle;
   readonly identity: SessionIdentity;
+  readonly expectedDocumentDigest?: SessionDocumentDigest;
   readonly full?: boolean;
   readonly fromEntry?: number;
   readonly toEntry?: number;
 }): Promise<ExportSessionResult> {
   formatSessionIdentity(input.identity);
+  const expectedDocumentDigest = admitExpectedDocumentDigest(input.expectedDocumentDigest);
   const entryRange = admitSessionEntryRange(input);
   if (entryRange !== undefined && input.full === true) {
     throw new TypeError("Entry range cannot be combined with full export");
@@ -27,8 +33,10 @@ export async function exportSession(input: {
   if (state.status !== "ready") throw new SessionLibraryError("library-unavailable");
 
   return withReader(input.lifecycle, input.paths, async (reader) => {
-    const indexed = await reader.sessions.getSession(input.identity);
-    if (indexed === undefined) throw new SessionLibraryError("session-not-found");
+    const indexed = requireExpectedSession(
+      await reader.sessions.getSession(input.identity),
+      expectedDocumentDigest,
+    );
     const entryWindow =
       entryRange === undefined
         ? undefined

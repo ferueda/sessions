@@ -1,7 +1,7 @@
 # CLI contract
 
 - Status: current supported behavior
-- Last updated: 2026-07-21
+- Last updated: 2026-07-22
 
 Generated `sessions --help` owns exact current flags. This document owns behavior
 and compatibility. Planned commands are labeled explicitly.
@@ -63,9 +63,11 @@ sessions manifest [--source SOURCE] [--instance INSTANCE]
                   [--session CANONICAL-ID]
                   --format json|jsonl
 sessions show <canonical-id> [--entry N --context N | --from-entry N --to-entry N]
+                             [--expected-document-digest DIGEST]
                              [--format human|json|jsonl]
 sessions export <canonical-id> --format json|jsonl
                                [--full | --from-entry N --to-entry N]
+                               [--expected-document-digest DIGEST]
 sessions forget <canonical-id> [--format human|json]
 sessions data repair-orphans [--format human|json]
 sessions data compact [--format human|json]
@@ -145,8 +147,9 @@ segment occurrence and exclude title. The result includes normalized active
 filter values, fixed ordering and cohort bound, and one same-snapshot capture
 scope. It excludes title, transcript content, workspace, paths, locators,
 content hashes, relation graphs, and internal library/writer state. A manifest
-does not pin its document bodies; a later show/export is acceptable as hydration
-only when both canonical identity and document digest still match.
+does not pin its document bodies. A later show/export can supply the revision's
+digest through `--expected-document-digest`; mismatching content fails before
+transcript output and requires a new manifest or an explicit re-key.
 
 `show` defaults to the first 50 entries. `--entry N` focuses one entry with 3
 entries of context on each side by default; `--context` accepts 0 through 100 and
@@ -157,6 +160,14 @@ including either range endpoint outside the retained document, are operational
 failures; ranges are never clamped.
 Incomplete, reversed, oversized, or conflicting ranges exit `2` before library
 inspection.
+`--expected-document-digest` accepts exactly the 64 lowercase hexadecimal
+characters from the manifest's fixed `sha256-sessions-document-jcs-v1` digest.
+Malformed values exit `2` before library inspection. A valid mismatch exits `1`
+with no stdout and a sanitized diagnostic that exposes neither expected nor
+current digest. It takes precedence over an out-of-document entry or range, but
+an absent identity remains `session-not-found`. A matching guard changes no
+successful human, JSON, or JSONL output and works with every existing show or
+export selection mode.
 List/search/entries/show default to human and accept JSON or JSONL. Manifest and
 export require JSON or JSONL. Human output escapes and bounds untrusted terminal
 content. Machine output uses the exact closed schema-1 records in the
@@ -936,6 +947,13 @@ segments or truncated text. Range selection does not alter the complete-document
 digest. The current reader reconstructs and validates the complete retained
 document before selecting the requested window; ranges bound returned evidence,
 not SQLite read cost.
+
+An expected-document guard is checked against that complete verified document
+before actual entry bounds are resolved. It identifies equal canonical public
+content, not an indexing generation or all manifest attribution: freshness,
+source state, observation time, adapter version, and root attribution may change
+while the digest still matches. The guard is neither a lease nor historical
+revision storage, and every later hydration must supply it again.
 
 Export reads exactly one retained canonical snapshot and never probes or reopens
 a provider source. Known relations are metadata only and do not recursively
