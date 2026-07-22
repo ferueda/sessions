@@ -34,10 +34,14 @@ immutable. A changed-document transaction verifies the resulting document
 digest and affected canonical/FTS row parity before commit.
 
 Doctor checks canonical and FTS health separately. Its immutable semantic FTS
-check loads canonical rows in bounded keyset batches into a contentless,
-memory-only TEMP FTS table, then compares exact terms, positions, and docsize
-with the retained projection. An explicit index writer may rebuild only FTS
-after canonical integrity passes.
+check loads canonical rows in bounded keyset batches into one complete,
+contentless, memory-only TEMP FTS table. It streams matching row vocabularies,
+then compares exact term instances in both directions through ranges capped at
+1,000,000 occurrences per side or one oversized term; docsize is compared
+separately in both directions. The complete expected table remains corpus-sized,
+so total memory is not constant, but no expected or comparison state spills to
+disk. An explicit index writer may rebuild only FTS after canonical integrity
+passes.
 
 ## Clean writer state
 

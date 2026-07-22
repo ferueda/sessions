@@ -225,12 +225,17 @@ remaining counts are non-negative decimal strings. Canonical, foreign-key,
 content-reachability, or run corruption fails. FTS-only damage reports
 rebuild-required without describing canonical loss. An active run is healthy
 only with an index-live lease. `ftsContent` compares exact retained terms,
-positions, and docsize with a contentless TEMP FTS index built from canonical
-rows in bounded keyset reads and loaded under one private savepoint. The
-temporary index is memory-only. Doctor also reconstructs, validates, hashes, and
-checks metrics for every retained canonical document. These exact whole-library
-checks can take minutes and use substantial memory on a large library. Doctor
-never opens a writer or applies migrations.
+positions, and docsize with a complete contentless TEMP FTS index built from
+canonical rows in bounded keyset reads and loaded under one private savepoint.
+The expected index is memory-only. Doctor streams the retained and expected row
+vocabularies in binary term order, requires equal terms, document counts, and
+occurrence counts, then runs the bidirectional instance comparison in ranges of
+at most 1,000,000 occurrences per side. One term above that target forms one
+oversized range. This partitioning does not spill to disk or make total memory
+constant because the complete expected index remains corpus-sized. Doctor also
+reconstructs, validates, hashes, and checks metrics for every retained canonical
+document. These exact whole-library checks can take minutes and use substantial
+memory on a large library. Doctor never opens a writer or applies migrations.
 
 The ready-library capture details are exactly `captureStatus`,
 `trackedSessions`, `retainedCurrentSessions`, `retainedStaleSessions`,

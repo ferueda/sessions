@@ -278,10 +278,14 @@ projection health, and the global capture aggregate separately. Canonical health
 merges ordered whole-library header, relation, entry, occurrence/content, and
 tracking scans, retains at most one reconstructed document at a time, and applies
 the same validation, digest, metrics, freshness, and summary decoders as point
-reads. Its semantic FTS check builds one contentless, memory-only TEMP expected
-index from canonical rows in bounded keyset reads under one private savepoint,
-then compares exact terms, positions, and docsize. Incomplete capture evidence
-produces an `ok: true` warning; failed health remains a failure. Direct
+reads. Its semantic FTS check builds one complete, contentless, memory-only TEMP
+expected index from canonical rows in bounded keyset reads under one private
+savepoint. It streams exact row-vocabulary equality, then partitions the
+bidirectional term-instance comparison at 1,000,000 occurrences per side or one
+oversized term; docsize is compared separately in both directions. The complete
+expected index remains corpus-sized, so total memory is not constant, but no
+comparison state spills to disk. Incomplete capture evidence produces an
+`ok: true` warning; failed health remains a failure. Direct
 out-of-band SQLite edits are unsupported; the clean fast open does not replace
 doctor as the explicit immutable full-library check. Index schema 2 adds one
 strict, foreign-keyed metrics row per canonical session. Replacement writes it

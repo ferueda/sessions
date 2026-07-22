@@ -28,8 +28,10 @@ not a best-effort feature.
 - Paths inspects library/source readiness without indexing, creating storage,
   modifying storage, reading provider transcript content, or scanning retained transcript
   bodies. Doctor is a deeper read-only audit: it reads all Sessions-owned
-  retained canonical transcript content and builds a memory-only TEMP FTS
-  projection, but never opens provider transcript content or persists audit state.
+  retained canonical transcript content and builds a complete, corpus-sized,
+  memory-only TEMP FTS projection. It streams aggregate term vocabulary and
+  compares exact term instances in bounded ranges without spilling them to disk,
+  but never opens provider transcript content or persists audit state.
 - Exact opt-in `SESSIONS_INDEX_TIMINGS=1` indexing emits one aggregate stderr
   diagnostic with fixed phase names, call counts, and elapsed milliseconds. It
   stores and uploads nothing and includes no identities, paths, fingerprints,
@@ -115,10 +117,14 @@ migration, maintenance, or failed cleanup uses full canonical, foreign-key, and
 FTS validation/repair.
 
 Doctor remains immutable and semantically compares retained FTS terms,
-positions, and docsize with a contentless TEMP index built from canonical text in
-memory. That transient derived index is not persisted. Direct SQLite edits
-outside Sessions are unsupported and are not guaranteed to be detected by every
-clean writer open.
+positions, and docsize with a complete contentless TEMP index built from
+canonical text in memory. It streams matching row vocabularies, then partitions
+the exact bidirectional instance comparison at 1,000,000 occurrences per side;
+one term above that target forms one oversized range. The transient expected
+index is still corpus-sized, so total memory is not constant, but no expected
+index or comparison range spills to disk. Direct SQLite edits outside Sessions
+are unsupported and are not guaranteed to be detected by every clean writer
+open.
 
 The persisted public-document digest is canonical state, not a rebuildable FTS
 projection. A missing, malformed, unknown-scheme, or mismatching digest makes the

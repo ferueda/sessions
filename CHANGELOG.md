@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/ferueda/sessions/compare/v0.3.0...v0.3.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* bound doctor FTS comparison memory ([e43050f](https://github.com/ferueda/sessions/commit/e43050fc73f566bd373ed9d4a9a37bceec12fe27))
+* bound doctor FTS comparison memory ([392da13](https://github.com/ferueda/sessions/commit/392da13384c518b06a264cc4b524ed53b05a4455))
+* make doctor observable and faster ([a55e54f](https://github.com/ferueda/sessions/commit/a55e54f7928ba0f3afad5f806b29a9b0e59bbd95))
+
 ## [0.3.0](https://github.com/ferueda/sessions/compare/v0.2.0...v0.3.0) (2026-07-21)
 
 
