@@ -29,6 +29,10 @@ import {
 describe("sessions CLI", () => {
   test.each([
     {
+      argv: ["doctor"],
+      message: "Checking Sessions health; large retained libraries may take several minutes.",
+    },
+    {
       argv: ["index"],
       message: "Indexing sessions; this may take a couple of minutes.",
     },
@@ -50,7 +54,7 @@ describe("sessions CLI", () => {
     expect(events.at(-1)).toMatch(/^stdout:/u);
   });
 
-  test("does not show a notice for commands outside the three-command scope", async () => {
+  test("does not show a notice for commands outside the long-operation scope", async () => {
     const events: string[] = [];
     const invocation = await invoke(["data", "clear", "--yes"], {}, { interactive: true, events });
 
@@ -109,6 +113,35 @@ describe("sessions CLI", () => {
     expect(JSON.parse(redirected.stdout)).toEqual(indexReport(false));
     expect(index.mock.calls[0]?.[1]?.progress).toEqual(expect.any(Function));
     expect(index.mock.calls[1]).toEqual([undefined]);
+  });
+
+  test("reports bounded doctor progress only on interactive stderr", async () => {
+    const doctor = vi.fn<ProgramOptions["doctor"]>(async (options) => {
+      options?.progress?.({ phase: "library-state" });
+      options?.progress?.({ phase: "canonical" });
+      options?.progress?.({ phase: "fts-semantic" });
+      return passingDoctor();
+    });
+
+    const interactive = await invoke(
+      ["doctor", "--format", "json"],
+      { doctor },
+      { interactive: true },
+    );
+    const redirected = await invoke(["doctor", "--format", "json"], { doctor });
+
+    expect(interactive.exitCode).toBe(0);
+    expect(interactive.stderr).toBe(
+      "Checking Sessions health; large retained libraries may take several minutes.\n" +
+        "Inspecting Sessions library state.\n" +
+        "Checking retained session documents.\n" +
+        "Checking search index terms and positions.\n",
+    );
+    expect(JSON.parse(interactive.stdout)).toEqual(passingDoctor());
+    expect(redirected.stderr).toBe("");
+    expect(JSON.parse(redirected.stdout)).toEqual(passingDoctor());
+    expect(doctor.mock.calls[0]?.[0]?.progress).toEqual(expect.any(Function));
+    expect(doctor.mock.calls[1]).toEqual([]);
   });
 
   test.each([130, 143] as const)("returns signal exit %s without stderr", async (exitCode) => {

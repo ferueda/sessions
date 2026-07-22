@@ -21,6 +21,7 @@ doctor / paths
   -> src/application/{run-doctor,get-paths,source-diagnostic}.ts
   -> runtime + SQLite + library-state diagnostics
   -> lazy registered-source probes
+  -> doctor only: interactive phase progress + optional aggregate timing
 
 index
   -> src/adapters/{cursor,codex}/source.ts
@@ -68,6 +69,7 @@ remain strict.
 | `src/application/discover-sessions.ts`                                                                         | Complete discovery admission, duplicate policy, and deterministic ordering                                                                   |
 | `src/application/run-index.ts`                                                                                 | Provider-neutral incremental capture and source-presence reconciliation                                                                      |
 | `src/application/index-timing.ts`                                                                              | Optional best-effort measurement around existing indexing operations                                                                         |
+| `src/application/{doctor-progress,doctor-timing}.ts`                                                           | Fixed best-effort doctor phases and measurement around existing health operations                                                            |
 | `src/application/{list-sessions,search-sessions,list-session-entries,create-session-manifest,show-session}.ts` | Provider-free retained-library reads, query admission, and bounds                                                                            |
 | `src/application/export-session.ts`                                                                            | Provider-free one-snapshot export and bounded/full selection                                                                                 |
 | `src/application/session-presentation.ts`                                                                      | Shared title, relation, entry, segment, and UTF-8 text selection                                                                             |
@@ -78,6 +80,7 @@ remain strict.
 | `src/infrastructure/state/`                                                                                    | Application-data paths, state inspection, and leased ephemeral capture workspace                                                             |
 | `src/infrastructure/sqlite/`                                                                                   | Schema, canonical/query and capture-scope readers, cursors, FTS repair, leases, and maintenance                                              |
 | `src/infrastructure/runtime/index-timings.ts`                                                                  | In-memory allowlisted indexing timing aggregation                                                                                            |
+| `src/infrastructure/runtime/doctor-timings.ts`                                                                 | In-memory allowlisted doctor timing aggregation                                                                                              |
 | `src/cli/structured-output.ts`                                                                                 | Closed schema-1 DTO construction, recursive validation, and freezing                                                                         |
 | `src/cli/*structured*`, `encode-*-output.ts`                                                                   | JSON/JSONL encoding and aggregate output admission                                                                                           |
 | `src/cli/`                                                                                                     | Command grammar, terminal-safe rendering, streams, and exit behavior                                                                         |
@@ -97,11 +100,13 @@ attribution, shared bounded selection, and the exact schema-1 machine records do
 
 The skill is presentation and guidance, not another runtime layer. It reads no
 provider or SQLite files, defines no hidden query, and cannot authorize indexing
-or mutation. Its binding evidence protocol requires per-check diagnostics,
-explicit indexing authority, bounded structured queries, reproducible IDs and
-ordinals, facts before interpretation, capture scope distinct from search
-support, visible omissions, and no automatic
-project, skill, settings, provider, or history edits.
+or mutation. Its binding evidence protocol starts routine work with paths for
+readiness and takes evidence availability from each query's same-snapshot
+capture scope. Doctor is reserved for explicit full audits, suspected damage,
+and post-maintenance verification. The protocol also requires explicit indexing
+authority, bounded structured queries, reproducible IDs and ordinals, facts
+before interpretation, capture scope distinct from search support, visible
+omissions, and no automatic project, skill, settings, provider, or history edits.
 
 The current runtime dependencies remain `commander` and `smol-toml`. Provider and
 canonical input use focused handwritten bounded validators; Zod is deferred until
@@ -269,16 +274,27 @@ reopen a provider, so retained content remains usable after provider disappearan
 Query cursors bind the query plus library identity/writer generation. An explicit
 leased index writer can rebuild FTS-only damage from canonical content. Doctor
 stays read-only and reports canonical integrity, content reachability,
-projection health, and the global capture aggregate separately. Its semantic FTS
-check builds one contentless, memory-only TEMP expected index from canonical
-rows in bounded keyset batches, then compares exact terms, positions, and
-docsize. Incomplete capture evidence produces an `ok: true` warning; failed
-health remains a failure. Direct out-of-band SQLite edits are unsupported; the
-clean fast open does not replace doctor as the explicit immutable full-library
-check. Index schema 2 adds one strict, foreign-keyed metrics row per canonical
-session. Replacement writes it atomically with the document; migration backfills
-schema-1 libraries; health requires exact one-to-one coverage and semantic
-equality.
+projection health, and the global capture aggregate separately. Canonical health
+merges ordered whole-library header, relation, entry, occurrence/content, and
+tracking scans, retains at most one reconstructed document at a time, and applies
+the same validation, digest, metrics, freshness, and summary decoders as point
+reads. Its semantic FTS check builds one contentless, memory-only TEMP expected
+index from canonical rows in bounded keyset reads under one private savepoint,
+then compares exact terms, positions, and docsize. Incomplete capture evidence
+produces an `ok: true` warning; failed health remains a failure. Direct
+out-of-band SQLite edits are unsupported; the clean fast open does not replace
+doctor as the explicit immutable full-library check. Index schema 2 adds one
+strict, foreign-keyed metrics row per canonical session. Replacement writes it
+atomically with the document; migration backfills schema-1 libraries; health
+requires exact one-to-one coverage and semantic equality.
+
+Interactive doctor progress is a fixed best-effort stderr presentation owned by
+the CLI. Redirected stderr stays quiet for normal success and failed-check
+reports. `SESSIONS_DOCTOR_TIMINGS=1` adds one aggregate allowlisted stderr record
+from the composition root on success or failure. Progress and timing observers
+cannot affect check order, health decisions, stdout, or exit codes. Doctor does
+not install cooperative signal handling around synchronous SQLite work; normal
+process signals stop the immutable audit without leaving the library dirty.
 
 The public document projection is a field-by-field allowlist. It includes title,
 provider timestamps, lineage coverage and ordered relations, ordered entries,

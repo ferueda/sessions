@@ -25,19 +25,30 @@ not a best-effort feature.
   canonical content.
 - `sessions data compact` changes only physical allocation in the Sessions
   database. It never removes canonical rows or reads a provider.
-- Paths and doctor inspect library/source readiness without indexing, creating
-  storage, modifying storage, or reading rollout content.
+- Paths inspects library/source readiness without indexing, creating storage,
+  modifying storage, reading provider transcript content, or scanning retained transcript
+  bodies. Doctor is a deeper read-only audit: it reads all Sessions-owned
+  retained canonical transcript content and builds a memory-only TEMP FTS
+  projection, but never opens provider transcript content or persists audit state.
 - Exact opt-in `SESSIONS_INDEX_TIMINGS=1` indexing emits one aggregate stderr
   diagnostic with fixed phase names, call counts, and elapsed milliseconds. It
   stores and uploads nothing and includes no identities, paths, fingerprints,
   timestamps, errors, or transcript-derived values.
+- Exact opt-in `SESSIONS_DOCTOR_TIMINGS=1` doctor emits one aggregate stderr
+  diagnostic with fixed phase names, call counts, and elapsed milliseconds after
+  success or failure. It stores and uploads nothing and includes no identities,
+  paths, fingerprints, timestamps, errors, or retained content values.
 - Interactive indexing may print fixed writer-mode and validation-phase labels.
   Those labels contain no path, provider identity, session identity,
   fingerprint, transcript value, count, percentage, or ETA and are never stored
   or uploaded. Redirected stderr stays quiet unless opt-in timing is enabled.
-- `SIGINT` and `SIGTERM` request a cooperative stop between application
-  operations. Complete committed replacements remain in the local library;
-  partial discovery leaves coverage unknown and never infers missing sessions.
+- Interactive doctor may print fixed health-phase labels with the same privacy
+  bounds. Redirected stderr stays quiet for normal success or failed-check
+  reports unless opt-in doctor timing is enabled.
+- During indexing, `SIGINT` and `SIGTERM` request a cooperative stop between
+  application operations. Complete committed replacements remain in the local
+  library; partial discovery leaves coverage unknown and never infers missing
+  sessions.
 
 Portable JSON/JSONL export, transcript-free JSON/JSONL manifests, and
 transcript-bearing JSON/JSONL list/search/entries/show are current. Library

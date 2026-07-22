@@ -78,7 +78,10 @@ current initialized library. `data repair-orphans` and `data compact` are
 provider-free maintenance over an existing current library; neither resolves a
 source. List, search, entries, manifest, show, and export are provider-free reads
 of the retained library. `doctor` and `paths` inspect runtime, library, and
-registered-source readiness without indexing or creating state.
+registered-source readiness without indexing or creating persistent state.
+Paths is a readiness report, not a canonical or FTS integrity proof. Doctor is
+the explicit exact integrity audit: it reads Sessions-owned retained canonical
+content, but neither command opens provider transcript content.
 
 Without `--source`, `index` skips valid unavailable providers before writer open
 and attempts the rest. If all are skipped, it exits `0` without creating the
@@ -223,8 +226,11 @@ content-reachability, or run corruption fails. FTS-only damage reports
 rebuild-required without describing canonical loss. An active run is healthy
 only with an index-live lease. `ftsContent` compares exact retained terms,
 positions, and docsize with a contentless TEMP FTS index built from canonical
-rows in bounded batches. The temporary index is memory-only. Doctor never opens
-a writer or applies migrations.
+rows in bounded keyset reads and loaded under one private savepoint. The
+temporary index is memory-only. Doctor also reconstructs, validates, hashes, and
+checks metrics for every retained canonical document. These exact whole-library
+checks can take minutes and use substantial memory on a large library. Doctor
+never opens a writer or applies migrations.
 
 The ready-library capture details are exactly `captureStatus`,
 `trackedSessions`, `retainedCurrentSessions`, `retainedStaleSessions`,
@@ -242,7 +248,27 @@ inspection failure fails the check. Any failed health condition keeps the
 existing `Index schema N failed health checks` summary instead of the incomplete
 warning.
 
-All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. Invalid usage writes to stderr and exits `2`. An unexpected failure outside probe aggregation writes a concise stderr diagnostic and exits `1` without fabricating a report.
+All-pass and failed-check reports go to stdout. All-pass exits `0`; any failed
+check exits `1`. When stderr is interactive, doctor may write a fixed initial
+notice followed by fixed best-effort notices for library state, canonical
+documents, capture scope, foreign keys, content reachability, FTS structure,
+FTS coverage, FTS semantics, FTS deletion support, page reclamation, run records,
+and writer lease health. Only phases reached by that library state are printed.
+Redirected stderr stays empty for normal success and failed-check reports. These
+notices never change check order, report fields, stdout, health decisions, or
+exit codes. Invalid usage writes to stderr and exits `2`. An unexpected failure
+outside probe aggregation writes a concise stderr diagnostic and exits `1`
+without fabricating a report.
+
+With `SESSIONS_DOCTOR_TIMINGS=1`, doctor writes one additional best-effort
+`sessions:doctor-timings` JSON record to stderr after success or failure,
+including when stderr is redirected. Its fixed phase keys are
+`sourceResolution`, `libraryState`, `canonicalIntegrity`, `captureScope`,
+`foreignKeys`, `contentReachability`, `ftsStructure`, `ftsContent`,
+`ftsSemantic`, `ftsSecurity`, `pageReclamation`, `runRecords`, `writerLease`,
+and `total`. Each phase contains only `calls` and `elapsedMs`. The diagnostic
+contains no identities, paths, fingerprints, timestamps, errors, or retained
+content values; it is not stored and does not change command behavior.
 
 ### Paths JSON
 
@@ -266,6 +292,12 @@ no partial report and exits `1`. A pre-release migration-checksum mismatch fails
 closed with recovery guidance: select a fresh `SESSIONS_DATA_DIR`, or back up and
 remove only the obsolete Sessions-owned directory reported by `sessions paths`,
 then index again. `data clear` does not claim that incompatible database.
+
+Paths reports readiness and registered-source probes without reconstructing
+retained documents or checking exact FTS semantics. Consumers that need deep
+integrity proof must run doctor explicitly. Retained list, search, entries, and
+manifest results provide same-snapshot capture scope for evidence-availability
+decisions; paths does not replace that query evidence.
 
 Markdown is deferred beyond V1 and `--format md` is not accepted today. Planned
 routes are added to generated help only when implemented and contract-tested.

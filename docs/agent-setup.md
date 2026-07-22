@@ -34,9 +34,13 @@ sessions doctor --format json
 sessions paths --format json
 ```
 
-The reported Sessions version must equal `SESSIONS_VERSION`. `doctor` and
-`paths` inspect state without indexing, creating a Sessions library, or reading
-transcript content.
+The reported Sessions version must equal `SESSIONS_VERSION`. This install or
+upgrade check intentionally runs one exact doctor audit before paths. Doctor may
+take minutes on a large library because it reads and validates all
+Sessions-owned retained canonical transcript content. It never opens provider
+transcript content. Paths is the fast readiness check and does not scan retained
+transcript bodies. Neither command indexes, migrates, or creates persistent
+state.
 
 Stop here. Before running `sessions index`, explain that indexing reads local
 Cursor or Codex history and writes a durable normalized copy into
@@ -48,6 +52,10 @@ only after the user gives separate permission for that read and write.
 Upgrade the CLI and skill together to the same supported release tag. Re-run the
 install commands with the new version, then repeat the verification commands.
 Do not pair an npm version with a skill from mutable `main`.
+
+For ordinary skill investigations after verification, use paths plus each
+retained query's same-snapshot capture scope. Paths proves readiness, not the
+deep canonical and FTS integrity that doctor audits.
 
 ```bash
 npm uninstall --global @ferueda/sessions

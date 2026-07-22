@@ -65,6 +65,7 @@ export, and the packaged Agent Skill are current coverage.
 | Codex path, state, rollout, normalization | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/codex/<file>.test.ts`                 | `pnpm check`                                              |
 | Cursor path, store/JSONL normalization    | Adapter test; shared conformance when the port changes                     | `pnpm test test/adapters/cursor/<file>.test.ts`                | `pnpm check`                                              |
 | Migration, FTS, lease, transaction, WAL   | Real SQLite/filesystem integration                                         | `pnpm test test/infrastructure/<file>.test.ts`                 | `pnpm check`                                              |
+| Doctor health, progress, or timing        | SQLite health plus focused application/runtime/CLI contracts               | Focused doctor and index-health tests                          | `pnpm check`                                              |
 | Query filters, ranking, cursor, context   | Query contract/corpus; SQLite only for SQL/FTS behavior                    | Focused search or entry-query application/infrastructure tests | `pnpm check`                                              |
 | Structured selection, JSON/JSONL, export  | Pure application/CLI contracts; process only for wiring/stream boundaries  | Focused export and structured CLI tests                        | `pnpm check`                                              |
 | CLI option, report, exit, rendering       | In-process CLI; child process only for process behavior                    | `pnpm test test/cli.test.ts`                                   | `pnpm check`                                              |
@@ -173,6 +174,23 @@ provider-read measurements are opt-in, credential-free, use disposable targets,
 redact output to aggregates, and clean up owned state. Keep them outside Vitest,
 pre-commit, `pnpm check`, and routine CI. Live results are operational evidence,
 not deterministic regression coverage.
+
+Doctor performance proof remains deterministic and provider-free in tests.
+SQLite health tests require exact corruption detection and keep the number of
+authorized `SELECT` statements constant as synthetic session count grows. FTS
+tests cover the private TEMP savepoint on success, outer-transaction
+composition, forced load failure, cleanup, and exact semantic mismatches.
+Application, runtime, and CLI tests keep progress/timing best-effort, normal
+redirected stderr quiet, and doctor stdout/check/exit behavior unchanged.
+
+An accepted live doctor measurement may run against the ordinary retained
+library only as one process: do not open the database through `sqlite3` or any
+second SQLite connection while the immutable snapshot is active. Capture the
+main database size and modification time plus sidecar absence before and after,
+run `SESSIONS_DOCTOR_TIMINGS=1` with stdout and stderr redirected separately,
+and report only aggregate phase durations, peak process memory, final health,
+and persistent file-state equality. A live result supplements rather than
+replaces deterministic integrity tests.
 
 `pnpm measure:indexing` is the deterministic, provider-free stable-index
 baseline. It compares control and timed runs from the same generic seeded

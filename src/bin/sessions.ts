@@ -8,6 +8,8 @@ import { createCursorSource } from "../adapters/cursor/source.ts";
 import { clearData } from "../application/clear-index.ts";
 import { compactIndex } from "../application/compact-index.ts";
 import { createSessionManifest } from "../application/create-session-manifest.ts";
+import type { DoctorProgressObserver } from "../application/doctor-progress.ts";
+import { timeDoctorOperation } from "../application/doctor-timing.ts";
 import { exportSession } from "../application/export-session.ts";
 import { repairOrphanedContent } from "../application/repair-orphaned-content.ts";
 import { forgetSession } from "../application/forget-session.ts";
@@ -33,6 +35,10 @@ import {
   createIndexTimingCollector,
   encodeIndexTimingDiagnostic,
 } from "../infrastructure/runtime/index-timings.ts";
+import {
+  createDoctorTimingCollector,
+  encodeDoctorTimingDiagnostic,
+} from "../infrastructure/runtime/doctor-timings.ts";
 import { installIndexInterrupt } from "../infrastructure/runtime/index-interrupt.ts";
 
 const require = createRequire(import.meta.url);
@@ -41,6 +47,7 @@ const version = typeof manifest.version === "string" ? manifest.version : "0.0.0
 const indexLifecycle = createSqliteIndexLifecycle();
 const maintenance = createSqliteIndexMaintenance();
 const indexTimingsEnabled = process.env.SESSIONS_INDEX_TIMINGS === "1";
+const doctorTimingsEnabled = process.env.SESSIONS_DOCTOR_TIMINGS === "1";
 let codexSource: ReturnType<typeof createCodexSource> | undefined;
 let cursorSource: ReturnType<typeof createCursorSource> | undefined;
 const resolveCodexSource = () => (codexSource ??= createCodexSource());
@@ -121,6 +128,38 @@ const indexSessions = async (
   }
 };
 
+const doctorSessions = async (options: { readonly progress?: DoctorProgressObserver } = {}) => {
+  const collector = doctorTimingsEnabled ? createDoctorTimingCollector() : undefined;
+  try {
+    const execute = async () => {
+      const sources =
+        collector === undefined
+          ? await resolveAllSources()
+          : await timeDoctorOperation(collector.recorder, "sourceResolution", resolveAllSources);
+      return runDoctor([
+        createNodeDiagnostic(),
+        createSqliteDiagnostic(),
+        createIndexStateDiagnostic(resolvePaths, indexLifecycle, {
+          ...(options.progress === undefined ? {} : { progress: options.progress }),
+          ...(collector === undefined ? {} : { timing: collector.recorder }),
+        }),
+        ...sources.map(createSourceDiagnostic),
+      ]);
+    };
+    return collector === undefined
+      ? await execute()
+      : await timeDoctorOperation(collector.recorder, "total", execute);
+  } finally {
+    if (collector !== undefined) {
+      try {
+        process.stderr.write(encodeDoctorTimingDiagnostic(collector.snapshot()));
+      } catch {
+        // Opt-in timing output is best-effort and must not change doctor.
+      }
+    }
+  }
+};
+
 const exitCode = await runCli(process.argv.slice(2), {
   version,
   output: {
@@ -128,15 +167,7 @@ const exitCode = await runCli(process.argv.slice(2), {
     writeOut: (text) => process.stdout.write(text),
     writeErr: (text) => process.stderr.write(text),
   },
-  doctor: async () => {
-    const sources = await resolveAllSources();
-    return runDoctor([
-      createNodeDiagnostic(),
-      createSqliteDiagnostic(),
-      createIndexStateDiagnostic(resolvePaths, indexLifecycle),
-      ...sources.map(createSourceDiagnostic),
-    ]);
-  },
+  doctor: doctorSessions,
   paths: async () => getPaths(resolvePaths(), indexLifecycle, await resolveAllSources()),
   indexSources: registeredSources.map(({ kind }) => kind),
   index: indexSessions,

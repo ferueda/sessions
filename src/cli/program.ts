@@ -3,6 +3,10 @@ import { Command, CommanderError, InvalidArgumentError, Option } from "commander
 import type { DataClearReport } from "../application/clear-index.ts";
 import type { DataCompactReport } from "../application/compact-index.ts";
 import type { DataRepairOrphansReport } from "../application/repair-orphaned-content.ts";
+import type {
+  DoctorProgressEvent,
+  DoctorProgressObserver,
+} from "../application/doctor-progress.ts";
 import type { ExportSessionResult } from "../application/export-session.ts";
 import type { ForgetSessionReport } from "../application/forget-session.ts";
 import type { PathsReport } from "../application/get-paths.ts";
@@ -76,7 +80,9 @@ export interface CliOutput {
 export interface ProgramOptions {
   readonly version: string;
   readonly output: CliOutput;
-  readonly doctor: () => Promise<DoctorReport>;
+  readonly doctor: (options?: {
+    readonly progress?: DoctorProgressObserver;
+  }) => Promise<DoctorReport>;
   readonly paths: () => Promise<PathsReport>;
   readonly indexSources: readonly string[];
   readonly index: (
@@ -156,6 +162,40 @@ function createIndexProgressObserver(output: CliOutput): IndexProgressObserver |
   return (event) => writeLongOperationNotice(output, renderIndexProgress(event));
 }
 
+function createDoctorProgressObserver(output: CliOutput): DoctorProgressObserver | undefined {
+  if (output.stderrIsInteractive !== true) return undefined;
+  return (event) => writeLongOperationNotice(output, renderDoctorProgress(event));
+}
+
+function renderDoctorProgress(event: DoctorProgressEvent): string {
+  switch (event.phase) {
+    case "library-state":
+      return "Inspecting Sessions library state.";
+    case "canonical":
+      return "Checking retained session documents.";
+    case "capture-scope":
+      return "Checking retained evidence coverage.";
+    case "foreign-keys":
+      return "Checking retained session relationships.";
+    case "content-reachability":
+      return "Checking retained content reachability.";
+    case "fts-structure":
+      return "Checking search index structure.";
+    case "fts-content":
+      return "Checking search index coverage.";
+    case "fts-semantic":
+      return "Checking search index terms and positions.";
+    case "fts-security":
+      return "Checking search index deletion support.";
+    case "page-reclamation":
+      return "Checking library space-reclamation settings.";
+    case "run-records":
+      return "Checking index run records.";
+    case "writer-lease":
+      return "Checking current library ownership.";
+  }
+}
+
 function renderIndexProgress(event: IndexProgressEvent): string {
   if (event.kind === "writer-open-mode") {
     switch (event.mode) {
@@ -203,7 +243,13 @@ export function createProgram(options: ProgramOptions): Command {
     .description("Check local runtime and source capabilities without indexing")
     .addOption(operationalFormatOption())
     .action(async ({ format }: { format: OperationalOutputFormat }) => {
-      const report = await options.doctor();
+      writeLongOperationNotice(
+        options.output,
+        "Checking Sessions health; large retained libraries may take several minutes.",
+      );
+      const progress = createDoctorProgressObserver(options.output);
+      const report =
+        progress === undefined ? await options.doctor() : await options.doctor({ progress });
       options.output.writeOut(renderDoctor(report, format));
       if (!report.ok) throw new OperationalExit("doctor reported failed checks");
     });

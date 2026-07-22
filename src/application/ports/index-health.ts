@@ -1,5 +1,7 @@
 import type { IndexPaths } from "./index-lifecycle.ts";
 import type { SessionCaptureScope } from "../../domain/session-capture-scope.ts";
+import type { DoctorProgressObserver } from "../doctor-progress.ts";
+import type { DoctorTimingRecorder } from "../doctor-timing.ts";
 
 export type IndexHealthCheck = "failed" | "ok";
 export type IndexFtsSecureDeleteHealth = "enabled" | "missing" | "unsupported";
@@ -41,5 +43,13 @@ export interface ReadyIndexHealth {
 }
 
 export interface IndexHealthInspector {
-  inspectHealth(paths: IndexPaths): Promise<ReadyIndexHealth>;
+  inspectHealth(
+    paths: IndexPaths,
+    options?: IndexHealthInspectionOptions,
+  ): Promise<ReadyIndexHealth>;
+}
+
+export interface IndexHealthInspectionOptions {
+  readonly progress?: DoctorProgressObserver;
+  readonly timing?: DoctorTimingRecorder;
 }

@@ -8,22 +8,24 @@ question requires.
 
 ## Investigate
 
-1. Run `sessions doctor --format json`. Read checks separately:
+1. Run `sessions paths --format json` as the routine readiness check:
    - If the `sessions` command is unavailable, stop with that dependency. Do not
      substitute a provider-specific or unrelated history tool.
-   - If the retained library is ready, provider-free `list`, `search`, `entries`,
-     `manifest`, `show`, and `export` remain usable even when a source check
-     fails. Continue, report that fresh indexing is unavailable, and include
-     retained freshness and source-state evidence.
-   - For a ready library, read the library check's `captureStatus`. `incomplete`
-     is an evidence warning, not a failed health check; report the aggregate
-     stale, unindexed, and unknown-coverage limits before relying on retained
-     results.
-   - If a failed check blocks the needed retained-library operation, stop with
-     the failed capability and smallest remediation.
+   - `paths` proves library and registered-source readiness, not canonical or FTS
+     integrity. If the retained library is ready,
+     provider-free `list`, `search`, `entries`, `manifest`, `show`, and `export`
+     remain usable even when a source probe fails. Continue, report that fresh
+     indexing is unavailable, and include retained freshness and source-state
+     evidence.
+   - If library state blocks the needed retained operation, stop with that state
+     and its smallest documented remediation.
+   - Run `sessions doctor --format json` only for an explicit full integrity
+     audit, suspected library damage, or post-repair/post-maintenance
+     verification. Doctor is an exact whole-library audit and may take minutes
+     on a large retained library; read its checks separately.
    - Run `sessions index --source <authorized-source> --format json` only after
-     the user explicitly authorizes indexing that registered source, including both
-     reading provider history and writing a durable Sessions-owned copy.
+     the user explicitly authorizes indexing that registered source, including
+     both reading provider history and writing a durable Sessions-owned copy.
      A request for analysis does not authorize indexing. Permission to inspect
      history does not authorize it either.
 2. State the question and the evidence needed to answer it before broadening the
@@ -34,9 +36,12 @@ question requires.
    use one filtered `sessions manifest --format json|jsonl` result instead of
    paging `list`; do not use manifest merely to broaden an otherwise bounded
    search.
-   Read each list/search/entries page's `captureScope` before interpreting its
-   rows. Keep `unassessedFilters` explicit: they do not show whether an unindexed
-   session matched or failed those filters.
+   Read the same-snapshot `captureScope` from each list/search/entries page or
+   manifest result before interpreting its rows. For a ready library,
+   `incomplete` is an evidence warning, not a failed health check; report
+   aggregate stale, unindexed, and unknown-coverage limits. Keep
+   `unassessedFilters` explicit: they do not show whether an unindexed session
+   matched or failed those filters.
 4. Keep an evidence ledger: exact commands, filters, cursors, canonical IDs,
    provider-native IDs when used, manifest selection and revision digests, and
    entry ordinals. Keep a manifest in the active analysis context or evidence

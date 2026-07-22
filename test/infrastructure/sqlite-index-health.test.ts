@@ -1,11 +1,13 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
+import type { DoctorHealthPhase } from "../../src/application/doctor-progress.ts";
+import type { DoctorTimingPhase } from "../../src/application/doctor-timing.ts";
 import type { IndexPaths } from "../../src/application/ports/index-lifecycle.ts";
 import type { SessionIndexFailureCode } from "../../src/application/ports/session-index.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
@@ -18,6 +20,8 @@ import type { SessionDocument, SessionIdentity } from "../../src/domain/session.
 import { createSqliteIndexLifecycle } from "../../src/infrastructure/sqlite/database.ts";
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import { encodeSqliteContentDigest } from "../../src/infrastructure/sqlite/sqlite-content-digest.ts";
+import { canonicalIntegrityIsValid } from "../../src/infrastructure/sqlite/sqlite-index-health.ts";
+import { replaceCanonicalDocument } from "../../src/infrastructure/sqlite/sqlite-session-document.ts";
 import { acquireWriterLease } from "../../src/infrastructure/sqlite/writer-lease.ts";
 
 const temporaryDirectories: string[] = [];
@@ -75,6 +79,49 @@ describe("SQLite ready-index health", () => {
     });
 
     expect(await persistenceSnapshot(paths)).toEqual(before);
+  });
+
+  test("reports and times each exact health phase in execution order", async () => {
+    const paths = await initializedPaths();
+    const progress: DoctorHealthPhase[] = [];
+    const timing: DoctorTimingPhase[] = [];
+    let clock = 0;
+
+    const health = await createSqliteIndexLifecycle().inspectHealth(paths, {
+      progress: (event) => progress.push(event.phase),
+      timing: {
+        now: () => ++clock,
+        record: (phase) => timing.push(phase),
+      },
+    });
+
+    expect(health.ok).toBe(true);
+    expect(progress).toEqual([
+      "canonical",
+      "capture-scope",
+      "foreign-keys",
+      "content-reachability",
+      "fts-structure",
+      "fts-content",
+      "fts-semantic",
+      "fts-security",
+      "page-reclamation",
+      "run-records",
+      "writer-lease",
+    ]);
+    expect(timing).toEqual([
+      "canonicalIntegrity",
+      "captureScope",
+      "foreignKeys",
+      "contentReachability",
+      "ftsStructure",
+      "ftsContent",
+      "ftsSemantic",
+      "ftsSecurity",
+      "pageReclamation",
+      "runRecords",
+      "writerLease",
+    ]);
   });
 
   test("reports exact orphan rows and UTF-8 bytes without exposing or mutating content", async () => {
@@ -399,6 +446,39 @@ describe("SQLite ready-index health", () => {
     });
 
     await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test("validates complete canonical documents through ordered whole-library scans", async () => {
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database, { instanceId: "ordered-scan" });
+      markSourceCoverageComplete(database, fixture);
+      attachCanonicalDocument(database, fixture, completeCanonicalDocument(fixture.identity));
+    });
+
+    await expect(createSqliteIndexLifecycle().inspectHealth(paths)).resolves.toMatchObject({
+      ok: true,
+      canonicalIntegrity: "ok",
+      foreignKeys: "ok",
+      ftsContent: "ok",
+    });
+  });
+
+  test("detects corrupt relation ordering in a streamed canonical document", async () => {
+    expect.hasAssertions();
+    const paths = await initializedPaths();
+    mutateDatabase(paths.database, (database) => {
+      const fixture = seedValidTrackingOnly(database, { instanceId: "relation-order" });
+      markSourceCoverageComplete(database, fixture);
+      attachCanonicalDocument(database, fixture, completeCanonicalDocument(fixture.identity));
+      database.prepare("UPDATE sessions_relations SET ordinal = 1").run();
+    });
+
+    await expectCanonicalIntegrityFailure(paths);
+  });
+
+  test("keeps canonical health SELECT preparation constant as session count grows", () => {
+    expect(canonicalHealthSelectCount(12)).toBe(canonicalHealthSelectCount(1));
   });
 
   test.each([
@@ -815,6 +895,119 @@ function attachEmptyCanonical(
        ) VALUES (?, 0, 0, 0, 0, 0)`,
     )
     .run(fixture.sessionId);
+}
+
+function attachCanonicalDocument(
+  database: DatabaseSync,
+  fixture: TrackingOnlyFixture,
+  document: SessionDocument,
+): void {
+  const observedAt = "2026-07-14T12:00:00.000Z";
+  database
+    .prepare(
+      `UPDATE sessions_session_tracking
+       SET last_good_fingerprint_scheme = latest_fingerprint_scheme,
+           last_good_fingerprint_digest = latest_fingerprint_digest,
+           last_good_adapter_version = latest_adapter_version,
+           presence_observed_at = ?,
+           captured_at = ?,
+           last_seen_at = ?,
+           latest_outcome = 'indexed',
+           latest_failure_code = NULL
+       WHERE session_id = ?`,
+    )
+    .run(observedAt, observedAt, observedAt, fixture.sessionId);
+  const digest = digestPublicSessionDocument(projectPublicSessionDocument(document));
+  replaceCanonicalDocument(database, Number(fixture.sessionId), document, digest);
+}
+
+function completeCanonicalDocument(identity: SessionIdentity): SessionDocument {
+  const firstText = "ordered canonical evidence";
+  return {
+    identity,
+    title: "Generic retained session",
+    workspace: "/workspace/example",
+    createdAt: "2026-07-14T10:00:00.000Z",
+    updatedAt: "2026-07-14T10:01:00.000Z",
+    lineageCoverage: "complete",
+    relations: [
+      {
+        kind: "parent",
+        target: {
+          source: { kind: "synthetic", instanceId: "related-source" },
+          nativeId: "related-session",
+        },
+        confidence: "high",
+      },
+    ],
+    entries: [
+      {
+        ordinal: 0,
+        kind: "message",
+        actor: "human",
+        timestamp: "2026-07-14T10:00:00.000Z",
+        sourceLocator: { uri: "memory://ordered/0", recordId: "first" },
+        content: [
+          {
+            kind: "text",
+            ordinal: 0,
+            text: firstText,
+            contentHash: hashContent(firstText),
+            origin: "human",
+            originConfidence: "high",
+            sourceMetadata: { format: "plain" },
+          },
+          {
+            kind: "omitted",
+            ordinal: 1,
+            contentClass: "image",
+            sourceType: "input-image",
+            origin: "human",
+            originConfidence: "high",
+            sourceMetadata: {},
+          },
+        ],
+      },
+      {
+        ordinal: 1,
+        kind: "tool-call",
+        actor: "model",
+        relatedEntryOrdinal: 0,
+        toolCallId: "call-1",
+        toolName: "lookup",
+        toolNamespace: "fixture",
+        sourceLocator: { uri: "memory://ordered/1" },
+        content: [],
+      },
+    ],
+  };
+}
+
+function canonicalHealthSelectCount(sessionCount: number): number {
+  const database = new DatabaseSync(":memory:");
+  try {
+    applyMigrations(database);
+    for (let index = 0; index < sessionCount; index += 1) {
+      const fixture = seedValidTrackingOnly(database, {
+        instanceId: `select-count-${index}`,
+      });
+      markSourceCoverageComplete(database, fixture);
+      attachEmptyCanonical(database, fixture, "current");
+    }
+
+    let selectCount = 0;
+    database.setAuthorizer((actionCode) => {
+      if (actionCode === constants.SQLITE_SELECT) selectCount += 1;
+      return constants.SQLITE_OK;
+    });
+    if (!canonicalIntegrityIsValid(database)) {
+      throw new Error("Expected seeded canonical library to be healthy");
+    }
+    database.setAuthorizer(null);
+    return selectCount;
+  } finally {
+    if (database.isOpen) database.close();
+  }
 }
 
 function corruptObservationTimestamp(

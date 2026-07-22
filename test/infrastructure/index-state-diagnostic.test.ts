@@ -1,5 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
+import type { DoctorProgressObserver } from "../../src/application/doctor-progress.ts";
+import type { DoctorTimingRecorder } from "../../src/application/doctor-timing.ts";
 import type {
   IndexHealthInspector,
   ReadyIndexHealth,
@@ -122,6 +124,41 @@ describe("createIndexStateDiagnostic", () => {
         latestFailureRepositoryWrite: "0",
       },
     });
+  });
+
+  test("reports library-state progress and forwards health diagnostics", async () => {
+    const progress = vi.fn<DoctorProgressObserver>();
+    const record = vi.fn<DoctorTimingRecorder["record"]>();
+    const now = vi
+      .fn<DoctorTimingRecorder["now"]>()
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(12);
+    const inspector: IndexStateInspector & IndexHealthInspector = {
+      async inspect() {
+        return {
+          status: "ready",
+          initialized: true,
+          schemaVersion: 1,
+          supportedSchemaVersion: 1,
+        };
+      },
+      async inspectHealth(actualPaths, options) {
+        expect(actualPaths).toBe(paths);
+        expect(options?.progress).toBe(progress);
+        expect(options?.timing).toMatchObject({ now, record });
+        return healthyIndex;
+      },
+    };
+
+    await expect(
+      createIndexStateDiagnostic(() => paths, inspector, {
+        progress,
+        timing: { now, record },
+      }).run(),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(progress).toHaveBeenCalledExactlyOnceWith({ phase: "library-state" });
+    expect(record).toHaveBeenCalledExactlyOnceWith("libraryState", 2);
   });
 
   test("reports typed ready-index health failures without sensitive details", async () => {

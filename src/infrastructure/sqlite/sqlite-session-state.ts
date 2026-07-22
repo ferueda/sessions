@@ -172,19 +172,19 @@ export function readSessionSummary(
          AND tracking.native_id = ?`,
     )
     .get(identity.source.kind, identity.source.instanceId, identity.nativeId) as
-    | SummaryRow
+    | SessionSummaryColumns
     | undefined;
   if (row === undefined) return undefined;
   const freshness = readSessionFreshness(database, identity);
   if (freshness.status !== "current" && freshness.status !== "stale") {
     throw new SqliteSessionIndexError("corrupt-data");
   }
-  return summaryFromRow(identity, row, freshness);
+  return decodeRetainedSessionSummary(identity, row, freshness);
 }
 
-function summaryFromRow(
+export function decodeRetainedSessionSummary(
   identity: SessionIdentity,
-  row: SummaryRow,
+  row: SessionSummaryColumns,
   freshness: RetainedSessionFreshness,
 ): IndexedSessionSummary {
   const sourceState = effectiveSourceStateAt(row.source_state);
@@ -281,7 +281,7 @@ function booleanIntegerAt(value: unknown): boolean {
   return integer === 1;
 }
 
-interface SummaryRow {
+export interface SessionSummaryColumns {
   readonly title: string | null;
   readonly workspace: string | null;
   readonly created_at: string | null;
@@ -293,7 +293,10 @@ interface SummaryRow {
   readonly document_digest: unknown;
 }
 
-type RetainedSessionFreshness = Extract<SessionFreshness, { readonly status: "current" | "stale" }>;
+export type RetainedSessionFreshness = Extract<
+  SessionFreshness,
+  { readonly status: "current" | "stale" }
+>;
 
 function effectiveSourceStateAt(value: unknown): IndexedSessionSummary["sourceState"] {
   if (value === "present" || value === "missing" || value === "unknown") return value;

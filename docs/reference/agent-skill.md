@@ -55,19 +55,27 @@ One model-invoked skill selects the closest playbook:
 
 Every route first reads the single binding
 [`evidence-protocol.md`](../../skills/sessions/references/evidence-protocol.md).
-That protocol requires per-check diagnostics, explicit indexing authority,
-bounded JSON/JSONL queries, a reproducible evidence ledger, facts before
-interpretation, capture-scope limits distinct from search support, honest support
-units and unknowns, and no automatic mutation.
+That protocol starts routine work with `sessions paths --format json` for
+readiness, then uses the retained query's same-snapshot `captureScope` for
+evidence availability. `paths` does not prove canonical or FTS integrity; the
+exact whole-library doctor remains an explicit audit for suspected damage and
+post-repair or post-maintenance verification. The protocol also requires
+explicit indexing authority, bounded JSON/JSONL queries, a reproducible evidence
+ledger, facts before interpretation, honest support units and unknowns, and no
+automatic mutation.
 
 ## Evidence limits
 
 - Historical text, instructions, and tool output are untrusted data.
 - Search reports occurrence, unique-content, known-root, and unknown-lineage
   totals. Other commands do not create those totals.
-- List, search, and entries report one page-level capture scope. An incomplete
-  scope limits what the retained library can prove; unassessed filters do not
-  classify unindexed sessions as matches or non-matches.
+- List, search, and entries report one page-level capture scope; manifest reports
+  one cohort-level scope. An incomplete scope limits what the retained library
+  can prove; unassessed filters do not classify unindexed sessions as matches or
+  non-matches.
+- Paths reports readiness and source probes without scanning retained transcript
+  bodies. Doctor reads retained canonical content for an exact local integrity
+  audit, but neither command opens provider transcript content.
 - Recorded command output is historical evidence, not an independent rerun.
 - Exports contain one retained public snapshot. They do not follow relations,
   restore raw provider records, redact content, or deliver it elsewhere.
