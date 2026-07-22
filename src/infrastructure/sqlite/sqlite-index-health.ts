@@ -1,9 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import { reportDoctorProgress, type DoctorHealthPhase } from "../../application/doctor-progress.ts";
+import {
+  timeDoctorSyncOperation,
+  type DoctorTimingPhase,
+} from "../../application/doctor-timing.ts";
 import type {
   IndexContentReachabilityHealth,
   IndexCaptureScopeHealth,
   IndexHealthCheck,
+  IndexHealthInspectionOptions,
   IndexFtsSecureDeleteHealth,
   IndexWriterLeaseHealth,
   ReadyIndexHealth,
@@ -17,8 +23,13 @@ import {
 } from "./migrations.ts";
 import { readWriterLeaseHealth } from "./writer-lease.ts";
 import { inspectSqlitePageReclamation } from "./sqlite-page-reclamation.ts";
-import { readCanonicalDocument } from "./sqlite-session-document.ts";
-import { readSessionFreshness, readSessionSummary } from "./sqlite-session-state.ts";
+import { scanCanonicalDocumentRecords } from "./sqlite-session-document.ts";
+import {
+  decodeRetainedSessionSummary,
+  decodeTrackedSessionFreshness,
+  type SessionSummaryColumns,
+  type SessionTrackingFreshnessColumns,
+} from "./sqlite-session-state.ts";
 import { isSessionIdentity } from "../../domain/session-identity.ts";
 import {
   ftsProjectionContentIsValid,
@@ -26,10 +37,15 @@ import {
   ftsProjectionStructureIsValid,
 } from "./fts-projection.ts";
 import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
+import {
+  EFFECTIVE_SOURCE_OBSERVED_AT_SQL,
+  EFFECTIVE_SOURCE_STATE_SQL,
+} from "./sqlite-query-filters.ts";
+import { closeSqliteIterators, type CapturedIteratorFailure } from "./iterator-cleanup.ts";
 
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
-export interface SqliteIndexHealthOptions {
+export interface SqliteIndexHealthOptions extends IndexHealthInspectionOptions {
   readonly fts5SecureDeleteRequired?: boolean;
   readonly migrations?: readonly SqliteMigration[];
   readonly now?: () => Date;
@@ -54,7 +70,12 @@ export async function inspectSqliteReadyIndexHealth(
 
   try {
     return await snapshot.run((database) =>
-      inspectDatabaseHealth(database, options.now ?? now, options.fts5SecureDeleteRequired ?? true),
+      inspectDatabaseHealth(
+        database,
+        options.now ?? now,
+        options.fts5SecureDeleteRequired ?? true,
+        options,
+      ),
     );
   } finally {
     await snapshot.close();
@@ -65,26 +86,57 @@ function inspectDatabaseHealth(
   database: DatabaseSync,
   clock: () => Date,
   fts5SecureDeleteRequired: boolean,
+  diagnostics: IndexHealthInspectionOptions,
 ): ReadyIndexHealth {
-  const canonicalIntegrity = check(() => canonicalIntegrityIsValid(database));
-  const captureScope = inspectCaptureScope(database, canonicalIntegrity);
-  const foreignKeys = check(() => foreignKeysAreValid(database));
-  const contentReachability = inspectContentReachability(database);
-  const ftsStructure = check(() => ftsProjectionStructureIsValid(database));
-  const ftsContent = check(
-    () =>
-      ftsStructure === "ok" &&
-      ftsProjectionContentIsValid(database) &&
-      ftsProjectionSemanticContentIsValidReadOnly(database),
+  const canonicalIntegrity = observeHealthPhase(
+    diagnostics,
+    "canonical",
+    "canonicalIntegrity",
+    () => check(() => canonicalIntegrityIsValid(database)),
   );
-  const ftsSecureDelete = inspectFtsSecureDeleteHealth(database, fts5SecureDeleteRequired);
-  const pageReclamation = inspectSqlitePageReclamation(database);
+  const captureScope = observeHealthPhase(diagnostics, "capture-scope", "captureScope", () =>
+    inspectCaptureScope(database, canonicalIntegrity),
+  );
+  const foreignKeys = observeHealthPhase(diagnostics, "foreign-keys", "foreignKeys", () =>
+    check(() => foreignKeysAreValid(database)),
+  );
+  const contentReachability = observeHealthPhase(
+    diagnostics,
+    "content-reachability",
+    "contentReachability",
+    () => inspectContentReachability(database),
+  );
+  const ftsStructure = observeHealthPhase(diagnostics, "fts-structure", "ftsStructure", () =>
+    check(() => ftsProjectionStructureIsValid(database)),
+  );
+  const ftsCoverage = observeHealthPhase(diagnostics, "fts-content", "ftsContent", () =>
+    check(() => ftsStructure === "ok" && ftsProjectionContentIsValid(database)),
+  );
+  const ftsContent =
+    ftsCoverage === "ok"
+      ? observeHealthPhase(diagnostics, "fts-semantic", "ftsSemantic", () =>
+          check(() => ftsProjectionSemanticContentIsValidReadOnly(database)),
+        )
+      : "failed";
+  const ftsSecureDelete = observeHealthPhase(diagnostics, "fts-security", "ftsSecurity", () =>
+    inspectFtsSecureDeleteHealth(database, fts5SecureDeleteRequired),
+  );
+  const pageReclamation = observeHealthPhase(
+    diagnostics,
+    "page-reclamation",
+    "pageReclamation",
+    () => inspectSqlitePageReclamation(database),
+  );
   const ftsRemediation =
     ftsStructure === "ok" && ftsContent === "ok" && ftsSecureDelete.healthy
       ? "not-needed"
       : "rebuild-required";
-  const runs = readRunCounts(database);
-  const writerLease = readLeaseHealth(database, clock);
+  const runs = observeHealthPhase(diagnostics, "run-records", "runRecords", () =>
+    readRunCounts(database),
+  );
+  const writerLease = observeHealthPhase(diagnostics, "writer-lease", "writerLease", () =>
+    readLeaseHealth(database, clock),
+  );
   const activeRunHasLiveIndexLease = runs.active === 0 || writerLease === "index-live";
   const ok =
     canonicalIntegrity === "ok" &&
@@ -117,6 +169,16 @@ function inspectDatabaseHealth(
     activeRuns: runs.active,
     interruptedRuns: runs.interrupted,
   });
+}
+
+function observeHealthPhase<T>(
+  diagnostics: IndexHealthInspectionOptions,
+  progressPhase: DoctorHealthPhase,
+  timingPhase: DoctorTimingPhase,
+  operation: () => T,
+): T {
+  reportDoctorProgress(diagnostics.progress, { phase: progressPhase });
+  return timeDoctorSyncOperation(diagnostics.timing, timingPhase, operation);
 }
 
 function inspectCaptureScope(
@@ -193,54 +255,95 @@ function sourceInstancesAreValid(database: DatabaseSync): boolean {
 }
 
 function sessionTrackingIsValid(database: DatabaseSync): boolean {
-  const rows = database
-    .prepare(
-      `SELECT tracking.session_id,
-              tracking.source_instance_id,
-              tracking.native_id,
-              tracking.presence_status,
-              tracking.presence_observed_at,
-              tracking.captured_at,
-              tracking.last_seen_at,
-              source.kind,
-              source.instance_id
-       FROM sessions_session_tracking AS tracking
-       LEFT JOIN sessions_source_instances AS source
-         ON source.source_instance_id = tracking.source_instance_id
-       ORDER BY tracking.session_id`,
-    )
-    .all() as readonly Record<string, unknown>[];
-  for (const row of rows) {
-    const sessionId = nonNegativeInteger(row.session_id);
-    nonNegativeInteger(row.source_instance_id);
-    const identity = {
-      source: { kind: row.kind, instanceId: row.instance_id },
-      nativeId: row.native_id,
-    };
-    if (!isSessionIdentity(identity)) return false;
-    if (
-      (row.presence_status !== "present" && row.presence_status !== "missing") ||
-      !optionalCanonicalTimestampIsValid(row.presence_observed_at) ||
-      !optionalCanonicalTimestampIsValid(row.captured_at) ||
-      !optionalCanonicalTimestampIsValid(row.last_seen_at)
-    ) {
-      return false;
-    }
+  const statement = database.prepare(
+    `SELECT tracking.session_id,
+            tracking.source_instance_id,
+            tracking.native_id,
+            tracking.last_good_fingerprint_scheme,
+            tracking.last_good_fingerprint_digest,
+            tracking.last_good_adapter_version,
+            tracking.latest_fingerprint_scheme,
+            tracking.latest_fingerprint_digest,
+            tracking.latest_adapter_version,
+            tracking.latest_outcome,
+            tracking.latest_failure_code,
+            tracking.presence_status,
+            tracking.presence_observed_at,
+            tracking.captured_at,
+            tracking.last_seen_at,
+            source.kind,
+            source.instance_id,
+            canonical.session_id AS canonical_session_id,
+            canonical.title,
+            canonical.workspace,
+            canonical.created_at,
+            canonical.updated_at,
+            canonical.document_digest_scheme,
+            canonical.document_digest,
+            ${EFFECTIVE_SOURCE_STATE_SQL} AS source_state,
+            ${EFFECTIVE_SOURCE_OBSERVED_AT_SQL} AS source_observed_at
+     FROM sessions_session_tracking AS tracking
+     LEFT JOIN sessions_source_instances AS source
+       ON source.source_instance_id = tracking.source_instance_id
+     LEFT JOIN sessions_canonical_sessions AS canonical
+       ON canonical.session_id = tracking.session_id
+     ORDER BY tracking.session_id`,
+  );
+  statement.setReadBigInts(true);
+  const rows = statement.iterate() as Iterator<TrackingHealthRow>;
+  const documents = scanCanonicalDocumentRecords(database);
+  let document: ReturnType<typeof documents.next>;
+  let operationFailure: CapturedIteratorFailure = { caught: false };
+  try {
+    document = documents.next();
+    for (let next = rows.next(); !next.done; next = rows.next()) {
+      const row = next.value;
+      const sessionId = nonNegativeInteger(row.session_id);
+      nonNegativeInteger(row.source_instance_id);
+      const identity = {
+        source: { kind: row.kind, instanceId: row.instance_id },
+        nativeId: row.native_id,
+      };
+      if (!isSessionIdentity(identity)) return false;
+      if (
+        (row.presence_status !== "present" && row.presence_status !== "missing") ||
+        !optionalCanonicalTimestampIsValid(row.presence_observed_at) ||
+        !optionalCanonicalTimestampIsValid(row.captured_at) ||
+        !optionalCanonicalTimestampIsValid(row.last_seen_at)
+      ) {
+        return false;
+      }
 
-    const freshness = readSessionFreshness(database, identity);
-    const document = readCanonicalDocument(database, identity, sessionId);
-    const summary = readSessionSummary(database, identity);
-    if (freshness.status === "current" || freshness.status === "stale") {
-      if (document === undefined || summary === undefined) return false;
-      continue;
+      while (!document.done && document.value.sessionId < sessionId) {
+        document = documents.next();
+      }
+      const hasRetainedDocument = !document.done && document.value.sessionId === sessionId;
+      const canonicalSessionId = optionalSessionIdAt(row.canonical_session_id);
+      if (
+        (canonicalSessionId !== undefined) !== hasRetainedDocument ||
+        (canonicalSessionId !== undefined && canonicalSessionId !== sessionId)
+      ) {
+        return false;
+      }
+
+      const freshness = decodeTrackedSessionFreshness(identity, hasRetainedDocument, row);
+      if (freshness.status === "current" || freshness.status === "stale") {
+        if (!hasRetainedDocument) return false;
+        decodeRetainedSessionSummary(identity, row, freshness);
+        document = documents.next();
+        continue;
+      }
+      // A first-seen failure legitimately retains tracking without a document.
+      if (hasRetainedDocument || row.captured_at !== null) return false;
     }
-    // A first-seen failure legitimately retains tracking without a document.
-    if (freshness.status === "untracked" || document !== undefined || summary !== undefined) {
-      return false;
-    }
-    if (row.captured_at !== null) return false;
+    while (!document.done) document = documents.next();
+    return true;
+  } catch (error) {
+    operationFailure = { caught: true, error };
+    throw error;
+  } finally {
+    closeSqliteIterators([documents, rows], operationFailure);
   }
-  return true;
 }
 
 function optionalCanonicalTimestampIsValid(value: unknown): boolean {
@@ -252,6 +355,11 @@ function optionalCanonicalTimestampIsValid(value: unknown): boolean {
     Number.isFinite(milliseconds) &&
     new Date(milliseconds).toISOString() === value
   );
+}
+
+function optionalSessionIdAt(value: unknown): number | undefined {
+  if (value === null) return undefined;
+  return nonNegativeInteger(value);
 }
 
 export function foreignKeysAreValid(database: DatabaseSync): boolean {
@@ -396,4 +504,17 @@ function nonNegativeBigInt(value: unknown): bigint {
 
 function now(): Date {
   return new Date();
+}
+
+interface TrackingHealthRow extends SessionTrackingFreshnessColumns, SessionSummaryColumns {
+  readonly session_id: unknown;
+  readonly source_instance_id: unknown;
+  readonly native_id: unknown;
+  readonly presence_status: unknown;
+  readonly presence_observed_at: unknown;
+  readonly captured_at: string | null;
+  readonly last_seen_at: unknown;
+  readonly kind: unknown;
+  readonly instance_id: unknown;
+  readonly canonical_session_id: unknown;
 }

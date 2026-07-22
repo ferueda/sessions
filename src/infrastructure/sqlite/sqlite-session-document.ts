@@ -33,6 +33,7 @@ import {
   encodeSqliteDocumentDigest,
 } from "./sqlite-document-digest.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
+import { closeSqliteIterators, type CapturedIteratorFailure } from "./iterator-cleanup.ts";
 
 export function replaceCanonicalDocument(
   database: DatabaseSync,
@@ -91,6 +92,11 @@ export interface CanonicalDocumentRecord {
   readonly documentMetrics: SessionDocumentMetrics;
 }
 
+export interface ScannedCanonicalDocumentRecord extends CanonicalDocumentRecord {
+  readonly sessionId: number;
+  readonly identity: SessionIdentity;
+}
+
 export function readCanonicalDocumentRecord(
   database: DatabaseSync,
   identity: SessionIdentity,
@@ -120,6 +126,123 @@ export function readCanonicalDocumentRecord(
 
   const relations = readRelations(database, sessionId);
   const entries = readEntries(database, sessionId);
+  return finalizeCanonicalDocument(identity, session, relations, entries);
+}
+
+export function* scanCanonicalDocumentRecords(
+  database: DatabaseSync,
+): Generator<ScannedCanonicalDocumentRecord> {
+  const headerStatement = database.prepare(
+    `SELECT canonical.session_id,
+            source.kind AS source_kind,
+            source.instance_id AS source_instance_id,
+            tracking.native_id,
+            canonical.lineage_coverage,
+            canonical.title,
+            canonical.workspace,
+            canonical.created_at,
+            canonical.updated_at,
+            canonical.document_digest_scheme,
+            canonical.document_digest,
+            metrics.relation_count,
+            metrics.entry_count,
+            metrics.segment_count,
+            metrics.omitted_segment_count,
+            metrics.text_utf8_bytes
+     FROM sessions_canonical_sessions AS canonical
+     LEFT JOIN sessions_session_tracking AS tracking
+       ON tracking.session_id = canonical.session_id
+     LEFT JOIN sessions_source_instances AS source
+       ON source.source_instance_id = tracking.source_instance_id
+     LEFT JOIN sessions_canonical_document_metrics AS metrics
+       ON metrics.session_id = canonical.session_id
+     ORDER BY canonical.session_id`,
+  );
+  const relationStatement = database.prepare(
+    `SELECT session_id, ordinal, kind, target_kind, target_instance_id,
+            target_native_id, confidence
+     FROM sessions_relations
+     ORDER BY session_id, ordinal`,
+  );
+  const entryStatement = database.prepare(
+    `SELECT session_id, ordinal, kind, actor, timestamp, related_entry_ordinal,
+            tool_call_id, tool_name, tool_namespace, source_locator_uri,
+            source_locator_record_id
+     FROM sessions_entries
+     ORDER BY session_id, ordinal`,
+  );
+  const segmentStatement = database.prepare(
+    `SELECT occurrence.session_id,
+            occurrence.entry_ordinal,
+            occurrence.segment_ordinal,
+            occurrence.origin,
+            occurrence.confidence,
+            occurrence.source_metadata_json,
+            occurrence.content_id,
+            occurrence.content_class,
+            occurrence.source_type,
+            content.digest,
+            content.text
+     FROM sessions_content_occurrences AS occurrence
+     LEFT JOIN sessions_content_values AS content
+       ON content.content_id = occurrence.content_id
+     ORDER BY occurrence.session_id, occurrence.entry_ordinal, occurrence.segment_ordinal`,
+  );
+  headerStatement.setReadBigInts(true);
+  relationStatement.setReadBigInts(true);
+  entryStatement.setReadBigInts(true);
+  segmentStatement.setReadBigInts(true);
+
+  let headerIterator: Iterator<HeaderScanRow> | undefined;
+  let relationIterator: Iterator<RelationScanRow> | undefined;
+  let entryIterator: Iterator<EntryScanRow> | undefined;
+  let segmentIterator: Iterator<SegmentScanRow> | undefined;
+  let operationFailure: CapturedIteratorFailure = { caught: false };
+  try {
+    headerIterator = headerStatement.iterate() as Iterator<HeaderScanRow>;
+    relationIterator = relationStatement.iterate() as Iterator<RelationScanRow>;
+    entryIterator = entryStatement.iterate() as Iterator<EntryScanRow>;
+    segmentIterator = segmentStatement.iterate() as Iterator<SegmentScanRow>;
+    const relationRows = new OrderedSessionRows(relationIterator);
+    const entryRows = new OrderedSessionRows(entryIterator);
+    const segmentRows = new OrderedSessionRows(segmentIterator);
+    let previousSessionId = -1;
+    for (let next = headerIterator.next(); !next.done; next = headerIterator.next()) {
+      const row = next.value;
+      const sessionId = integerAt(row.session_id);
+      if (sessionId <= previousSessionId) throw new SqliteSessionIndexError("corrupt-data");
+      previousSessionId = sessionId;
+      const identity = identityAt(row);
+      const relations = relationRows
+        .take(sessionId)
+        .map((relation, ordinal) => relationFromRow(relation, ordinal));
+      const segmentsByEntry = segmentsByEntryFromRows(segmentRows.take(sessionId));
+      const entries = entryRows
+        .take(sessionId)
+        .map((entry, ordinal) => entryFromRow(entry, ordinal, segmentsByEntry));
+      yield {
+        sessionId,
+        identity,
+        ...finalizeCanonicalDocument(identity, row, relations, entries),
+      };
+    }
+  } catch (error) {
+    operationFailure = { caught: true, error };
+    throw error;
+  } finally {
+    closeSqliteIterators(
+      [segmentIterator, entryIterator, relationIterator, headerIterator],
+      operationFailure,
+    );
+  }
+}
+
+function finalizeCanonicalDocument(
+  identity: SessionIdentity,
+  session: SessionRow,
+  relations: readonly SessionRelation[],
+  entries: readonly SessionEntry[],
+): CanonicalDocumentRecord {
   const candidate: SessionDocument = {
     identity: copyIdentity(identity),
     lineageCoverage: lineageCoverageAt(session.lineage_coverage),
@@ -330,17 +453,7 @@ function readRelations(database: DatabaseSync, sessionId: number): readonly Sess
        ORDER BY ordinal`,
     )
     .all(sessionId) as unknown as readonly RelationRow[];
-  return rows.map((row, ordinal) => {
-    if (integerAt(row.ordinal) !== ordinal) throw new SqliteSessionIndexError("corrupt-data");
-    return {
-      kind: row.kind,
-      target: {
-        source: { kind: row.target_kind, instanceId: row.target_instance_id },
-        nativeId: row.target_native_id,
-      },
-      confidence: row.confidence,
-    };
-  });
+  return rows.map((row, ordinal) => relationFromRow(row, ordinal));
 }
 
 function readEntries(database: DatabaseSync, sessionId: number): readonly SessionEntry[] {
@@ -355,32 +468,7 @@ function readEntries(database: DatabaseSync, sessionId: number): readonly Sessio
     .all(sessionId) as unknown as readonly EntryRow[];
   const segmentsByEntry = readSegments(database, sessionId);
 
-  return entryRows.map((row, ordinal) => {
-    if (integerAt(row.ordinal) !== ordinal) throw new SqliteSessionIndexError("corrupt-data");
-    const toolName = optionalStoredString(row.tool_name);
-    const toolNamespace = optionalStoredString(row.tool_namespace);
-    if (
-      (row.kind !== "tool-call" && (toolName !== undefined || toolNamespace !== undefined)) ||
-      (toolNamespace !== undefined && toolName === undefined)
-    ) {
-      throw new SqliteSessionIndexError("corrupt-data");
-    }
-    return {
-      ordinal,
-      kind: row.kind,
-      actor: row.actor,
-      ...optional("timestamp", row.timestamp),
-      ...optionalInteger("relatedEntryOrdinal", row.related_entry_ordinal),
-      ...optional("toolCallId", row.tool_call_id),
-      ...(toolName === undefined ? {} : { toolName }),
-      ...(toolNamespace === undefined ? {} : { toolNamespace }),
-      sourceLocator: {
-        uri: row.source_locator_uri,
-        ...optional("recordId", row.source_locator_record_id),
-      },
-      content: segmentsByEntry.get(ordinal) ?? [],
-    };
-  });
+  return entryRows.map((row, ordinal) => entryFromRow(row, ordinal, segmentsByEntry));
 }
 
 function readSegments(
@@ -406,6 +494,55 @@ function readSegments(
   );
   statement.setReadBigInts(true);
   const rows = statement.all(sessionId) as unknown as readonly SegmentRow[];
+  return segmentsByEntryFromRows(rows);
+}
+
+function relationFromRow(row: RelationRow, ordinal: number): SessionRelation {
+  if (integerAt(row.ordinal) !== ordinal) throw new SqliteSessionIndexError("corrupt-data");
+  return {
+    kind: row.kind,
+    target: {
+      source: { kind: row.target_kind, instanceId: row.target_instance_id },
+      nativeId: row.target_native_id,
+    },
+    confidence: row.confidence,
+  };
+}
+
+function entryFromRow(
+  row: EntryRow,
+  ordinal: number,
+  segmentsByEntry: ReadonlyMap<number, ContentSegment[]>,
+): SessionEntry {
+  if (integerAt(row.ordinal) !== ordinal) throw new SqliteSessionIndexError("corrupt-data");
+  const toolName = optionalStoredString(row.tool_name);
+  const toolNamespace = optionalStoredString(row.tool_namespace);
+  if (
+    (row.kind !== "tool-call" && (toolName !== undefined || toolNamespace !== undefined)) ||
+    (toolNamespace !== undefined && toolName === undefined)
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return {
+    ordinal,
+    kind: row.kind,
+    actor: row.actor,
+    ...optional("timestamp", row.timestamp),
+    ...optionalInteger("relatedEntryOrdinal", row.related_entry_ordinal),
+    ...optional("toolCallId", row.tool_call_id),
+    ...(toolName === undefined ? {} : { toolName }),
+    ...(toolNamespace === undefined ? {} : { toolNamespace }),
+    sourceLocator: {
+      uri: row.source_locator_uri,
+      ...optional("recordId", row.source_locator_record_id),
+    },
+    content: segmentsByEntry.get(ordinal) ?? [],
+  };
+}
+
+function segmentsByEntryFromRows(
+  rows: readonly SegmentRow[],
+): ReadonlyMap<number, ContentSegment[]> {
   const result = new Map<number, ContentSegment[]>();
   for (const row of rows) {
     const entryOrdinal = integerAt(row.entry_ordinal);
@@ -488,6 +625,20 @@ function optionalStoredString(value: unknown): string | undefined {
   return value;
 }
 
+function identityAt(row: HeaderScanRow): SessionIdentity {
+  if (
+    typeof row.source_kind !== "string" ||
+    typeof row.source_instance_id !== "string" ||
+    typeof row.native_id !== "string"
+  ) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return {
+    source: { kind: row.source_kind, instanceId: row.source_instance_id },
+    nativeId: row.native_id,
+  };
+}
+
 function copyIdentity(identity: SessionIdentity): SessionIdentity {
   return { source: { ...identity.source }, nativeId: identity.nativeId };
 }
@@ -509,6 +660,14 @@ function optionalInteger<const Key extends string>(
 function integerAt(value: unknown): number {
   const integer = typeof value === "bigint" ? Number(value) : value;
   if (typeof integer !== "number" || !Number.isSafeInteger(integer) || integer < 0) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return integer;
+}
+
+function signedIntegerAt(value: unknown): number {
+  const integer = typeof value === "bigint" ? Number(value) : value;
+  if (typeof integer !== "number" || !Number.isSafeInteger(integer)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   return integer;
@@ -544,6 +703,13 @@ interface SessionRow {
   readonly text_utf8_bytes: unknown;
 }
 
+interface HeaderScanRow extends SessionRow {
+  readonly session_id: unknown;
+  readonly source_kind: unknown;
+  readonly source_instance_id: unknown;
+  readonly native_id: unknown;
+}
+
 function documentMetricsAt(row: SessionRow): SessionDocumentMetrics {
   try {
     return copySessionDocumentMetrics({
@@ -573,6 +739,10 @@ interface RelationRow {
   readonly confidence: SessionRelation["confidence"];
 }
 
+interface RelationScanRow extends RelationRow {
+  readonly session_id: unknown;
+}
+
 interface EntryRow {
   readonly ordinal: number | bigint;
   readonly kind: string;
@@ -586,6 +756,10 @@ interface EntryRow {
   readonly source_locator_record_id: string | null;
 }
 
+interface EntryScanRow extends EntryRow {
+  readonly session_id: unknown;
+}
+
 interface SegmentRow {
   readonly entry_ordinal: number | bigint;
   readonly segment_ordinal: number | bigint;
@@ -597,4 +771,40 @@ interface SegmentRow {
   readonly source_type: unknown;
   readonly digest: unknown;
   readonly text: unknown;
+}
+
+interface SegmentScanRow extends SegmentRow {
+  readonly session_id: unknown;
+}
+
+class OrderedSessionRows<Row extends { readonly session_id: unknown }> {
+  private current: IteratorResult<Row> | undefined;
+  private readonly iterator: Iterator<Row>;
+
+  constructor(iterator: Iterator<Row>) {
+    this.iterator = iterator;
+  }
+
+  take(sessionId: number): readonly Row[] {
+    let current = this.peek();
+    while (!current.done && signedIntegerAt(current.value.session_id) < sessionId) {
+      current = this.advance();
+    }
+
+    const rows: Row[] = [];
+    while (!current.done && signedIntegerAt(current.value.session_id) === sessionId) {
+      rows.push(current.value);
+      current = this.advance();
+    }
+    return rows;
+  }
+
+  private peek(): IteratorResult<Row> {
+    return (this.current ??= this.iterator.next());
+  }
+
+  private advance(): IteratorResult<Row> {
+    this.current = this.iterator.next();
+    return this.current;
+  }
 }

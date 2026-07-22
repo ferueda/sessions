@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 
 import { describe, expect, test } from "vitest";
 
@@ -10,6 +10,7 @@ import {
 
 const ABOVE_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
 const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
+const DOCTOR_EXPECTED_FTS_TABLE = "sessions_doctor_expected_fts";
 
 describe("SQLite FTS projection invariants", () => {
   test("compares complete semantic content across signed-ID keyset windows and cleans TEMP state", () => {
@@ -29,10 +30,68 @@ describe("SQLite FTS projection invariants", () => {
       expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(true);
       expect(readDoctorTempObjects(database)).toEqual([]);
       expect(database.prepare("PRAGMA temp_store").get()).toEqual({ temp_store: 2 });
+      expect(database.isTransaction).toBe(false);
 
       expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(true);
       expect(readDoctorTempObjects(database)).toEqual([]);
+      expect(database.isTransaction).toBe(false);
     } finally {
+      database.close();
+    }
+  });
+
+  test("composes the expected FTS load with an outer transaction", () => {
+    const database = createProjectionDatabase();
+    try {
+      insertContent(database, 1n, "canonical evidence");
+      database.exec("BEGIN");
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(true);
+      expect(database.isTransaction).toBe(true);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+
+      database.exec("ROLLBACK");
+      expect(database.isTransaction).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rolls back a partial expected FTS load before failure cleanup", () => {
+    const database = createProjectionDatabase({ textType: "BLOB" });
+    try {
+      insertContent(database, 1n, "valid first row");
+      database
+        .prepare("INSERT INTO sessions_content_values (content_id, text) VALUES (?, ?)")
+        .run(2n, new Uint8Array([1, 2, 3]));
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(false);
+      expect(database.isTransaction).toBe(false);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+
+      // Keep the expected table after a second failed load so its post-savepoint
+      // contents can prove that the valid first row was rolled back.
+      database.setAuthorizer((action, name, _argument, schema) =>
+        action === constants.SQLITE_DROP_VTABLE &&
+        name === DOCTOR_EXPECTED_FTS_TABLE &&
+        schema === "temp"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+
+      expect(ftsProjectionSemanticContentIsValidReadOnly(database)).toBe(false);
+      database.setAuthorizer(null);
+
+      expect(database.isTransaction).toBe(false);
+      expect(
+        database.prepare(`SELECT COUNT(*) AS count FROM temp.${DOCTOR_EXPECTED_FTS_TABLE}`).get(),
+      ).toEqual({ count: 0 });
+
+      database.exec(`DROP TABLE temp.${DOCTOR_EXPECTED_FTS_TABLE}`);
+      expect(readDoctorTempObjects(database)).toEqual([]);
+    } finally {
+      database.setAuthorizer(null);
       database.close();
     }
   });
@@ -111,12 +170,15 @@ describe("SQLite FTS projection invariants", () => {
   });
 });
 
-function createProjectionDatabase(): DatabaseSync {
+function createProjectionDatabase(
+  options: { readonly textType?: "TEXT" | "BLOB" } = {},
+): DatabaseSync {
   const database = new DatabaseSync(":memory:");
+  const textType = options.textType ?? "TEXT";
   database.exec(`CREATE TABLE sessions_content_values (
   content_id INTEGER PRIMARY KEY,
-  text TEXT NOT NULL COLLATE BINARY
-) STRICT;
+  text ${textType} NOT NULL COLLATE BINARY
+)${textType === "TEXT" ? " STRICT" : ""};
 
 ${FTS_PROJECTION_SCHEMA_SQL};`);
   return database;

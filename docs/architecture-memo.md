@@ -725,8 +725,8 @@ for export-eligible fields in the one snapshot.
 
 `sessions doctor` performs real, read-only capability checks. It verifies the
 minimum Node runtime, probes the runtime's SQLite/FTS5 build in memory, inspects
-library safety/health through immutable state, and probes Codex readiness without
-reading rollout content.
+library safety/health through immutable state, and probes registered-source
+readiness without reading provider transcript content.
 
 Doctor supports human output through `sessions doctor` and JSON through `sessions doctor --format json`. The JSON contract is:
 
@@ -752,7 +752,13 @@ Doctor supports human output through `sessions doctor` and JSON through `session
 
 Check order is stable. Every check runs even when an earlier check fails. A thrown probe error becomes a sanitized failed check rather than aborting aggregation.
 
-The complete human or JSON report is requested data and goes to stdout. All-pass exits `0`; any failed check exits `1`; both leave stderr empty. An unexpected failure outside aggregation writes a concise diagnostic to stderr, emits no fabricated report, and exits `1`. Invalid format or other usage exits `2` through normal CLI error handling.
+The complete human or JSON report is requested data and goes to stdout. All-pass
+exits `0`; any failed check exits `1`. When stderr is interactive, doctor may
+write fixed best-effort phase notices there; redirected stderr stays empty for
+normal success and failed-check reports. An unexpected failure outside
+aggregation writes a concise diagnostic to stderr, emits no fabricated report,
+and exits `1`. Invalid format or other usage exits `2` through normal CLI error
+handling. Progress never changes the report, check order, stdout, or exit code.
 
 The current checks are `node-runtime`, `sqlite-fts5`, `library-state`,
 `source-codex`, and `source-cursor`. The SQLite capability probe uses `:memory:`. An uninitialized
@@ -765,8 +771,24 @@ retain their failed-health precedence. If capture inspection cannot be trusted,
 doctor reports `captureStatus: "inspection-failed"` with unknown capture counts.
 An active run requires a live indexing lease; interrupted history alone is
 informational. Doctor treats unavailable registered sources as informational,
-fails unreadable or invalid probes, and never reads transcripts, opens a writer,
-or persists state.
+fails unreadable or invalid probes, and never opens provider transcript content
+or a writer or persists state. The exact audit does read every Sessions-owned
+retained canonical transcript and may take minutes on a large library. Canonical
+health uses ordered whole-library scans while retaining at most one reconstructed
+document at a time, then applies the same validation, public digest, and metrics
+checks as point reads. Semantic FTS health still builds a complete memory-only
+TEMP expected index and compares exact docsize, terms, and positions in both
+directions; one private savepoint avoids per-row autocommit work but does not
+make peak expected-index memory constant.
+
+`SESSIONS_DOCTOR_TIMINGS=1` adds one best-effort
+`sessions:doctor-timings` JSON record to stderr after success or failure. The
+fixed aggregate phases are `sourceResolution`, `libraryState`,
+`canonicalIntegrity`, `captureScope`, `foreignKeys`, `contentReachability`,
+`ftsStructure`, `ftsContent`, `ftsSemantic`, `ftsSecurity`, `pageReclamation`,
+`runRecords`, `writerLease`, and `total`. Each phase contains only a call count
+and elapsed milliseconds. Timing is never stored and changes no health decision,
+report field, stdout, or exit code.
 
 ## Agent Skill design
 
@@ -796,10 +818,14 @@ contracts; it adds no hidden query, provider access, or storage behavior.
 
 Every playbook follows the shared `evidence-protocol.md` contract:
 
-1. Run `doctor`; index only when the user has authorized it.
+1. Run `paths` for routine readiness; reserve doctor for an explicit integrity
+   audit, suspected damage, or post-repair/post-maintenance verification. Paths
+   does not prove canonical or FTS integrity. Index only when the user has
+   authorized it.
 2. State the question and required evidence.
-3. Start with narrow, bounded JSON/JSONL queries and read each page's capture
-   scope before interpreting retained results.
+3. Start with narrow, bounded JSON/JSONL queries and read each page's or manifest
+   cohort's capture scope from the same snapshot before interpreting retained
+   results.
 4. Record commands, filters, cursors, canonical IDs, and entry ordinals.
 5. Inspect linked calls/results and nearby context.
 6. Report facts before interpretation.
@@ -1204,11 +1230,14 @@ honest coverage, never inferred facts.
 ### Cross-cutting maintenance
 
 Measured indexing and query work may proceed alongside the ordered milestones
-when it preserves evidence semantics. Current priorities are faster read-only
-`doctor` and dirty/recovery validation, clear progress and recovery status for
-long operations, and lower routine storage cost. Performance work must preserve
-canonical equality, capture scope, failure truth, and provider-read-only
-behavior; it must not weaken integrity checks merely to meet a time budget.
+when it preserves evidence semantics. Read-only doctor now avoids per-session
+canonical reads, batches the TEMP FTS load transactionally, reports interactive
+phases, and supports aggregate opt-in timings without weakening its exact proof.
+Remaining priorities are lower-memory exact FTS validation, faster dirty/recovery
+validation, clear recovery status for long operations, and lower routine storage
+cost. Performance work must preserve canonical equality, capture scope, failure
+truth, and provider-read-only behavior; it must not weaken integrity checks
+merely to meet a time budget.
 
 ### Evidence-gated candidates
 

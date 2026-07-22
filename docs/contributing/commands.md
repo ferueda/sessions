@@ -101,8 +101,10 @@ workspace are removed; the ordinary Sessions library is never opened.
 
 Current public CLI commands are documented in
 [the CLI contract](../reference/cli-contract.md). Doctor and paths inspect state
-but create no directories, files, migrations, or transcript reads. Index
-explicitly creates/updates the durable library from read-only Cursor or Codex inputs;
+but create no directories, persistent files, or migrations. Paths does not scan
+retained transcript bodies. Doctor reads all retained canonical content for its
+exact audit, but neither command opens provider transcript content. Index explicitly
+creates/updates the durable library from read-only Cursor or Codex inputs;
 list/search/entries/show/export are library-only reads, and export never writes a
 destination or resolves a provider;
 forget/data-repair-orphans/data-clear delete only Sessions-owned state.

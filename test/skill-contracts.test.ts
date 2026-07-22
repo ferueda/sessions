@@ -71,8 +71,15 @@ describe("Sessions Agent Skill contracts", () => {
       path.join(skillRoot, "references", "evidence-protocol.md"),
       "utf8",
     );
-    expect(protocol).toMatch(/sessions doctor --format json/u);
-    expect(protocol).toMatch(/provider-free[\s\S]*source check\s+fails[\s\S]*Continue/u);
+    expect(protocol).toMatch(/sessions paths --format json/u);
+    expect(protocol).toMatch(
+      /paths` proves[\s\S]*readiness, not canonical or FTS[\s\S]*integrity/u,
+    );
+    expect(protocol).toMatch(/provider-free[\s\S]*source probe fails[\s\S]*Continue/u);
+    expect(protocol).toMatch(
+      /sessions doctor --format json[\s\S]*explicit full integrity[\s\S]*suspected library damage[\s\S]*post-repair/u,
+    );
+    expect(protocol).toMatch(/same-snapshot `captureScope`/u);
     expect(protocol).toMatch(
       /explicitly authorizes indexing[\s\S]*reading provider history[\s\S]*writing a durable Sessions-owned copy/u,
     );

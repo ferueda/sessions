@@ -6,20 +6,37 @@ import type {
 import type { IndexPaths, IndexStateInspector } from "../../application/ports/index-lifecycle.ts";
 import type { RuntimeDiagnostic } from "../../application/ports/runtime-diagnostic.ts";
 import type { IndexState } from "../../domain/index-state.ts";
+import {
+  reportDoctorProgress,
+  type DoctorProgressObserver,
+} from "../../application/doctor-progress.ts";
+import { timeDoctorOperation, type DoctorTimingRecorder } from "../../application/doctor-timing.ts";
+
+export interface IndexStateDiagnosticOptions {
+  readonly progress?: DoctorProgressObserver;
+  readonly timing?: DoctorTimingRecorder;
+}
 
 export function createIndexStateDiagnostic(
   resolvePaths: () => IndexPaths,
   inspector: IndexStateInspector & IndexHealthInspector,
+  options: IndexStateDiagnosticOptions = {},
 ): RuntimeDiagnostic {
   return {
     id: "library-state",
     label: "Sessions library",
     async run() {
       const paths = resolvePaths();
-      const state = await inspector.inspect(paths);
+      reportDoctorProgress(options.progress, { phase: "library-state" });
+      const state = await timeDoctorOperation(options.timing, "libraryState", () =>
+        inspector.inspect(paths),
+      );
       if (state.status === "ready") {
         try {
-          const health = await inspector.inspectHealth(paths);
+          const health = await inspector.inspectHealth(paths, {
+            ...(options.progress === undefined ? {} : { progress: options.progress }),
+            ...(options.timing === undefined ? {} : { timing: options.timing }),
+          });
           return {
             ok: health.ok,
             summary: !health.ok

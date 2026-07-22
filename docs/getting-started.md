@@ -46,13 +46,21 @@ sessions doctor --format json
 sessions paths --format json
 ```
 
-Read each doctor check separately. A failed source check prevents fresh indexing
-from that source, but a ready retained library can still support `list`, `search`,
-`entries`, `manifest`, `show`, and `export`. Doctor and paths do not index or
-create state.
-For a ready library, `captureStatus: "incomplete"` is an evidence warning rather
-than a failed health check: stale, unindexed, or unknown-coverage sessions may
-limit what retained queries can prove.
+This install or upgrade verification deliberately includes one exact doctor
+audit. Read its checks separately. Doctor reconstructs and validates every
+retained canonical document and verifies exact FTS terms and positions, so a
+large library may take minutes. It reads Sessions-owned retained transcript
+content, but never provider transcript content. Paths and doctor do not index, migrate, or
+create persistent state.
+
+A failed source check prevents fresh indexing from that source, but a ready
+retained library can still support `list`, `search`, `entries`, `manifest`,
+`show`, and `export`. For later routine analysis, start with
+`sessions paths --format json`; it proves readiness, not canonical or FTS
+integrity. Read the query result's same-snapshot `captureScope` before relying on
+its rows. `captureScope.status: "incomplete"` is an evidence warning rather than
+a failed health check: stale, unindexed, or unknown-coverage sessions may limit
+what retained queries can prove.
 
 ## 4. Authorize indexing
 

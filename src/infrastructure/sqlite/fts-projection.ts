@@ -18,6 +18,7 @@ const DOCTOR_CONTENT_WINDOW_SIZE = 512;
 const DOCTOR_EXPECTED_FTS_TABLE = "sessions_doctor_expected_fts";
 const DOCTOR_EXPECTED_VOCAB_TABLE = "sessions_doctor_expected_fts_vocab";
 const DOCTOR_ACTUAL_VOCAB_TABLE = "sessions_doctor_actual_fts_vocab";
+const DOCTOR_EXPECTED_LOAD_SAVEPOINT = "sessions_doctor_expected_fts_load";
 const SQLITE_INTEGER_MIN = -9_223_372_036_854_775_808n;
 const SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807n;
 
@@ -355,6 +356,16 @@ interface DoctorContentRow {
 }
 
 function loadExpectedDoctorProjection(database: DatabaseSync): void {
+  database.exec(`SAVEPOINT ${DOCTOR_EXPECTED_LOAD_SAVEPOINT}`);
+  try {
+    loadExpectedDoctorProjectionInsideSavepoint(database);
+    database.exec(`RELEASE SAVEPOINT ${DOCTOR_EXPECTED_LOAD_SAVEPOINT}`);
+  } catch (operationError) {
+    rollbackDoctorExpectedLoad(database, operationError);
+  }
+}
+
+function loadExpectedDoctorProjectionInsideSavepoint(database: DatabaseSync): void {
   const first = database.prepare(
     `SELECT content_id, text
      FROM sessions_content_values
@@ -397,6 +408,26 @@ function loadExpectedDoctorProjection(database: DatabaseSync): void {
     }
     cursor = previous;
   }
+}
+
+function rollbackDoctorExpectedLoad(database: DatabaseSync, operationError: unknown): never {
+  const cleanupErrors: unknown[] = [];
+  try {
+    database.exec(`ROLLBACK TO SAVEPOINT ${DOCTOR_EXPECTED_LOAD_SAVEPOINT}`);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    database.exec(`RELEASE SAVEPOINT ${DOCTOR_EXPECTED_LOAD_SAVEPOINT}`);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length === 0) throw operationError;
+  throw new AggregateError(
+    [operationError, ...cleanupErrors],
+    "SQLite doctor expected FTS load and savepoint cleanup both failed",
+    { cause: operationError },
+  );
 }
 
 function tablesMatchExactly(

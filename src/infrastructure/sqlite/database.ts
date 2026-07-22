@@ -138,7 +138,7 @@ export function createSqliteIndexLifecycle(
       });
     },
 
-    async inspectHealth(paths) {
+    async inspectHealth(paths, healthOptions = {}) {
       const fts5Security = fts5Probe();
       return inspectSqliteReadyIndexHealth(paths, {
         fts5SecureDeleteRequired: fts5Security.secureDelete,
@@ -147,6 +147,8 @@ export function createSqliteIndexLifecycle(
         supportedSchemaVersion,
         timeoutMs: busyTimeoutMs,
         now,
+        ...(healthOptions.progress === undefined ? {} : { progress: healthOptions.progress }),
+        ...(healthOptions.timing === undefined ? {} : { timing: healthOptions.timing }),
       });
     },
 
