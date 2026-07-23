@@ -9,7 +9,7 @@ provider write, or analysis engine.
 The agent process must have a working `sessions` command.
 
 ```bash
-export SESSIONS_VERSION='0.5.0' # x-release-please-version
+export SESSIONS_VERSION='0.6.0' # x-release-please-version
 npm install --global "@ferueda/sessions@${SESSIONS_VERSION}"
 DISABLE_TELEMETRY=1 npx --yes skills@1.5.19 add \
   "https://github.com/ferueda/sessions/tree/v${SESSIONS_VERSION}/skills/sessions" \

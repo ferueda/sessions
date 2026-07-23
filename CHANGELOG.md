@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/ferueda/sessions/compare/v0.5.0...v0.6.0) (2026-07-23)
+
+
+### Features
+
+* optimize everyday query paths ([85df879](https://github.com/ferueda/sessions/commit/85df879eadecfd6cdb61c3f19b2b73977d05df42))
+
+
+### Bug Fixes
+
+* close query review gaps ([a776591](https://github.com/ferueda/sessions/commit/a77659194556776659d69a46deae70b2403febeb))
+
+
+### Performance Improvements
+
+* optimize everyday query hot paths ([f63539c](https://github.com/ferueda/sessions/commit/f63539c68ee57b0ddd68b74b0472bba075a2bf56))
+
 ## [0.5.0](https://github.com/ferueda/sessions/compare/v0.4.0...v0.5.0) (2026-07-22)
 
 
