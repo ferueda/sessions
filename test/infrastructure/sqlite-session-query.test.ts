@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 
 import { describe, expect, test } from "vitest";
 
@@ -9,6 +9,7 @@ import {
 import {
   createSessionListQuery,
   createSessionSearchQuery,
+  sessionQueryFingerprintMaterial,
 } from "../../src/domain/session-query.ts";
 import { hashContent } from "../../src/domain/content-hash.ts";
 import type { SessionDocument } from "../../src/domain/session.ts";
@@ -16,12 +17,22 @@ import {
   applyMigrations,
   CURRENT_INDEX_SCHEMA_VERSION,
 } from "../../src/infrastructure/sqlite/migrations.ts";
-import { readQueryRevision } from "../../src/infrastructure/sqlite/query-cursor.ts";
+import {
+  decodeQueryCursor,
+  encodeAnchoredQueryCursor,
+  encodeQueryCursor,
+  fingerprintQuery,
+  readQueryRevision,
+} from "../../src/infrastructure/sqlite/query-cursor.ts";
+import { readSearchContexts } from "../../src/infrastructure/sqlite/sqlite-query-context.ts";
 import {
   createCoordinatedSqliteSessionIndex,
   createSqliteSessionIndexReader,
 } from "../../src/infrastructure/sqlite/sqlite-session-index.ts";
-import { createSqliteSessionQuery } from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
+import {
+  buildSqliteListCoordinateStatement,
+  createSqliteSessionQuery,
+} from "../../src/infrastructure/sqlite/sqlite-session-query.ts";
 import {
   acquireWriterLease,
   interruptOwnedRunsAndReleaseWriterLease,
@@ -218,6 +229,34 @@ describe("SQLite session query", () => {
     }
   });
 
+  test("retries snippet markers for the whole selected page", async () => {
+    const database = migratedDatabase();
+    const marker = firstSnippetMarkerCandidate(database);
+    const ordinaryText = "pagecollision ordinary selectedevidence";
+    const collisionText = `pagecollision before ${marker.start} selectedevidence ${marker.end} after`;
+    await seedQueryDocuments(database, [
+      markerDocument("a-selected", ordinaryText),
+      markerDocument("b-selected", collisionText),
+    ]);
+    try {
+      const result = await createSqliteSessionQuery(database).search(
+        createSessionSearchQuery({ text: "pagecollision", limit: 2, context: 0 }),
+      );
+
+      expect(result.hits.map((hit) => hit.session.identity.nativeId)).toEqual([
+        "a-selected",
+        "b-selected",
+      ]);
+      expect(result.hits.map((hit) => hit.snippet.text)).toEqual([ordinaryText, collisionText]);
+      expect(result.hits.map((hit) => hit.snippet.contentHash)).toEqual([
+        hashContent(ordinaryText),
+        hashContent(collisionText),
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   test("does not let unselected marker-like text change the selected output", async () => {
     const withoutCollision = migratedDatabase();
     const withCollision = migratedDatabase();
@@ -241,6 +280,44 @@ describe("SQLite session query", () => {
     } finally {
       withoutCollision.close();
       withCollision.close();
+    }
+  });
+
+  test("does not hydrate corrupt matching content outside the selected page", async () => {
+    const database = migratedDatabase();
+    await seedQueryDocuments(database, [
+      markerDocument("a-selected", "pagebounded selected evidence"),
+      markerDocument("b-unselected", "pagebounded unselected evidence"),
+    ]);
+    try {
+      database.exec("DROP TRIGGER sessions_content_values_bu");
+      database
+        .prepare(
+          `UPDATE sessions_content_values
+           SET digest = zeroblob(32)
+           WHERE text = ?`,
+        )
+        .run("pagebounded unselected evidence");
+      const repository = createSqliteSessionQuery(database);
+      const first = await repository.search(
+        createSessionSearchQuery({ text: "pagebounded", limit: 1, context: 0 }),
+      );
+
+      expect(first.hits.map((hit) => hit.session.identity.nativeId)).toEqual(["a-selected"]);
+      expect(first.nextCursor).toBeDefined();
+      if (first.nextCursor === undefined) throw new Error("Expected search cursor");
+      await expect(
+        repository.search(
+          createSessionSearchQuery({
+            text: "pagebounded",
+            limit: 1,
+            context: 0,
+            cursor: first.nextCursor,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+    } finally {
+      database.close();
     }
   });
 
@@ -360,6 +437,184 @@ describe("SQLite session query", () => {
     }
   });
 
+  test("rebuilds bounded linked context independently for every selected primary", async () => {
+    const database = migratedDatabase();
+    const firstLinked = Array.from({ length: 21 }, (_, index) => 2 + index);
+    const secondLinked = Array.from({ length: 21 }, (_, index) => 23 + index);
+    const document = createTestDocument({
+      identity: { source: MARKER_SOURCE, nativeId: "linked-batch" },
+      lineageCoverage: "complete",
+      entries: [
+        toolCallEntry(0, "linkedbatch first primary"),
+        toolCallEntry(1, "linkedbatch second primary"),
+        ...firstLinked.map((ordinal) => toolResultEntry(ordinal, 0)),
+        ...secondLinked.map((ordinal) => toolResultEntry(ordinal, 1)),
+      ],
+    });
+    await seedQueryDocuments(database, [document]);
+    try {
+      const result = await createSqliteSessionQuery(database).search(
+        createSessionSearchQuery({ text: "linkedbatch", limit: 2, context: 0 }),
+      );
+
+      expect(result.hits.map((hit) => hit.entry.ordinal)).toEqual([0, 1]);
+      expect(result.hits[0]?.context.map((entry) => entry.ordinal)).toEqual(
+        firstLinked.slice(0, 20),
+      );
+      expect(result.hits[1]?.context.map((entry) => entry.ordinal)).toEqual(
+        secondLinked.slice(0, 20),
+      );
+      for (const hit of result.hits) {
+        expect(hit.context.every((entry) => !entry.adjacent && entry.linked)).toBe(true);
+        expect(hit.linkedContextTruncated).toBe(true);
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  test("batches hydration work across one page while preserving overlapping context", async () => {
+    const database = migratedDatabase();
+    const document = repeatedEntryDocument("batched", 12, (ordinal) => {
+      return `batchedhydration evidence ${String(ordinal).padStart(2, "0")}`;
+    });
+    await seedQueryDocuments(database, [document]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const small = await searchWithSelectCount(database, () =>
+        repository.search(
+          createSessionSearchQuery({
+            text: "batchedhydration",
+            limit: 1,
+            context: 1,
+          }),
+        ),
+      );
+      const large = await searchWithSelectCount(database, () =>
+        repository.search(
+          createSessionSearchQuery({
+            text: "batchedhydration",
+            limit: 10,
+            context: 1,
+          }),
+        ),
+      );
+
+      expect(small.page.hits).toHaveLength(1);
+      expect(large.page.hits).toHaveLength(10);
+      expect(large.selectCount).toBe(small.selectCount);
+      expect(large.page.hits[0]?.context.map((entry) => entry.ordinal)).toEqual([1]);
+      expect(large.page.hits[1]?.context.map((entry) => entry.ordinal)).toEqual([0, 2]);
+      expect(large.page.hits[1]?.context.map((entry) => entry.body)).toEqual([
+        "batchedhydration evidence 00",
+        "batchedhydration evidence 02",
+      ]);
+      expect(large.page.hits[1]?.context.map((entry) => [entry.adjacent, entry.linked])).toEqual([
+        [true, false],
+        [true, false],
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("hydrates deduplicated context coordinates in bounded chunks", async () => {
+    const database = migratedDatabase();
+    const document = repeatedEntryDocument(
+      "chunked-context",
+      231,
+      (ordinal) => `chunk context ${String(ordinal).padStart(3, "0")}`,
+    );
+    await seedQueryDocuments(database, [document]);
+    try {
+      const row = database
+        .prepare(
+          `SELECT tracking.session_id
+           FROM sessions_session_tracking AS tracking
+           JOIN sessions_source_instances AS source
+             ON source.source_instance_id = tracking.source_instance_id
+           WHERE source.kind = ?
+             AND source.instance_id = ?
+             AND tracking.native_id = ?`,
+        )
+        .get(
+          document.identity.source.kind,
+          document.identity.source.instanceId,
+          document.identity.nativeId,
+        ) as { readonly session_id: number | bigint } | undefined;
+      if (row === undefined) throw new Error("Expected seeded session");
+      const sessionId = Number(row.session_id);
+      const primaryOrdinals = Array.from({ length: 11 }, (_, index) => 10 + index * 21);
+      const contexts = readSearchContexts(
+        database,
+        primaryOrdinals.map((entryOrdinal) => ({ sessionId, entryOrdinal })),
+        10,
+      );
+
+      expect(contexts).toHaveLength(primaryOrdinals.length);
+      for (const [index, context] of contexts.entries()) {
+        const primaryOrdinal = primaryOrdinals[index]!;
+        expect(context.entries).toHaveLength(20);
+        expect(context.entries.map((entry) => entry.ordinal)).toEqual([
+          ...Array.from({ length: 10 }, (_, offset) => primaryOrdinal - 10 + offset),
+          ...Array.from({ length: 10 }, (_, offset) => primaryOrdinal + 1 + offset),
+        ]);
+        expect(context.entries.every((entry) => entry.adjacent && !entry.linked)).toBe(true);
+        expect(context.linkedContextTruncated).toBe(false);
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  test("fails the whole search when corruption is reached in a later context chunk", async () => {
+    const database = migratedDatabase();
+    const primaryOrdinals = new Set(Array.from({ length: 11 }, (_, index) => 10 + index * 21));
+    const document = repeatedEntryDocument("later-context-corruption", 231, (ordinal) =>
+      primaryOrdinals.has(ordinal)
+        ? `laterchunkfailure evidence ${String(ordinal)}`
+        : `context evidence ${String(ordinal)}`,
+    );
+    await seedQueryDocuments(database, [document]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const query = createSessionSearchQuery({
+        text: "laterchunkfailure",
+        limit: 11,
+        context: 10,
+      });
+      const valid = await repository.search(query);
+      expect(valid.hits).toHaveLength(11);
+      expect(valid.hits.every((hit) => hit.context.length === 20)).toBe(true);
+
+      const now = () => new Date("2026-07-14T17:00:00.000Z");
+      const lease = acquireWriterLease(database, "index", {
+        now,
+        token: () => "later-context-corruption-writer",
+      });
+      try {
+        runLeasedImmediateTransaction(database, lease, { now }, () => {
+          database
+            .prepare(
+              `UPDATE sessions_entries
+               SET timestamp = ?
+               WHERE session_id = ?
+                 AND ordinal = ?`,
+            )
+            .run("not-a-canonical-timestamp", retainedSessionId(database, document.identity), 230);
+        });
+
+        await expect(repository.search(query)).rejects.toMatchObject({ code: "corrupt-data" });
+      } finally {
+        interruptOwnedRunsAndReleaseWriterLease(database, lease, {
+          now: () => new Date("2026-07-14T17:01:00.000Z"),
+        });
+      }
+    } finally {
+      database.close();
+    }
+  });
+
   test("uses coverage observation while effective source state is unknown", async () => {
     const fixture = await seededQueryFixture();
     const now = () => new Date("2026-07-14T13:00:00.000Z");
@@ -476,6 +731,220 @@ describe("SQLite session query", () => {
     }
   });
 
+  test("uses compatible v2 list keysets across null activity and binary identity ties", async () => {
+    const database = migratedDatabase();
+    const recent = markerDocument("recent", "list keyset recent");
+    const nullActivity = ["é", "a", "Z"].map((nativeId) =>
+      markerDocumentWithoutMetadata(nativeId, `list keyset ${nativeId}`),
+    );
+    await seedQueryDocuments(database, [recent, ...nullActivity]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const query = createSessionListQuery({ limit: 1 });
+      const revision = readQueryRevision(database);
+      const fingerprint = fingerprintQuery(sessionQueryFingerprintMaterial(query));
+      const canonical = await repository.list(createSessionListQuery({ limit: 200 }));
+      expect(canonical.sessions.map(({ identity }) => identity.nativeId)).toEqual([
+        "recent",
+        "Z",
+        "a",
+        "é",
+      ]);
+
+      const traversed: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await repository.list(
+          createSessionListQuery({
+            limit: 1,
+            ...(cursor === undefined ? {} : { cursor }),
+          }),
+        );
+        traversed.push(...page.sessions.map(({ identity }) => identity.nativeId));
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      expect(traversed).toEqual(["recent", "Z", "a", "é"]);
+
+      const first = await repository.list(query);
+      expect(first.nextCursor).toBeDefined();
+      if (first.nextCursor === undefined) throw new Error("Expected list continuation");
+      expect(
+        decodeQueryCursor(first.nextCursor, {
+          command: "list",
+          fingerprint,
+          revision,
+        }),
+      ).toEqual({
+        ok: true,
+        offset: 1,
+        anchor: {
+          kind: "list",
+          sessionId: retainedSessionId(database, recent.identity),
+        },
+      });
+
+      const v1 = encodeQueryCursor({
+        command: "list",
+        fingerprint,
+        revision,
+        offset: 1,
+      });
+      const fromV1 = await repository.list(createSessionListQuery({ limit: 1, cursor: v1 }));
+      expect(fromV1.sessions.map(({ identity }) => identity.nativeId)).toEqual(["Z"]);
+      expect(fromV1.nextCursor).toBeDefined();
+      if (fromV1.nextCursor === undefined) throw new Error("Expected v2 list continuation");
+      expect(
+        decodeQueryCursor(fromV1.nextCursor, {
+          command: "list",
+          fingerprint,
+          revision,
+        }),
+      ).toMatchObject({
+        ok: true,
+        offset: 2,
+        anchor: { kind: "list", sessionId: retainedSessionId(database, nullActivity[2]!.identity) },
+      });
+
+      const firstStatement = buildSqliteListCoordinateStatement(query, { kind: "first" });
+      const keysetStatement = buildSqliteListCoordinateStatement(query, {
+        kind: "keyset",
+        anchor: {
+          sessionId: retainedSessionId(database, recent.identity),
+          activity: recent.updatedAt ?? null,
+          sourceKind: recent.identity.source.kind,
+          instanceId: recent.identity.source.instanceId,
+          nativeId: recent.identity.nativeId,
+        },
+      });
+      const legacyStatement = buildSqliteListCoordinateStatement(query, {
+        kind: "offset",
+        offset: 1,
+      });
+      expect(firstStatement.sql).not.toContain("OFFSET");
+      expect(keysetStatement.sql).not.toContain("OFFSET");
+      expect(keysetStatement.sql).toContain("WITH resolved_anchor AS MATERIALIZED");
+      expect(keysetStatement.sql).toContain(
+        `${"COALESCE(canonical.updated_at, canonical.created_at)"} < anchor.activity`,
+      );
+      expect(legacyStatement.sql).toContain("OFFSET ?");
+
+      const missingAnchor = encodeAnchoredQueryCursor({
+        command: "list",
+        fingerprint,
+        revision,
+        offset: 1,
+        anchor: { kind: "list", sessionId: 999_999 },
+      });
+      await expect(
+        repository.list(createSessionListQuery({ limit: 1, cursor: missingAnchor })),
+      ).rejects.toMatchObject({ code: "invalid-cursor" });
+
+      const filtered = createSessionListQuery({
+        filter: { workspace: "/workspace/synthetic" },
+        limit: 1,
+      });
+      const nonqualifying = encodeAnchoredQueryCursor({
+        command: "list",
+        fingerprint: fingerprintQuery(sessionQueryFingerprintMaterial(filtered)),
+        revision,
+        offset: 1,
+        anchor: {
+          kind: "list",
+          sessionId: retainedSessionId(database, nullActivity[2]!.identity),
+        },
+      });
+      await expect(
+        repository.list(
+          createSessionListQuery({
+            filter: { workspace: "/workspace/synthetic" },
+            limit: 1,
+            cursor: nonqualifying,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "invalid-cursor" });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("classifies malformed physical list anchors as corruption", async () => {
+    const database = migratedDatabase();
+    const document = markerDocument("malformed-anchor", "malformed anchor evidence");
+    await seedQueryDocuments(database, [
+      document,
+      markerDocumentWithoutMetadata("later", "later anchor evidence"),
+    ]);
+    const now = () => new Date("2026-07-14T16:00:00.000Z");
+    const lease = acquireWriterLease(database, "index", {
+      now,
+      token: () => "malformed-list-anchor-writer",
+    });
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const first = await repository.list(createSessionListQuery({ limit: 1 }));
+      expect(first.nextCursor).toBeDefined();
+      if (first.nextCursor === undefined) throw new Error("Expected list continuation");
+
+      runLeasedImmediateTransaction(database, lease, { now }, () => {
+        database
+          .prepare(
+            `UPDATE sessions_canonical_sessions
+             SET updated_at = ?
+             WHERE session_id = ?`,
+          )
+          .run("not-a-canonical-timestamp", retainedSessionId(database, document.identity));
+      });
+
+      await expect(
+        repository.list(createSessionListQuery({ limit: 1, cursor: first.nextCursor })),
+      ).rejects.toMatchObject({ code: "corrupt-data" });
+    } finally {
+      interruptOwnedRunsAndReleaseWriterLease(database, lease, {
+        now: () => new Date("2026-07-14T16:01:00.000Z"),
+      });
+      database.close();
+    }
+  });
+
+  test("batches list and search summaries at the public 200-row maximum", async () => {
+    const database = migratedDatabase();
+    const documents = Array.from({ length: 200 }, (_, ordinal) =>
+      markerDocument(
+        `summary-${String(ordinal).padStart(3, "0")}`,
+        `maximumsummary shared evidence ${String(ordinal)}`,
+      ),
+    );
+    await seedQueryDocuments(database, documents);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const oneList = await listWithSelectCount(database, () =>
+        repository.list(createSessionListQuery({ limit: 1 })),
+      );
+      const maximumList = await listWithSelectCount(database, () =>
+        repository.list(createSessionListQuery({ limit: 200 })),
+      );
+      expect(oneList.page.sessions).toHaveLength(1);
+      expect(maximumList.page.sessions).toHaveLength(200);
+      expect(maximumList.selectCount).toBe(oneList.selectCount);
+
+      const oneSearch = await searchWithSelectCount(database, () =>
+        repository.search(
+          createSessionSearchQuery({ text: "maximumsummary", limit: 1, context: 0 }),
+        ),
+      );
+      const maximumSearch = await searchWithSelectCount(database, () =>
+        repository.search(
+          createSessionSearchQuery({ text: "maximumsummary", limit: 200, context: 0 }),
+        ),
+      );
+      expect(oneSearch.page.hits).toHaveLength(1);
+      expect(maximumSearch.page.hits).toHaveLength(200);
+      expect(maximumSearch.selectCount).toBe(oneSearch.selectCount);
+    } finally {
+      database.close();
+    }
+  });
+
   test("paginates list and search deterministically and classifies cursor failures", async () => {
     const fixture = await seededQueryFixture();
     try {
@@ -515,6 +984,9 @@ describe("SQLite session query", () => {
         now: () => new Date("2026-07-14T13:00:00.000Z"),
         token: () => "next-query-writer",
       });
+      await expect(
+        repository.list(createSessionListQuery({ limit: 1, cursor: firstList.nextCursor })),
+      ).rejects.toBeInstanceOf(SessionQueryOperationalError);
       await expect(
         repository.search(createSessionSearchQuery({ ...searchInput, cursor })),
       ).rejects.toBeInstanceOf(SessionQueryOperationalError);
@@ -589,6 +1061,147 @@ function markerDocument(nativeId: string, text: string): SessionDocument {
       }),
     ],
   });
+}
+
+function markerDocumentWithoutMetadata(nativeId: string, text: string): SessionDocument {
+  return createTestDocument({
+    identity: { source: MARKER_SOURCE, nativeId },
+    includeMetadata: false,
+    lineageCoverage: "complete",
+    entries: [
+      createTestEntry({
+        content: [
+          createTestSegment({
+            text,
+            origin: "human",
+            originConfidence: "high",
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+function repeatedEntryDocument(
+  nativeId: string,
+  entryCount: number,
+  textAt: (ordinal: number) => string,
+): SessionDocument {
+  return createTestDocument({
+    identity: { source: MARKER_SOURCE, nativeId },
+    lineageCoverage: "complete",
+    entries: Array.from({ length: entryCount }, (_, ordinal) =>
+      createTestEntry({
+        ordinal,
+        content: [
+          createTestSegment({
+            text: textAt(ordinal),
+            origin: "human",
+            originConfidence: "high",
+          }),
+        ],
+      }),
+    ),
+  });
+}
+
+function toolCallEntry(ordinal: number, text: string): SessionDocument["entries"][number] {
+  return {
+    ...createTestEntry({
+      ordinal,
+      content: [
+        createTestSegment({
+          text,
+          origin: "model",
+          originConfidence: "high",
+        }),
+      ],
+    }),
+    kind: "tool-call",
+    actor: "model",
+    toolName: "synthetic_tool",
+  };
+}
+
+function toolResultEntry(
+  ordinal: number,
+  relatedEntryOrdinal: number,
+): SessionDocument["entries"][number] {
+  return {
+    ...createTestEntry({
+      ordinal,
+      relatedEntryOrdinal,
+      content: [
+        createTestSegment({
+          text: `linked result ${String(ordinal)}`,
+          origin: "tool",
+          originConfidence: "high",
+        }),
+      ],
+    }),
+    kind: "tool-result",
+    actor: "tool",
+  };
+}
+
+async function searchWithSelectCount(
+  database: DatabaseSync,
+  search: () => ReturnType<ReturnType<typeof createSqliteSessionQuery>["search"]>,
+): Promise<{
+  readonly page: Awaited<ReturnType<ReturnType<typeof createSqliteSessionQuery>["search"]>>;
+  readonly selectCount: number;
+}> {
+  let selectCount = 0;
+  database.setAuthorizer((actionCode) => {
+    if (actionCode === constants.SQLITE_SELECT) selectCount += 1;
+    return constants.SQLITE_OK;
+  });
+  try {
+    return { page: await search(), selectCount };
+  } finally {
+    database.setAuthorizer(null);
+  }
+}
+
+async function listWithSelectCount(
+  database: DatabaseSync,
+  list: () => ReturnType<ReturnType<typeof createSqliteSessionQuery>["list"]>,
+): Promise<{
+  readonly page: Awaited<ReturnType<ReturnType<typeof createSqliteSessionQuery>["list"]>>;
+  readonly selectCount: number;
+}> {
+  let selectCount = 0;
+  database.setAuthorizer((actionCode) => {
+    if (actionCode === constants.SQLITE_SELECT) selectCount += 1;
+    return constants.SQLITE_OK;
+  });
+  try {
+    return { page: await list(), selectCount };
+  } finally {
+    database.setAuthorizer(null);
+  }
+}
+
+function retainedSessionId(database: DatabaseSync, identity: SessionDocument["identity"]): number {
+  const row = database
+    .prepare(
+      `SELECT tracking.session_id
+       FROM sessions_session_tracking AS tracking
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       WHERE source.kind = ?
+         AND source.instance_id = ?
+         AND tracking.native_id = ?`,
+    )
+    .get(identity.source.kind, identity.source.instanceId, identity.nativeId) as
+    | { readonly session_id?: unknown }
+    | undefined;
+  const value = row?.session_id;
+  const sessionId = typeof value === "bigint" ? Number(value) : value;
+  if (typeof sessionId !== "number" || !Number.isSafeInteger(sessionId)) {
+    throw new Error("Missing retained session ID");
+  }
+  return sessionId;
 }
 
 function firstSnippetMarkerCandidate(database: DatabaseSync): {

@@ -16,22 +16,25 @@ import {
   type SessionSearchQuery,
   type SessionSearchSnippet,
 } from "../../domain/session-query.ts";
+import { isCanonicalTimestamp } from "../../domain/canonical-timestamp.ts";
 import { contentHashMatches } from "../../domain/content-hash.ts";
 import type { SessionRootResolver } from "../../domain/session-lineage.ts";
-import { isSessionIdentity } from "../../domain/session-identity.ts";
+import { isSessionIdentity, sameSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import { splitUnicodeWhitespaceTerms } from "../../domain/unicode-whitespace.ts";
 import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 import { literalFtsQuery } from "./literal-fts-query.ts";
 import {
   decodeQueryCursor,
+  encodeAnchoredQueryCursor,
   encodeQueryCursor,
   fingerprintQuery,
   readQueryRevision,
+  type QueryCursorAnchor,
   type QueryCommand,
   type QueryRevision,
 } from "./query-cursor.ts";
-import { readSearchContext, entryAt, truncateUtf8Around } from "./sqlite-query-context.ts";
+import { entryAt, readSearchContexts, truncateUtf8Around } from "./sqlite-query-context.ts";
 import {
   EFFECTIVE_SESSION_ACTIVITY_SQL,
   searchWhere,
@@ -40,7 +43,10 @@ import {
 } from "./sqlite-query-filters.ts";
 import { countRootSupport, createRetainedSessionRootResolver } from "./sqlite-query-lineage.ts";
 import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
-import { readSessionSummary } from "./sqlite-session-state.ts";
+import {
+  readSessionSummariesBatch,
+  type SessionSummaryBatchRequest,
+} from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 import { listSqliteSessionEntries } from "./sqlite-session-entry-query.ts";
 import { readSqliteSessionManifest } from "./sqlite-session-manifest.ts";
@@ -77,45 +83,248 @@ export function createSqliteSessionQuery(database: DatabaseSync): SessionQueryRe
 function listSessions(database: DatabaseSync, query: SessionListQuery): SessionListPage {
   const cursor = prepareCursor(database, "list", query);
   const captureScope = readSqliteCaptureScope(database, query.filter);
-  const where = sessionWhere(query.filter);
+  const position = listCoordinatePosition(database, query, cursor);
+  const statement = buildSqliteListCoordinateStatement(query, position);
   const rows = database
-    .prepare(
-      `SELECT source.kind, source.instance_id, tracking.native_id
-       FROM sessions_canonical_sessions AS canonical
-       JOIN sessions_session_tracking AS tracking
-         ON tracking.session_id = canonical.session_id
-       JOIN sessions_source_instances AS source
-         ON source.source_instance_id = tracking.source_instance_id
-       WHERE 1 = 1${where.sql}
-       ORDER BY
-         CASE WHEN ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL THEN 1 ELSE 0 END,
-         ${EFFECTIVE_SESSION_ACTIVITY_SQL} DESC,
-         source.kind COLLATE BINARY,
-         source.instance_id COLLATE BINARY,
-         tracking.native_id COLLATE BINARY
-       LIMIT ? OFFSET ?`,
-    )
-    .all(...where.parameters, query.limit + 1, cursor.offset) as unknown as readonly IdentityRow[];
+    .prepare(statement.sql)
+    .all(...statement.parameters) as unknown as readonly ListCoordinateRow[];
   const pageRows = rows.slice(0, query.limit);
   const resolveRoot =
     pageRows.length === 0 ? undefined : createRetainedSessionRootResolver(database);
+  const summaries = readSelectedSummaries(database, pageRows.map(listSessionCoordinateAt));
   const sessions = pageRows.map((row) => {
     const identity = identityAt(row);
-    const summary = readSessionSummary(database, identity);
+    const summary = summaries.get(integerAt(row.session_id));
     if (summary === undefined || resolveRoot === undefined) {
       throw new SqliteSessionIndexError("corrupt-data");
     }
-    return Object.freeze({ ...freezeSummary(summary), root: resolveRoot(identity) });
+    if (!sameSessionIdentity(summary.identity, identity))
+      throw new SqliteSessionIndexError("corrupt-data");
+    return Object.freeze({ ...summary, root: resolveRoot(identity) });
   });
   const nextCursor =
     rows.length > query.limit
-      ? nextQueryCursor("list", cursor, cursor.offset + query.limit)
+      ? nextListQueryCursor(cursor, cursor.offset + query.limit, pageRows)
       : undefined;
   return Object.freeze({
     sessions: Object.freeze(sessions),
     captureScope,
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
+}
+
+export interface SqliteListCoordinateStatement {
+  readonly sql: string;
+  readonly parameters: readonly (number | string)[];
+}
+
+export type SqliteListCoordinatePosition =
+  | { readonly kind: "first" }
+  | { readonly kind: "offset"; readonly offset: number }
+  | { readonly kind: "keyset"; readonly anchor: SqliteListResolvedAnchor };
+
+export interface SqliteListResolvedAnchor {
+  readonly sessionId: number;
+  readonly activity: string | null;
+  readonly sourceKind: string;
+  readonly instanceId: string;
+  readonly nativeId: string;
+}
+
+export function buildSqliteListCoordinateStatement(
+  query: SessionListQuery,
+  position: SqliteListCoordinatePosition,
+): SqliteListCoordinateStatement {
+  const where = sessionWhere(query.filter);
+  if (position.kind !== "keyset") {
+    return Object.freeze({
+      sql: `${listCoordinateSelect()}
+       WHERE 1 = 1${where.sql}
+       ${listCoordinateOrder()}
+       LIMIT ?${position.kind === "offset" ? " OFFSET ?" : ""}`,
+      parameters: Object.freeze([
+        ...where.parameters,
+        query.limit + 1,
+        ...(position.kind === "offset" ? [position.offset] : []),
+      ]),
+    });
+  }
+
+  return Object.freeze({
+    sql: `WITH resolved_anchor AS MATERIALIZED (
+       SELECT canonical.session_id,
+              ${EFFECTIVE_SESSION_ACTIVITY_SQL} AS activity,
+              source.kind AS source_kind,
+              source.instance_id,
+              tracking.native_id
+       FROM sessions_canonical_sessions AS canonical
+       JOIN sessions_session_tracking AS tracking
+         ON tracking.session_id = canonical.session_id
+       JOIN sessions_source_instances AS source
+         ON source.source_instance_id = tracking.source_instance_id
+       WHERE canonical.session_id = ?
+         AND 1 = 1${where.sql}
+     )
+     ${listCoordinateSelect()}
+     CROSS JOIN resolved_anchor AS anchor
+     WHERE 1 = 1${where.sql}
+       AND (
+         CASE WHEN ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL THEN 1 ELSE 0 END
+           > CASE WHEN anchor.activity IS NULL THEN 1 ELSE 0 END
+         OR (
+           CASE WHEN ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL THEN 1 ELSE 0 END
+             = CASE WHEN anchor.activity IS NULL THEN 1 ELSE 0 END
+           AND (
+             (
+               anchor.activity IS NOT NULL
+               AND ${EFFECTIVE_SESSION_ACTIVITY_SQL} < anchor.activity
+             )
+             OR (
+               (
+                 ${EFFECTIVE_SESSION_ACTIVITY_SQL} = anchor.activity
+                 OR (
+                   ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL
+                   AND anchor.activity IS NULL
+                 )
+               )
+               AND (
+                 source.kind COLLATE BINARY,
+                 source.instance_id COLLATE BINARY,
+                 tracking.native_id COLLATE BINARY
+               ) > (
+                 anchor.source_kind,
+                 anchor.instance_id,
+                 anchor.native_id
+               )
+             )
+           )
+         )
+       )
+     ${listCoordinateOrder()}
+     LIMIT ?`,
+    parameters: Object.freeze([
+      position.anchor.sessionId,
+      ...where.parameters,
+      ...where.parameters,
+      query.limit + 1,
+    ]),
+  });
+}
+
+function listCoordinateSelect(): string {
+  return `SELECT canonical.session_id,
+                source.kind,
+                source.instance_id,
+                tracking.native_id,
+                ${EFFECTIVE_SESSION_ACTIVITY_SQL} AS activity
+         FROM sessions_canonical_sessions AS canonical
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = canonical.session_id
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id`;
+}
+
+function listCoordinateOrder(): string {
+  return `ORDER BY
+         CASE WHEN ${EFFECTIVE_SESSION_ACTIVITY_SQL} IS NULL THEN 1 ELSE 0 END,
+         ${EFFECTIVE_SESSION_ACTIVITY_SQL} DESC,
+         source.kind COLLATE BINARY,
+         source.instance_id COLLATE BINARY,
+         tracking.native_id COLLATE BINARY`;
+}
+
+function listCoordinatePosition(
+  database: DatabaseSync,
+  query: SessionListQuery,
+  cursor: PreparedCursor,
+): SqliteListCoordinatePosition {
+  if (cursor.anchor === undefined) {
+    return cursor.legacyOffset ? { kind: "offset", offset: cursor.offset } : { kind: "first" };
+  }
+  if (cursor.anchor.kind !== "list") throw new SessionQueryUsageError("invalid-cursor");
+  return {
+    kind: "keyset",
+    anchor: resolveListAnchor(database, query, cursor.anchor),
+  };
+}
+
+function resolveListAnchor(
+  database: DatabaseSync,
+  query: SessionListQuery,
+  anchor: Extract<QueryCursorAnchor, { readonly kind: "list" }>,
+): SqliteListResolvedAnchor {
+  const where = sessionWhere(query.filter);
+  const rows = database
+    .prepare(
+      `WITH physical_anchor AS MATERIALIZED (
+         SELECT canonical.session_id,
+                ${EFFECTIVE_SESSION_ACTIVITY_SQL} AS activity,
+                source.kind,
+                source.instance_id,
+                tracking.native_id
+         FROM sessions_canonical_sessions AS canonical
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = canonical.session_id
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id
+         WHERE canonical.session_id = ?
+       ),
+       qualifying_anchor AS MATERIALIZED (
+         SELECT canonical.session_id
+         FROM sessions_canonical_sessions AS canonical
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = canonical.session_id
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id
+         WHERE canonical.session_id = ?
+           AND 1 = 1${where.sql}
+       )
+       SELECT physical_anchor.*,
+              EXISTS (SELECT 1 FROM qualifying_anchor) AS qualifies
+       FROM physical_anchor`,
+    )
+    .all(
+      anchor.sessionId,
+      anchor.sessionId,
+      ...where.parameters,
+    ) as unknown as readonly ListAnchorRow[];
+  if (rows.length === 0) throw new SessionQueryUsageError("invalid-cursor");
+  if (rows.length !== 1) throw new SqliteSessionIndexError("corrupt-data");
+  const row = rows[0];
+  if (row === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  const sessionId = integerAt(row.session_id);
+  const identity = identityAt(row);
+  const activity = optionalCanonicalTimestampAt(row.activity);
+  const qualifies = integerAt(row.qualifies);
+  if (sessionId !== anchor.sessionId || qualifies > 1) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  if (qualifies === 0) throw new SessionQueryUsageError("invalid-cursor");
+  return {
+    sessionId,
+    activity,
+    sourceKind: identity.source.kind,
+    instanceId: identity.source.instanceId,
+    nativeId: identity.nativeId,
+  };
+}
+
+function nextListQueryCursor(
+  cursor: PreparedCursor,
+  offset: number,
+  pageRows: readonly ListCoordinateRow[],
+) {
+  const row = pageRows.at(-1);
+  if (row === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  return createSessionQueryCursor(
+    encodeAnchoredQueryCursor({
+      command: "list",
+      fingerprint: cursor.fingerprint,
+      revision: cursor.revision,
+      offset,
+      anchor: { kind: "list", sessionId: integerAt(row.session_id) },
+    }),
+  );
 }
 
 function searchSessions(database: DatabaseSync, query: SessionSearchQuery): SessionSearchPage {
@@ -144,7 +353,7 @@ function searchSessions(database: DatabaseSync, query: SessionSearchQuery): Sess
         );
   const nextCursor =
     searchRows.length > query.limit
-      ? nextQueryCursor("search", cursor, cursor.offset + query.limit)
+      ? nextSearchQueryCursor(cursor, cursor.offset + query.limit)
       : undefined;
   return Object.freeze({
     hits: Object.freeze(hits),
@@ -237,33 +446,51 @@ function hydrateSearchContent(
   libraryInstanceId: string,
 ): HydratedSearchContent {
   const contentIds = [...new Set(rows.map((row) => integerAt(row.content_id)))];
+  const selectedSql = contentIds.map(() => "(?, ?)").join(", ");
+  const selectedParameters = contentIds.flatMap((contentId, contentIndex) => [
+    contentIndex,
+    contentId,
+  ]);
   // FTS5 can ignore an untyped bound rowid beside MATCH; the explicit cast keeps
-  // hydration restricted to the one ranked canonical content row.
+  // hydration restricted to the selected ranked canonical content rows.
   const statement = database.prepare(
-    `SELECT content.text,
+    `WITH selected_content(content_index, content_id) AS (
+       VALUES ${selectedSql}
+     )
+     SELECT selected.content_index,
+            selected.content_id,
+            content.text,
             content.digest AS content_digest,
             snippet(sessions_content_fts, 0, ?, ?, ' … ', 64) AS snippet_text
      FROM sessions_content_fts
      JOIN sessions_content_values AS content
        ON content.content_id = sessions_content_fts.rowid
+     JOIN selected_content AS selected
+       ON sessions_content_fts.rowid = CAST(selected.content_id AS INTEGER)
      WHERE sessions_content_fts MATCH ?
-       AND sessions_content_fts.rowid = CAST(? AS INTEGER)`,
+     ORDER BY selected.content_index`,
   );
 
   for (let candidate = 0; ; candidate += 1) {
     if (!Number.isSafeInteger(candidate)) throw new SqliteSessionIndexError("corrupt-data");
     const markers = snippetMarkers(libraryInstanceId, candidate);
+    const hydrated = statement.all(
+      ...selectedParameters,
+      markers.start,
+      markers.end,
+      ftsQuery,
+    ) as unknown as readonly HydratedContentRow[];
+    if (hydrated.length !== contentIds.length) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
     const byContentId = new Map<number, HydratedContentRow>();
     let collision = false;
-    for (const contentId of contentIds) {
-      const hydrated = statement.all(
-        markers.start,
-        markers.end,
-        ftsQuery,
-        contentId,
-      ) as unknown as readonly HydratedContentRow[];
-      if (hydrated.length !== 1) throw new SqliteSessionIndexError("corrupt-data");
-      const row = hydrated[0]!;
+    for (const row of hydrated) {
+      const contentIndex = integerAt(row.content_index);
+      const contentId = integerAt(row.content_id);
+      if (contentIds[contentIndex] !== contentId || byContentId.has(contentId)) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
       const text = storedString(row.text);
       if (text.includes(markers.start) || text.includes(markers.end)) {
         collision = true;
@@ -287,10 +514,14 @@ function hydrateSearchHits(
   if (resolveRoot === undefined) throw new SqliteSessionIndexError("corrupt-data");
   const hydrated = hydrateSearchContent(database, rows, ftsQuery, libraryInstanceId);
   const matchedTerms = readMatchedTerms(database, rows, query);
-  const summaryCache = new Map<number, SessionQuerySummary>();
-  return rows.map((row) =>
-    searchHit(database, row, adjacentContext, summaryCache, hydrated, matchedTerms, resolveRoot),
-  );
+  const contexts = readSearchContexts(database, rows.map(searchCoordinateAt), adjacentContext);
+  if (contexts.length !== rows.length) throw new SqliteSessionIndexError("corrupt-data");
+  const summaries = readSelectedSummaries(database, rows.map(searchSessionCoordinateAt));
+  return rows.map((row, rowIndex) => {
+    const context = contexts[rowIndex];
+    if (context === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    return searchHit(row, summaries, hydrated, matchedTerms, resolveRoot, context);
+  });
 }
 
 function readMatchedTerms(
@@ -451,13 +682,12 @@ function searchJoins(): string {
 }
 
 function searchHit(
-  database: DatabaseSync,
   row: SearchRankRow,
-  adjacentContext: number,
-  summaryCache: Map<number, SessionQuerySummary>,
+  summaries: ReadonlyMap<number, SessionQuerySummary>,
   hydrated: HydratedSearchContent,
   matchedTerms: ReadonlyMap<string, readonly string[]>,
   resolveRoot: SessionRootResolver,
+  context: ReturnType<typeof readSearchContexts>[number],
 ): SessionSearchHit {
   const sessionId = integerAt(row.session_id);
   const identity = identityAt({
@@ -465,12 +695,9 @@ function searchHit(
     instance_id: row.instance_id,
     native_id: row.native_id,
   });
-  let summary = summaryCache.get(sessionId);
-  if (summary === undefined) {
-    const stored = readSessionSummary(database, identity);
-    if (stored === undefined) throw new SqliteSessionIndexError("corrupt-data");
-    summary = freezeSummary(stored);
-    summaryCache.set(sessionId, summary);
+  const summary = summaries.get(sessionId);
+  if (summary === undefined || !sameSessionIdentity(summary.identity, identity)) {
+    throw new SqliteSessionIndexError("corrupt-data");
   }
   const entry = entryAt({
     ordinal: row.entry_ordinal,
@@ -486,7 +713,6 @@ function searchHit(
   const content = hydrated.byContentId.get(contentId);
   if (content === undefined) throw new SqliteSessionIndexError("corrupt-data");
   const snippet = snippetAt(row, content, hydrated.markers);
-  const context = readSearchContext(database, sessionId, entry.ordinal, adjacentContext);
   const terms = matchedTerms.get(coordinateKey(sessionId, entry.ordinal));
   if (terms === undefined) throw new SqliteSessionIndexError("corrupt-data");
   return Object.freeze({
@@ -508,6 +734,45 @@ function searchCoordinateAt(row: {
     sessionId: integerAt(row.session_id),
     entryOrdinal: integerAt(row.entry_ordinal),
   };
+}
+
+function listSessionCoordinateAt(row: ListCoordinateRow): SelectedSessionCoordinate {
+  return { sessionId: integerAt(row.session_id), identity: identityAt(row) };
+}
+
+function searchSessionCoordinateAt(row: SearchRankRow): SelectedSessionCoordinate {
+  return {
+    sessionId: integerAt(row.session_id),
+    identity: identityAt({
+      kind: row.source_kind,
+      instance_id: row.instance_id,
+      native_id: row.native_id,
+    }),
+  };
+}
+
+function readSelectedSummaries(
+  database: DatabaseSync,
+  coordinates: readonly SelectedSessionCoordinate[],
+): ReadonlyMap<number, SessionQuerySummary> {
+  const requests = new Map<number, SessionSummaryBatchRequest>();
+  for (const coordinate of coordinates) {
+    const previous = requests.get(coordinate.sessionId);
+    if (previous !== undefined) {
+      if (!sameSessionIdentity(previous.identity, coordinate.identity)) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      continue;
+    }
+    requests.set(coordinate.sessionId, {
+      sessionId: coordinate.sessionId,
+      identity: coordinate.identity,
+    });
+  }
+  const stored = readSessionSummariesBatch(database, [...requests.values()]);
+  return new Map(
+    [...stored].map(([sessionId, summary]) => [sessionId, freezeSummary(summary)] as const),
+  );
 }
 
 function coordinateKey(sessionId: number, entryOrdinal: number): string {
@@ -562,7 +827,9 @@ function prepareCursor(
 ): PreparedCursor {
   const revision = readQueryRevision(database);
   const fingerprint = fingerprintQuery(sessionQueryFingerprintMaterial(query));
-  if (query.cursor === undefined) return { revision, fingerprint, offset: 0 };
+  if (query.cursor === undefined) {
+    return { revision, fingerprint, offset: 0, legacyOffset: false };
+  }
   const decoded = decodeQueryCursor(query.cursor, { command, fingerprint, revision });
   if (!decoded.ok) {
     if (decoded.reason === "stale") throw new SessionQueryOperationalError("stale-cursor");
@@ -570,13 +837,19 @@ function prepareCursor(
       decoded.reason === "mismatch" ? "cursor-query-mismatch" : "invalid-cursor",
     );
   }
-  return { revision, fingerprint, offset: decoded.offset };
+  return {
+    revision,
+    fingerprint,
+    offset: decoded.offset,
+    legacyOffset: decoded.anchor === undefined,
+    ...(decoded.anchor === undefined ? {} : { anchor: decoded.anchor }),
+  };
 }
 
-function nextQueryCursor(command: QueryCommand, cursor: PreparedCursor, offset: number) {
+function nextSearchQueryCursor(cursor: PreparedCursor, offset: number) {
   return createSessionQueryCursor(
     encodeQueryCursor({
-      command,
+      command: "search",
       fingerprint: cursor.fingerprint,
       revision: cursor.revision,
       offset,
@@ -623,6 +896,14 @@ function storedString(value: unknown): string {
   return value;
 }
 
+function optionalCanonicalTimestampAt(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !isCanonicalTimestamp(value)) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return value;
+}
+
 function integerAt(value: unknown): number {
   const number = typeof value === "bigint" ? Number(value) : value;
   if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0) {
@@ -635,6 +916,8 @@ interface PreparedCursor {
   readonly revision: QueryRevision;
   readonly fingerprint: string;
   readonly offset: number;
+  readonly legacyOffset: boolean;
+  readonly anchor?: QueryCursorAnchor;
 }
 
 interface SnippetMarkers {
@@ -657,6 +940,11 @@ interface SearchCoordinate {
   readonly entryOrdinal: number;
 }
 
+interface SelectedSessionCoordinate {
+  readonly sessionId: number;
+  readonly identity: SessionIdentity;
+}
+
 interface SearchCoordinateRow {
   readonly session_id: unknown;
   readonly entry_ordinal: unknown;
@@ -666,6 +954,15 @@ interface IdentityRow {
   readonly kind: unknown;
   readonly instance_id: unknown;
   readonly native_id: unknown;
+}
+
+interface ListCoordinateRow extends IdentityRow {
+  readonly session_id: unknown;
+  readonly activity: unknown;
+}
+
+interface ListAnchorRow extends ListCoordinateRow {
+  readonly qualifies: unknown;
 }
 
 interface AggregateRow {
@@ -694,6 +991,8 @@ interface SearchRankRow {
 }
 
 interface HydratedContentRow {
+  readonly content_index: unknown;
+  readonly content_id: unknown;
   readonly text: unknown;
   readonly content_digest: unknown;
   readonly snippet_text: unknown;

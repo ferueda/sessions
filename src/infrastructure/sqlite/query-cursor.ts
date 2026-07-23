@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-const CURSOR_VERSION = 1;
+const CURSOR_VERSION_V1 = 1;
+const CURSOR_VERSION_V2 = 2;
 const MAX_CURSOR_BYTES = 2_048;
 const INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/u;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/u;
@@ -13,8 +14,19 @@ export interface QueryRevision {
   readonly writerGeneration: number;
 }
 
+export type QueryCursorAnchor =
+  | {
+      readonly kind: "list";
+      readonly sessionId: number;
+    }
+  | {
+      readonly kind: "entries";
+      readonly sessionId: number;
+      readonly entryOrdinal: number;
+    };
+
 export type CursorDecodeResult =
-  | { readonly ok: true; readonly offset: number }
+  | { readonly ok: true; readonly offset: number; readonly anchor?: QueryCursorAnchor }
   | { readonly ok: false; readonly reason: "invalid" | "mismatch" | "stale" };
 
 export function readQueryRevision(database: DatabaseSync): QueryRevision {
@@ -59,7 +71,7 @@ export function encodeQueryCursor(input: {
   assertOffset(input.offset);
   return Buffer.from(
     JSON.stringify({
-      v: CURSOR_VERSION,
+      v: CURSOR_VERSION_V1,
       c: input.command,
       q: input.fingerprint,
       l: input.revision.libraryInstanceId,
@@ -68,6 +80,61 @@ export function encodeQueryCursor(input: {
     }),
     "utf8",
   ).toString("base64url");
+}
+
+export function encodeAnchoredQueryCursor(
+  input:
+    | {
+        readonly command: "list";
+        readonly fingerprint: string;
+        readonly revision: QueryRevision;
+        readonly offset: number;
+        readonly anchor: Extract<QueryCursorAnchor, { readonly kind: "list" }>;
+      }
+    | {
+        readonly command: "entries";
+        readonly fingerprint: string;
+        readonly revision: QueryRevision;
+        readonly offset: number;
+        readonly anchor: Extract<QueryCursorAnchor, { readonly kind: "entries" }>;
+      },
+): string {
+  assertAnchoredCommand(input.command);
+  assertAnchorKind(input.anchor.kind);
+  if (!FINGERPRINT_PATTERN.test(input.fingerprint))
+    throw new TypeError("Invalid query fingerprint");
+  assertRevision(input.revision);
+  assertOffset(input.offset);
+  assertOffset(input.anchor.sessionId);
+  if (input.command !== input.anchor.kind) {
+    throw new TypeError("Query cursor anchor does not match command");
+  }
+  if (input.command === "entries") {
+    assertOffset(input.anchor.entryOrdinal);
+  }
+
+  const payload =
+    input.command === "list"
+      ? {
+          v: CURSOR_VERSION_V2,
+          c: input.command,
+          q: input.fingerprint,
+          l: input.revision.libraryInstanceId,
+          g: input.revision.writerGeneration,
+          o: input.offset,
+          s: input.anchor.sessionId,
+        }
+      : {
+          v: CURSOR_VERSION_V2,
+          c: input.command,
+          q: input.fingerprint,
+          l: input.revision.libraryInstanceId,
+          g: input.revision.writerGeneration,
+          o: input.offset,
+          s: input.anchor.sessionId,
+          e: input.anchor.entryOrdinal,
+        };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 export function decodeQueryCursor(
@@ -96,12 +163,8 @@ export function decodeQueryCursor(
   } catch {
     return invalid();
   }
-  if (!isCursorPayload(parsed)) return invalid();
-  if (
-    parsed.v !== CURSOR_VERSION ||
-    parsed.c !== expected.command ||
-    parsed.q !== expected.fingerprint
-  ) {
+  if (!isCursorPayloadV1(parsed) && !isCursorPayloadV2(parsed)) return invalid();
+  if (parsed.c !== expected.command || parsed.q !== expected.fingerprint) {
     return { ok: false, reason: "mismatch" };
   }
   if (
@@ -110,10 +173,24 @@ export function decodeQueryCursor(
   ) {
     return { ok: false, reason: "stale" };
   }
-  return { ok: true, offset: parsed.o };
+  if (parsed.v === CURSOR_VERSION_V1) {
+    return { ok: true, offset: parsed.o };
+  }
+  return {
+    ok: true,
+    offset: parsed.o,
+    anchor:
+      parsed.c === "list"
+        ? { kind: "list", sessionId: parsed.s }
+        : {
+            kind: "entries",
+            sessionId: parsed.s,
+            entryOrdinal: parsed.e,
+          },
+  };
 }
 
-function isCursorPayload(value: unknown): value is CursorPayload {
+function isCursorPayloadV1(value: unknown): value is CursorPayloadV1 {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (
@@ -128,7 +205,7 @@ function isCursorPayload(value: unknown): value is CursorPayload {
     return false;
   }
   return (
-    record.v === CURSOR_VERSION &&
+    record.v === CURSOR_VERSION_V1 &&
     (record.c === "entries" || record.c === "list" || record.c === "search") &&
     typeof record.q === "string" &&
     FINGERPRINT_PATTERN.test(record.q) &&
@@ -136,6 +213,34 @@ function isCursorPayload(value: unknown): value is CursorPayload {
     INSTANCE_ID_PATTERN.test(record.l) &&
     isSafeNonNegativeInteger(record.g) &&
     isSafeNonNegativeInteger(record.o)
+  );
+}
+
+function isCursorPayloadV2(value: unknown): value is CursorPayloadV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.v !== CURSOR_VERSION_V2 || (record.c !== "entries" && record.c !== "list")) {
+    return false;
+  }
+  const expectedKeys =
+    record.c === "list"
+      ? ["v", "c", "q", "l", "g", "o", "s"]
+      : ["v", "c", "q", "l", "g", "o", "s", "e"];
+  if (
+    Object.keys(record).length !== expectedKeys.length ||
+    expectedKeys.some((key) => !Object.hasOwn(record, key))
+  ) {
+    return false;
+  }
+  return (
+    typeof record.q === "string" &&
+    FINGERPRINT_PATTERN.test(record.q) &&
+    typeof record.l === "string" &&
+    INSTANCE_ID_PATTERN.test(record.l) &&
+    isSafeNonNegativeInteger(record.g) &&
+    isSafeNonNegativeInteger(record.o) &&
+    isSafeNonNegativeInteger(record.s) &&
+    (record.c === "list" || isSafeNonNegativeInteger(record.e))
   );
 }
 
@@ -151,6 +256,18 @@ function assertRevision(revision: QueryRevision): void {
 function assertCommand(command: string): asserts command is QueryCommand {
   if (command !== "entries" && command !== "list" && command !== "search") {
     throw new TypeError("Invalid query command");
+  }
+}
+
+function assertAnchoredCommand(command: string): asserts command is "entries" | "list" {
+  if (command !== "entries" && command !== "list") {
+    throw new TypeError("Invalid anchored query command");
+  }
+}
+
+function assertAnchorKind(kind: string): asserts kind is QueryCursorAnchor["kind"] {
+  if (kind !== "entries" && kind !== "list") {
+    throw new TypeError("Invalid query cursor anchor kind");
   }
 }
 
@@ -172,7 +289,7 @@ function invalid(): CursorDecodeResult {
   return { ok: false, reason: "invalid" };
 }
 
-interface CursorPayload {
+interface CursorPayloadV1 {
   readonly v: 1;
   readonly c: QueryCommand;
   readonly q: string;
@@ -180,3 +297,24 @@ interface CursorPayload {
   readonly g: number;
   readonly o: number;
 }
+
+type CursorPayloadV2 =
+  | {
+      readonly v: 2;
+      readonly c: "list";
+      readonly q: string;
+      readonly l: string;
+      readonly g: number;
+      readonly o: number;
+      readonly s: number;
+    }
+  | {
+      readonly v: 2;
+      readonly c: "entries";
+      readonly q: string;
+      readonly l: string;
+      readonly g: number;
+      readonly o: number;
+      readonly s: number;
+      readonly e: number;
+    };

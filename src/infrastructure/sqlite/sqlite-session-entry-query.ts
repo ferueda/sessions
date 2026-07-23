@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { performance } from "node:perf_hooks";
 
 import {
   SessionQueryOperationalError,
@@ -15,13 +16,14 @@ import {
   type SessionEntryQuery,
   type SessionQuerySummary,
 } from "../../domain/session-query.ts";
-import { isSessionIdentity } from "../../domain/session-identity.ts";
+import { isSessionIdentity, sameSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import {
   decodeQueryCursor,
-  encodeQueryCursor,
+  encodeAnchoredQueryCursor,
   fingerprintQuery,
   readQueryRevision,
+  type QueryCursorAnchor,
   type QueryRevision,
 } from "./query-cursor.ts";
 import { decodeSqliteContentDigest } from "./sqlite-content-digest.ts";
@@ -32,7 +34,10 @@ import {
   type SqliteQueryWhere,
 } from "./sqlite-query-filters.ts";
 import { createRetainedSessionRootResolver } from "./sqlite-query-lineage.ts";
-import { readSessionSummary } from "./sqlite-session-state.ts";
+import {
+  readSessionSummariesBatch,
+  type SessionSummaryBatchRequest,
+} from "./sqlite-session-state.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
 
@@ -48,23 +53,62 @@ const ORIGINS = new Set<ContentOrigin>([
 ]);
 const CONFIDENCES = new Set<OriginConfidence>(["high", "medium", "low", "unknown"]);
 
+export type SqliteEntryQueryPhase = "coordinate-selection" | "hydration";
+
+export interface SqliteEntryQueryWork {
+  readonly phase: SqliteEntryQueryPhase;
+  readonly elapsedMilliseconds: number;
+  readonly rowCount: number;
+}
+
+export interface SqliteEntryQueryOptions {
+  readonly observeWork?: (work: SqliteEntryQueryWork) => void;
+}
+
+export interface SqliteEntryCoordinateStatement {
+  readonly sql: string;
+  readonly parameters: readonly (string | number)[];
+}
+
+export type SqliteEntryCoordinatePosition =
+  | { readonly kind: "first" }
+  | { readonly kind: "offset"; readonly offset: number }
+  | {
+      readonly kind: "keyset";
+      readonly anchor: SqliteEntryResolvedAnchor;
+    };
+
+export interface SqliteEntryResolvedAnchor {
+  readonly sessionId: number;
+  readonly entryOrdinal: number;
+  readonly sourceKind: string;
+  readonly instanceId: string;
+  readonly nativeId: string;
+}
+
 export function listSqliteSessionEntries(
   database: DatabaseSync,
   query: SessionEntryQuery,
+  options: SqliteEntryQueryOptions = {},
 ): SessionEntryPage {
   const cursor = prepareEntryCursor(database, query);
   const captureScope = readSqliteCaptureScope(database, query.filter);
-  const rows = readEntryRows(database, query, cursor.offset);
+  const rows = observeQueryWork("coordinate-selection", options.observeWork, () =>
+    readEntryRows(database, query, cursor.position),
+  );
   const pageRows = rows.slice(0, query.limit);
-  const entries = pageRows.length === 0 ? [] : hydrateEntries(database, pageRows, query);
+  const entries = observeQueryWork("hydration", options.observeWork, () =>
+    pageRows.length === 0 ? [] : hydrateEntries(database, pageRows, query),
+  );
   const nextCursor =
     rows.length > query.limit
       ? createSessionQueryCursor(
-          encodeQueryCursor({
+          encodeAnchoredQueryCursor({
             command: "entries",
             fingerprint: cursor.fingerprint,
             revision: cursor.revision,
             offset: cursor.offset + query.limit,
+            anchor: entryCursorAnchor(pageRows),
           }),
         )
       : undefined;
@@ -78,44 +122,111 @@ export function listSqliteSessionEntries(
 function readEntryRows(
   database: DatabaseSync,
   query: SessionEntryQuery,
-  offset: number,
+  position: SqliteEntryCoordinatePosition,
 ): readonly EntryCoordinateRow[] {
+  const statement = buildSqliteEntryCoordinateStatement(query, position);
+  return database
+    .prepare(statement.sql)
+    .all(...statement.parameters) as unknown as readonly EntryCoordinateRow[];
+}
+
+export function buildSqliteEntryCoordinateStatement(
+  query: SessionEntryQuery,
+  position: SqliteEntryCoordinatePosition,
+): SqliteEntryCoordinateStatement {
   const outer = entryInventoryWhere(query.filter);
   const selection = selectionClause(query);
-  return database
-    .prepare(
-      `SELECT canonical.session_id,
-              source.kind AS source_kind,
-              source.instance_id,
-              tracking.native_id,
-              entry.ordinal,
-              entry.kind,
-              entry.actor,
-              entry.timestamp,
-              entry.related_entry_ordinal,
-              entry.tool_call_id,
-              entry.tool_name,
-              entry.tool_namespace
-       FROM sessions_source_instances AS source
-       JOIN sessions_session_tracking AS tracking
-         ON tracking.source_instance_id = source.source_instance_id
-       JOIN sessions_canonical_sessions AS canonical
-         ON canonical.session_id = tracking.session_id
-       JOIN sessions_entries AS entry
-         ON entry.session_id = canonical.session_id
-       WHERE 1 = 1${outer.sql}${selection.sql}
-       ORDER BY source.kind COLLATE BINARY,
-                source.instance_id COLLATE BINARY,
-                tracking.native_id COLLATE BINARY,
-                entry.ordinal
-       LIMIT ? OFFSET ?`,
-    )
-    .all(
+  const continuation = continuationClause(position);
+  return Object.freeze({
+    sql: `SELECT canonical.session_id,
+                 source.kind AS source_kind,
+                 source.instance_id,
+                 tracking.native_id,
+                 entry.ordinal,
+                 entry.kind,
+                 entry.actor,
+                 entry.timestamp,
+                 entry.related_entry_ordinal,
+                 entry.tool_call_id,
+                 entry.tool_name,
+                 entry.tool_namespace
+          FROM sessions_source_instances AS source
+          CROSS JOIN sessions_session_tracking AS tracking
+          CROSS JOIN sessions_canonical_sessions AS canonical
+          CROSS JOIN sessions_entries AS entry
+          WHERE tracking.source_instance_id = source.source_instance_id
+            AND canonical.session_id = tracking.session_id
+            AND entry.session_id = canonical.session_id${outer.sql}${selection.sql}${continuation.sql}
+          ORDER BY source.kind COLLATE BINARY,
+                   source.instance_id COLLATE BINARY,
+                   tracking.native_id COLLATE BINARY,
+                   entry.ordinal
+          LIMIT ?${position.kind === "offset" ? " OFFSET ?" : ""}`,
+    parameters: Object.freeze([
       ...outer.parameters,
       ...selection.parameters,
+      ...continuation.parameters,
       query.limit + 1,
-      offset,
-    ) as unknown as readonly EntryCoordinateRow[];
+      ...(position.kind === "offset" ? [position.offset] : []),
+    ]),
+  });
+}
+
+function continuationClause(position: SqliteEntryCoordinatePosition): SqliteEntryContinuation {
+  if (position.kind !== "keyset") return { sql: "", parameters: [] };
+  return {
+    sql: ` AND (
+      source.kind COLLATE BINARY,
+      source.instance_id COLLATE BINARY,
+      tracking.native_id COLLATE BINARY
+    ) >= (?, ?, ?)
+    AND entry.ordinal > CASE
+      WHEN canonical.session_id = ? THEN ?
+      ELSE -1
+    END`,
+    parameters: [
+      position.anchor.sourceKind,
+      position.anchor.instanceId,
+      position.anchor.nativeId,
+      position.anchor.sessionId,
+      position.anchor.entryOrdinal,
+    ],
+  };
+}
+
+function entryCursorAnchor(
+  pageRows: readonly EntryCoordinateRow[],
+): Extract<QueryCursorAnchor, { readonly kind: "entries" }> {
+  const row = pageRows.at(-1);
+  if (row === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  return {
+    kind: "entries",
+    sessionId: integerAt(row.session_id),
+    entryOrdinal: integerAt(row.ordinal),
+  };
+}
+
+function observeQueryWork<T extends readonly unknown[]>(
+  phase: SqliteEntryQueryPhase,
+  observer: SqliteEntryQueryOptions["observeWork"],
+  run: () => T,
+): T {
+  const startedAt = performance.now();
+  const result = run();
+  if (observer !== undefined) {
+    try {
+      observer(
+        Object.freeze({
+          phase,
+          elapsedMilliseconds: performance.now() - startedAt,
+          rowCount: result.length,
+        }),
+      );
+    } catch {
+      // Diagnostics are private and best-effort; they never affect query results.
+    }
+  }
+  return result;
 }
 
 function selectionClause(query: SessionEntryQuery): SqliteQueryWhere {
@@ -142,21 +253,21 @@ function hydrateEntries(
     sessionId: integerAt(row.session_id),
     entryOrdinal: integerAt(row.ordinal),
   }));
+  const identities = rows.map(identityAt);
   const counts = readContentCounts(database, coordinates);
   const previews = readPreviews(database, coordinates, query.filter.origin);
   const resolveRoot = createRetainedSessionRootResolver(database);
-  const summaryCache = new Map<number, SessionQuerySummary>();
+  const summaries = readEntrySummaries(database, coordinates, identities);
 
   return rows.map((row, index) => {
     const coordinate = coordinates[index];
-    if (coordinate === undefined) throw new SqliteSessionIndexError("corrupt-data");
-    const identity = identityAt(row);
-    let summary = summaryCache.get(coordinate.sessionId);
-    if (summary === undefined) {
-      const stored = readSessionSummary(database, identity);
-      if (stored === undefined) throw new SqliteSessionIndexError("corrupt-data");
-      summary = freezeSummary(stored);
-      summaryCache.set(coordinate.sessionId, summary);
+    const identity = identities[index];
+    if (coordinate === undefined || identity === undefined) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    const summary = summaries.get(coordinate.sessionId);
+    if (summary === undefined || !sameSessionIdentity(summary.identity, identity)) {
+      throw new SqliteSessionIndexError("corrupt-data");
     }
     const root = resolveRoot(identity);
     const coordinateKey = contentKey(coordinate.sessionId, coordinate.entryOrdinal);
@@ -171,6 +282,32 @@ function hydrateEntries(
       content,
     });
   });
+}
+
+function readEntrySummaries(
+  database: DatabaseSync,
+  coordinates: readonly EntryCoordinate[],
+  identities: readonly SessionIdentity[],
+): ReadonlyMap<number, SessionQuerySummary> {
+  const requests = new Map<number, SessionSummaryBatchRequest>();
+  for (const [index, coordinate] of coordinates.entries()) {
+    const identity = identities[index];
+    if (identity === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    const previous = requests.get(coordinate.sessionId);
+    if (previous !== undefined) {
+      if (!sameSessionIdentity(previous.identity, identity)) {
+        throw new SqliteSessionIndexError("corrupt-data");
+      }
+      continue;
+    }
+    requests.set(coordinate.sessionId, { sessionId: coordinate.sessionId, identity });
+  }
+  const stored = readSessionSummariesBatch(database, [...requests.values()]);
+  const summaries = new Map<number, SessionQuerySummary>();
+  for (const [sessionId, summary] of stored) {
+    summaries.set(sessionId, freezeSummary(summary));
+  }
+  return summaries;
 }
 
 function readContentCounts(
@@ -305,7 +442,9 @@ function contentSummary(
 function prepareEntryCursor(database: DatabaseSync, query: SessionEntryQuery): PreparedCursor {
   const revision = readQueryRevision(database);
   const fingerprint = fingerprintQuery(sessionQueryFingerprintMaterial(query));
-  if (query.cursor === undefined) return { revision, fingerprint, offset: 0 };
+  if (query.cursor === undefined) {
+    return { revision, fingerprint, offset: 0, position: { kind: "first" } };
+  }
   const decoded = decodeQueryCursor(query.cursor, {
     command: "entries",
     fingerprint,
@@ -317,7 +456,104 @@ function prepareEntryCursor(database: DatabaseSync, query: SessionEntryQuery): P
       decoded.reason === "mismatch" ? "cursor-query-mismatch" : "invalid-cursor",
     );
   }
-  return { revision, fingerprint, offset: decoded.offset };
+  if (decoded.anchor === undefined) {
+    return {
+      revision,
+      fingerprint,
+      offset: decoded.offset,
+      position: { kind: "offset", offset: decoded.offset },
+    };
+  }
+  if (decoded.anchor.kind !== "entries") {
+    throw new SessionQueryUsageError("invalid-cursor");
+  }
+  return {
+    revision,
+    fingerprint,
+    offset: decoded.offset,
+    position: {
+      kind: "keyset",
+      anchor: resolveEntryAnchor(database, query, decoded.anchor),
+    },
+  };
+}
+
+function resolveEntryAnchor(
+  database: DatabaseSync,
+  query: SessionEntryQuery,
+  anchor: Extract<QueryCursorAnchor, { readonly kind: "entries" }>,
+): SqliteEntryResolvedAnchor {
+  const outer = entryInventoryWhere(query.filter);
+  const selection = selectionClause(query);
+  const rows = database
+    .prepare(
+      `WITH physical_anchor AS MATERIALIZED (
+         SELECT canonical.session_id,
+                source.kind AS source_kind,
+                source.instance_id,
+                tracking.native_id,
+                entry.ordinal,
+                entry.kind,
+                entry.actor,
+                entry.timestamp,
+                entry.related_entry_ordinal,
+                entry.tool_call_id,
+                entry.tool_name,
+                entry.tool_namespace
+         FROM sessions_canonical_sessions AS canonical
+         JOIN sessions_session_tracking AS tracking
+           ON tracking.session_id = canonical.session_id
+         JOIN sessions_source_instances AS source
+           ON source.source_instance_id = tracking.source_instance_id
+         JOIN sessions_entries AS entry
+           ON entry.session_id = canonical.session_id
+         WHERE canonical.session_id = ?
+           AND entry.ordinal = ?
+       ),
+       qualifying_anchor AS MATERIALIZED (
+         SELECT canonical.session_id, entry.ordinal
+         FROM sessions_source_instances AS source
+         CROSS JOIN sessions_session_tracking AS tracking
+         CROSS JOIN sessions_canonical_sessions AS canonical
+         CROSS JOIN sessions_entries AS entry
+         WHERE tracking.source_instance_id = source.source_instance_id
+           AND canonical.session_id = tracking.session_id
+           AND entry.session_id = canonical.session_id
+           AND canonical.session_id = ?
+           AND entry.ordinal = ?${outer.sql}${selection.sql}
+       )
+       SELECT physical_anchor.*,
+              EXISTS (SELECT 1 FROM qualifying_anchor) AS qualifies
+       FROM physical_anchor`,
+    )
+    .all(
+      anchor.sessionId,
+      anchor.entryOrdinal,
+      anchor.sessionId,
+      anchor.entryOrdinal,
+      ...outer.parameters,
+      ...selection.parameters,
+    ) as unknown as readonly EntryAnchorRow[];
+  if (rows.length === 0) throw new SessionQueryUsageError("invalid-cursor");
+  if (rows.length !== 1) throw new SqliteSessionIndexError("corrupt-data");
+  const row = rows[0];
+  if (row === undefined) throw new SqliteSessionIndexError("corrupt-data");
+  const sessionId = integerAt(row.session_id);
+  const entryOrdinal = integerAt(row.ordinal);
+  const identity = identityAt(row);
+  entryAt(row);
+  const qualifies = integerAt(row.qualifies);
+  if (sessionId !== anchor.sessionId || entryOrdinal !== anchor.entryOrdinal || qualifies > 1) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  if (qualifies === 0) throw new SessionQueryUsageError("invalid-cursor");
+  return {
+    sessionId,
+    entryOrdinal,
+    sourceKind: identity.source.kind,
+    instanceId: identity.source.instanceId,
+    nativeId: identity.nativeId,
+  };
 }
 
 function identityAt(row: EntryCoordinateRow): SessionIdentity {
@@ -362,6 +598,7 @@ interface PreparedCursor {
   readonly revision: QueryRevision;
   readonly fingerprint: string;
   readonly offset: number;
+  readonly position: SqliteEntryCoordinatePosition;
 }
 
 interface EntryCoordinate {
@@ -372,6 +609,11 @@ interface EntryCoordinate {
 interface SelectedEntriesCte {
   readonly sql: string;
   readonly parameters: readonly number[];
+}
+
+interface SqliteEntryContinuation {
+  readonly sql: string;
+  readonly parameters: readonly (string | number)[];
 }
 
 interface ContentCount {
@@ -392,6 +634,10 @@ interface EntryCoordinateRow {
   readonly tool_call_id: unknown;
   readonly tool_name: unknown;
   readonly tool_namespace: unknown;
+}
+
+interface EntryAnchorRow extends EntryCoordinateRow {
+  readonly qualifies: unknown;
 }
 
 interface ContentCountRow {

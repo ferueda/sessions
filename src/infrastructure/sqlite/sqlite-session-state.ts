@@ -6,6 +6,7 @@ import type {
   SessionIndexFailureCode,
 } from "../../application/ports/session-index.ts";
 import type { SessionRevision } from "../../application/validate-session.ts";
+import { isSessionIdentity } from "../../domain/session-identity.ts";
 import type { SessionIdentity } from "../../domain/session.ts";
 import {
   EFFECTIVE_SOURCE_OBSERVED_AT_SQL,
@@ -22,6 +23,7 @@ const FAILURE_CODES: ReadonlySet<string> = new Set<SessionIndexFailureCode>([
   "unsupported-format",
   "repository-write",
 ]);
+const SESSION_SUMMARY_BATCH_LIMIT = 200;
 
 export interface SessionTrackingRecord {
   readonly session_id: number | bigint;
@@ -241,6 +243,106 @@ export function readSessionSummary(
   return decodeRetainedSessionSummary(identity, row, freshness);
 }
 
+export interface SessionSummaryBatchRequest {
+  readonly sessionId: number;
+  readonly identity: SessionIdentity;
+}
+
+export function readSessionSummariesBatch(
+  database: DatabaseSync,
+  requests: readonly SessionSummaryBatchRequest[],
+): ReadonlyMap<number, IndexedSessionSummary> {
+  if (requests.length === 0) return new Map();
+  if (requests.length > SESSION_SUMMARY_BATCH_LIMIT) {
+    throw new TypeError("SQLite session summary batch exceeds the supported limit");
+  }
+
+  const requestedSessionIds = new Set<number>();
+  const requestsBySessionId = new Map<number, SessionSummaryBatchRequest>();
+  const parameters: Array<number | string> = [];
+  for (const request of requests) {
+    if (
+      !Number.isSafeInteger(request.sessionId) ||
+      request.sessionId < 0 ||
+      !isSessionIdentity(request.identity) ||
+      requestedSessionIds.has(request.sessionId)
+    ) {
+      throw new TypeError("Invalid SQLite session summary batch request");
+    }
+    requestedSessionIds.add(request.sessionId);
+    requestsBySessionId.set(request.sessionId, request);
+    parameters.push(
+      request.sessionId,
+      request.identity.source.kind,
+      request.identity.source.instanceId,
+      request.identity.nativeId,
+    );
+  }
+
+  const values = requests.map(() => "(?, ?, ?, ?)").join(", ");
+  const statement = database.prepare(
+    `WITH requested(session_id, source_kind, instance_id, native_id) AS (
+       VALUES ${values}
+     )
+     SELECT requested.session_id AS requested_session_id,
+            source.kind AS source_kind,
+            source.instance_id,
+            tracking.native_id,
+            canonical.title,
+            canonical.workspace,
+            canonical.created_at,
+            canonical.updated_at,
+            tracking.captured_at,
+            canonical.document_digest_scheme,
+            canonical.document_digest,
+            ${EFFECTIVE_SOURCE_STATE_SQL} AS source_state,
+            ${EFFECTIVE_SOURCE_OBSERVED_AT_SQL} AS source_observed_at,
+            tracking.last_good_fingerprint_scheme,
+            tracking.last_good_fingerprint_digest,
+            tracking.last_good_adapter_version,
+            tracking.latest_fingerprint_scheme,
+            tracking.latest_fingerprint_digest,
+            tracking.latest_adapter_version,
+            tracking.latest_outcome,
+            tracking.latest_failure_code
+     FROM requested
+     JOIN sessions_canonical_sessions AS canonical
+       ON canonical.session_id = requested.session_id
+     JOIN sessions_session_tracking AS tracking
+       ON tracking.session_id = canonical.session_id
+      AND tracking.native_id = requested.native_id COLLATE BINARY
+     JOIN sessions_source_instances AS source
+       ON source.source_instance_id = tracking.source_instance_id
+      AND source.kind = requested.source_kind COLLATE BINARY
+      AND source.instance_id = requested.instance_id COLLATE BINARY`,
+  );
+  statement.setReadBigInts(true);
+  const rows = statement.all(...parameters) as unknown as readonly SessionSummaryBatchRow[];
+  if (rows.length !== requests.length) throw new SqliteSessionIndexError("corrupt-data");
+
+  const summaries = new Map<number, IndexedSessionSummary>();
+  for (const row of rows) {
+    const sessionId = integerAt(row.requested_session_id);
+    const request = requestsBySessionId.get(sessionId);
+    if (
+      request === undefined ||
+      row.source_kind !== request.identity.source.kind ||
+      row.instance_id !== request.identity.source.instanceId ||
+      row.native_id !== request.identity.nativeId ||
+      summaries.has(sessionId)
+    ) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    const freshness = decodeTrackedSessionFreshness(request.identity, true, row);
+    if (freshness.status !== "current" && freshness.status !== "stale") {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    summaries.set(sessionId, decodeRetainedSessionSummary(request.identity, row, freshness));
+  }
+  if (summaries.size !== requests.length) throw new SqliteSessionIndexError("corrupt-data");
+  return summaries;
+}
+
 export function decodeRetainedSessionSummary(
   identity: SessionIdentity,
   row: SessionSummaryColumns,
@@ -251,10 +353,10 @@ export function decodeRetainedSessionSummary(
   const sourceObservedAt = canonicalTimestampAt(row.source_observed_at);
   return {
     identity: copyIdentity(identity),
-    ...optional("title", row.title),
-    ...optional("workspace", row.workspace),
-    ...optional("createdAt", row.created_at),
-    ...optional("updatedAt", row.updated_at),
+    ...optionalStoredString("title", row.title),
+    ...optionalStoredString("workspace", row.workspace),
+    ...optionalStoredTimestamp("createdAt", row.created_at),
+    ...optionalStoredTimestamp("updatedAt", row.updated_at),
     freshness: freshness.status,
     sourceState,
     capturedAt,
@@ -321,11 +423,23 @@ function copyIdentity(identity: SessionIdentity): SessionIdentity {
   return { source: { ...identity.source }, nativeId: identity.nativeId };
 }
 
-function optional<const Key extends string>(
+function optionalStoredString<const Key extends string>(
   key: Key,
-  value: string | null,
+  value: unknown,
 ): { readonly [Property in Key]?: string } {
-  return value === null ? {} : ({ [key]: value } as { [Property in Key]: string });
+  if (value === null) return {};
+  if (typeof value !== "string" || !value.isWellFormed()) {
+    throw new SqliteSessionIndexError("corrupt-data");
+  }
+  return { [key]: value } as { [Property in Key]: string };
+}
+
+function optionalStoredTimestamp<const Key extends string>(
+  key: Key,
+  value: unknown,
+): { readonly [Property in Key]?: string } {
+  if (value === null) return {};
+  return { [key]: canonicalTimestampAt(value) } as { [Property in Key]: string };
 }
 
 function booleanIntegerAt(value: unknown): boolean {
@@ -356,11 +470,18 @@ interface FreshnessBatchRow extends SessionTrackingFreshnessColumns {
   readonly has_document: unknown;
 }
 
+interface SessionSummaryBatchRow extends SessionSummaryColumns, SessionTrackingFreshnessColumns {
+  readonly requested_session_id: unknown;
+  readonly source_kind: unknown;
+  readonly instance_id: unknown;
+  readonly native_id: unknown;
+}
+
 export interface SessionSummaryColumns {
-  readonly title: string | null;
-  readonly workspace: string | null;
-  readonly created_at: string | null;
-  readonly updated_at: string | null;
+  readonly title: unknown;
+  readonly workspace: unknown;
+  readonly created_at: unknown;
+  readonly updated_at: unknown;
   readonly captured_at: unknown;
   readonly source_state: unknown;
   readonly source_observed_at: unknown;
