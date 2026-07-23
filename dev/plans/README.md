@@ -16,16 +16,12 @@ Each program is ordered internally. Promote one numbered delivery slice at a
 time into its own executor plan and independently reviewable change;
 evidence-gated slices receive an executor plan only after their gate passes.
 
-1. [Everyday query hot paths](260723-everyday-query-hot-paths.md) — fix broad
-   entry selection first, then reduce repeated search hydration and summary
-   work, add compatible keyset continuation, and measure later planner/startup
-   candidates.
-2. [Indexing hot paths](260723-indexing-hot-paths.md) — measure discovery and
+1. [Indexing hot paths](260723-indexing-hot-paths.md) — measure discovery and
    replacement work, remove avoidable provider lookup/serialization and
    statement-per-content costs, then gate deeper transaction or WAL changes.
-3. [Doctor and maintenance hot paths](260723-doctor-maintenance-hot-paths.md) —
+2. [Doctor and maintenance hot paths](260723-doctor-maintenance-hot-paths.md) —
    make exact FTS verification memory-bounded, partition oversized terms, page
    only orphan candidates, and gate any compact-proof optimization separately.
-4. [Verified bounded session reads](260723-verified-bounded-session-reads.md) —
+3. [Verified bounded session reads](260723-verified-bounded-session-reads.md) —
    stream complete validation and the existing public-document digest while
    retaining only the requested bounded `show` or `export` selection.
