@@ -6,6 +6,7 @@ import {
   type SessionSearchContextEntry,
   type SessionSearchEntry,
 } from "../../domain/session-query.ts";
+import { isCanonicalTimestamp } from "../../domain/canonical-timestamp.ts";
 import type { Actor } from "../../domain/session.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
@@ -14,7 +15,7 @@ const ACTORS = new Set<Actor>(["human", "model", "tool", "system", "unknown"]);
 export const SQLITE_SEARCH_CONTEXT_COORDINATE_CHUNK_SIZE = 200;
 // At most twenty adjacent entries can precede the twenty-one extras needed
 // to prove linked-context truncation.
-const LINKED_CANDIDATE_LIMIT = MAX_SESSION_SEARCH_LINKED_CONTEXT * 2 + 1;
+export const SQLITE_SEARCH_LINKED_CANDIDATE_LIMIT = MAX_SESSION_SEARCH_LINKED_CONTEXT * 2 + 1;
 
 export interface SqliteSearchContext {
   readonly entries: readonly SessionSearchContextEntry[];
@@ -154,40 +155,11 @@ function readLinkedOrdinals(
 ): readonly (readonly number[])[] {
   const selected = selectedPrimaryCte(primaries);
   const rows = database
-    .prepare(
-      `${selected.sql},
-       ranked_links AS (
-         SELECT selected.primary_index,
-                selected.session_id,
-                selected.primary_ordinal,
-                candidate.ordinal AS candidate_ordinal,
-                ROW_NUMBER() OVER (
-                  PARTITION BY selected.primary_index
-                  ORDER BY candidate.ordinal
-                ) AS candidate_rank
-         FROM selected_primaries AS selected
-         JOIN sessions_entries AS primary_entry
-           ON primary_entry.session_id = selected.session_id
-          AND primary_entry.ordinal = selected.primary_ordinal
-         JOIN sessions_entries AS candidate
-           ON candidate.session_id = primary_entry.session_id
-          AND candidate.ordinal <> primary_entry.ordinal
-         WHERE (
-           primary_entry.related_entry_ordinal = candidate.ordinal
-           OR candidate.related_entry_ordinal = primary_entry.ordinal
-         )
-           AND (
-             (primary_entry.kind = 'tool-call' AND candidate.kind = 'tool-result')
-             OR
-             (primary_entry.kind = 'tool-result' AND candidate.kind = 'tool-call')
-           )
-       )
-       SELECT primary_index, session_id, primary_ordinal, candidate_ordinal
-       FROM ranked_links
-       WHERE candidate_rank <= ?
-       ORDER BY primary_index, candidate_ordinal`,
-    )
-    .all(...selected.parameters, LINKED_CANDIDATE_LIMIT) as unknown as readonly LinkedRow[];
+    .prepare(sqliteLinkedContextDiscoverySql(primaries.length))
+    .all(
+      ...selected.parameters,
+      SQLITE_SEARCH_LINKED_CANDIDATE_LIMIT,
+    ) as unknown as readonly LinkedRow[];
   const result = primaries.map(() => [] as number[]);
   for (const row of rows) {
     const primaryIndex = integerAt(row.primary_index);
@@ -209,6 +181,60 @@ function readLinkedOrdinals(
     linked.push(ordinal);
   }
   return result;
+}
+
+export function sqliteLinkedContextDiscoverySql(primaryCount: number): string {
+  if (!Number.isSafeInteger(primaryCount) || primaryCount < 1) {
+    throw new TypeError("Primary count must be a positive safe integer");
+  }
+  return `${selectedPrimaryCteSql(primaryCount)},
+   linked_candidates (
+     primary_index,
+     session_id,
+     primary_ordinal,
+     candidate_ordinal,
+     candidate_rank
+   ) AS (
+     SELECT selected.primary_index,
+            selected.session_id,
+            selected.primary_ordinal,
+            -1,
+            0
+     FROM selected_primaries AS selected
+     UNION ALL
+     SELECT linked.primary_index,
+            linked.session_id,
+            linked.primary_ordinal,
+            (
+              SELECT candidate.ordinal
+              FROM sessions_entries AS primary_entry
+              JOIN sessions_entries AS candidate
+                ON candidate.session_id = primary_entry.session_id
+               AND candidate.ordinal > linked.candidate_ordinal
+              WHERE primary_entry.session_id = linked.session_id
+                AND primary_entry.ordinal = linked.primary_ordinal
+                AND (
+                  primary_entry.related_entry_ordinal = candidate.ordinal
+                  OR candidate.related_entry_ordinal = primary_entry.ordinal
+                )
+                AND (
+                  (primary_entry.kind = 'tool-call' AND candidate.kind = 'tool-result')
+                  OR
+                  (primary_entry.kind = 'tool-result' AND candidate.kind = 'tool-call')
+                )
+              ORDER BY candidate.ordinal
+              LIMIT 1
+            ),
+            linked.candidate_rank + 1
+     FROM linked_candidates AS linked
+     WHERE linked.candidate_rank < ?
+       AND linked.candidate_ordinal IS NOT NULL
+   )
+   SELECT primary_index, session_id, primary_ordinal, candidate_ordinal
+   FROM linked_candidates
+   WHERE candidate_rank > 0
+     AND candidate_ordinal IS NOT NULL
+   ORDER BY primary_index, candidate_ordinal`;
 }
 
 function readContextEntries(
@@ -311,15 +337,19 @@ function selectedContextCoordinates(
 
 function selectedPrimaryCte(primaries: readonly SqliteSearchContextCoordinate[]): SelectedCte {
   return {
-    sql: `WITH selected_primaries(primary_index, session_id, primary_ordinal) AS (
-      VALUES ${primaries.map(() => "(?, ?, ?)").join(", ")}
-    )`,
+    sql: selectedPrimaryCteSql(primaries.length),
     parameters: primaries.flatMap((primary, primaryIndex) => [
       primaryIndex,
       primary.sessionId,
       primary.entryOrdinal,
     ]),
   };
+}
+
+function selectedPrimaryCteSql(primaryCount: number): string {
+  return `WITH RECURSIVE selected_primaries(primary_index, session_id, primary_ordinal) AS (
+    VALUES ${Array.from({ length: primaryCount }, () => "(?, ?, ?)").join(", ")}
+  )`;
 }
 
 function selectedContextCte(coordinates: readonly SqliteSearchContextCoordinate[]): SelectedCte {
@@ -348,9 +378,11 @@ export function entryAt(row: EntryRow): SessionSearchEntry {
   if (typeof row.kind !== "string" || !row.kind.isWellFormed() || !ACTORS.has(row.actor)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
+  const timestamp = optionalString(row.timestamp);
   const toolName = optionalString(row.tool_name);
   const toolNamespace = optionalString(row.tool_namespace);
   if (
+    (timestamp !== undefined && !isCanonicalTimestamp(timestamp)) ||
     (row.kind !== "tool-call" && (toolName !== undefined || toolNamespace !== undefined)) ||
     (toolNamespace !== undefined && toolName === undefined)
   ) {
@@ -360,7 +392,7 @@ export function entryAt(row: EntryRow): SessionSearchEntry {
     ordinal,
     kind: row.kind,
     actor: row.actor,
-    ...optionalStringProperty("timestamp", row.timestamp),
+    ...(timestamp === undefined ? {} : { timestamp }),
     ...optionalIntegerProperty("relatedEntryOrdinal", row.related_entry_ordinal),
     ...optionalStringProperty("toolCallId", row.tool_call_id),
     ...(toolName === undefined ? {} : { toolName }),

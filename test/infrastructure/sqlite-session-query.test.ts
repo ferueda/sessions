@@ -567,6 +567,54 @@ describe("SQLite session query", () => {
     }
   });
 
+  test("fails the whole search when corruption is reached in a later context chunk", async () => {
+    const database = migratedDatabase();
+    const primaryOrdinals = new Set(Array.from({ length: 11 }, (_, index) => 10 + index * 21));
+    const document = repeatedEntryDocument("later-context-corruption", 231, (ordinal) =>
+      primaryOrdinals.has(ordinal)
+        ? `laterchunkfailure evidence ${String(ordinal)}`
+        : `context evidence ${String(ordinal)}`,
+    );
+    await seedQueryDocuments(database, [document]);
+    try {
+      const repository = createSqliteSessionQuery(database);
+      const query = createSessionSearchQuery({
+        text: "laterchunkfailure",
+        limit: 11,
+        context: 10,
+      });
+      const valid = await repository.search(query);
+      expect(valid.hits).toHaveLength(11);
+      expect(valid.hits.every((hit) => hit.context.length === 20)).toBe(true);
+
+      const now = () => new Date("2026-07-14T17:00:00.000Z");
+      const lease = acquireWriterLease(database, "index", {
+        now,
+        token: () => "later-context-corruption-writer",
+      });
+      try {
+        runLeasedImmediateTransaction(database, lease, { now }, () => {
+          database
+            .prepare(
+              `UPDATE sessions_entries
+               SET timestamp = ?
+               WHERE session_id = ?
+                 AND ordinal = ?`,
+            )
+            .run("not-a-canonical-timestamp", retainedSessionId(database, document.identity), 230);
+        });
+
+        await expect(repository.search(query)).rejects.toMatchObject({ code: "corrupt-data" });
+      } finally {
+        interruptOwnedRunsAndReleaseWriterLease(database, lease, {
+          now: () => new Date("2026-07-14T17:01:00.000Z"),
+        });
+      }
+    } finally {
+      database.close();
+    }
+  });
+
   test("uses coverage observation while effective source state is unknown", async () => {
     const fixture = await seededQueryFixture();
     const now = () => new Date("2026-07-14T13:00:00.000Z");

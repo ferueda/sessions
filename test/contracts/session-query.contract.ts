@@ -13,6 +13,8 @@ import {
   createSessionEntryQuery,
   createSessionListQuery,
   createSessionSearchQuery,
+  type SessionEntryInventoryItem,
+  type SessionEntryPage,
   type SessionQueryCursor,
 } from "../../src/domain/session-query.ts";
 import type { SessionIdentity } from "../../src/domain/session.ts";
@@ -1229,9 +1231,11 @@ export function runSessionQueryContract(
             }),
           );
           expect(canonical.entries.length, `${selection} ${label}`).toBeGreaterThan(0);
-          expect(await traverseEntries(fixture.query, filter, 1, selection)).toEqual(
-            canonical.entries.map(entryKey),
-          );
+          const traversed = await traverseEntryPages(fixture.query, filter, 1, selection);
+          expect(traversed.entries, `${selection} ${label}`).toEqual(canonical.entries);
+          for (const scope of traversed.captureScopes) {
+            expect(scope, `${selection} ${label}`).toEqual(canonical.captureScope);
+          }
         }
       }
     } finally {
@@ -1331,7 +1335,21 @@ async function traverseEntries(
   limit: number,
   selection: NonNullable<Parameters<typeof createSessionEntryQuery>[0]["selection"]> = "all",
 ): Promise<string[]> {
-  const found: string[] = [];
+  const traversed = await traverseEntryPages(query, filter, limit, selection);
+  return traversed.entries.map(entryKey);
+}
+
+async function traverseEntryPages(
+  query: SessionQueryRepository,
+  filter: Parameters<typeof createSessionEntryQuery>[0]["filter"],
+  limit: number,
+  selection: NonNullable<Parameters<typeof createSessionEntryQuery>[0]["selection"]>,
+): Promise<{
+  readonly entries: readonly SessionEntryInventoryItem[];
+  readonly captureScopes: readonly SessionEntryPage["captureScope"][];
+}> {
+  const entries: SessionEntryInventoryItem[] = [];
+  const captureScopes: SessionEntryPage["captureScope"][] = [];
   let cursor: SessionQueryCursor | undefined;
   do {
     const page = await query.entries(
@@ -1342,10 +1360,11 @@ async function traverseEntries(
         ...(cursor === undefined ? {} : { cursor }),
       }),
     );
-    found.push(...page.entries.map(entryKey));
+    entries.push(...page.entries);
+    captureScopes.push(page.captureScope);
     cursor = page.nextCursor;
   } while (cursor !== undefined);
-  return found;
+  return { entries, captureScopes };
 }
 
 async function expectStateAt(

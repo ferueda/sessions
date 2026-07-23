@@ -100,7 +100,7 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
     }
     if (!sameIdentity(summary.identity, identity))
       throw new SqliteSessionIndexError("corrupt-data");
-    return Object.freeze({ ...freezeSummary(summary), root: resolveRoot(identity) });
+    return Object.freeze({ ...summary, root: resolveRoot(identity) });
   });
   const nextCursor =
     rows.length > query.limit
