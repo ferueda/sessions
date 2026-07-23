@@ -1356,6 +1356,17 @@ facets, deterministic comparison/timelines, tokenizer phrase search, smaller
 search/entries titles, exact locator interning, and Markdown presentation remain
 unsequenced until evidence gives them priority.
 
+Cursor format convergence is also deferred. List and entries currently emit
+anchored v2 continuations while accepting v1 offset continuations once; search
+still emits v1. Promote a retirement plan only after a measured, exact search
+keyset design justifies v2 search, every command has stopped emitting v1, and a
+declared compatibility boundary permits removal. That plan must first preserve
+v1 decoding during the emission transition, prove complete v2 traversal and
+existing stale/query-mismatch failures, then remove the v1 decoder and legacy
+offset paths together. Opaque cursors remain continuation tokens rather than
+durable bookmarks, but their removal is still an explicit compatibility
+decision.
+
 Semantic search, an external plugin ABI, cloud/team indexes, native binaries,
 Homebrew, TUI/watch mode, orchestration integrations, opt-in automated changes,
 raw provider backup, destination-provider delivery, and automatic project edits
