@@ -1,23 +1,27 @@
-# Bound doctor and maintenance work without weakening integrity
+# Measure doctor and bound orphan maintenance without weakening integrity
 
 ## Goal
 
-Make `doctor` and routine maintenance use bounded transient work while keeping
-Sessions' exact, fail-closed evidence contracts.
+Keep Sessions' exact, fail-closed evidence contracts while measuring doctor and
+bounding routine orphan maintenance.
 
-The first priority is doctor FTS verification. Today
+The doctor feasibility slice is complete. Today
 `ftsProjectionSemanticContentIsValidReadOnly` builds a second complete FTS5
 projection from every retained canonical content value in memory, then compares
 the complete expected and actual vocabularies. Its term ranges normally target
 1,000,000 instances, but one term above that target is still compared as one
 unbounded range. On a large retained library this duplicates a corpus-sized
 search structure before useful progress is visible and is the most likely cause
-of reports that doctor appears to hang.
+of reports that doctor appears to hang. Human review accepted the measurement's
+rejection of document-ID-bounded actual-vocabulary scans. Production doctor is
+unchanged; successor investigation moved to
+[the single-pass FTS feasibility plan](260723-doctor-single-pass-fts-feasibility.md).
 
-The second priority is orphan repair. It currently pages all content rows,
-tests reachability row by row, and executes a fenced zero-deletion batch for
-windows containing only referenced content. The desired query should page only
-orphan candidates while preserving the transaction-time reachability recheck.
+The remaining executable scope is orphan repair. It currently pages all content
+rows, tests reachability row by row, and executes a fenced zero-deletion batch
+for windows containing only referenced content. The desired query should page
+only orphan candidates while preserving the transaction-time reachability
+recheck.
 
 Carrying certified cleanliness through a successful compact is outside this
 plan. Compaction deliberately invalidates the previous clean proof today. Any
@@ -27,9 +31,9 @@ separately accepted measurement plan and ADR.
 Doctor remains an immutable, exact whole-library audit. Repair remains
 uncertified maintenance. The program changes no provider behavior, query
 result, public command grammar, structured output, exit code, or retention
-policy. The feasibility measure, bounded doctor refactor, and orphan paging land
-as separate PRs. The feasibility result requires explicit acceptance before the
-bounded doctor refactor is authorized.
+policy. The feasibility measure and orphan paging land as separate PRs. The
+bounded doctor refactor in this program is retired; orphan paging remains
+independently executable.
 
 ## Changes
 
@@ -76,121 +80,29 @@ bounded doctor refactor is authorized.
    persistent state, interval accounting, and complete cleanup are hard
    assertions.
 
-### 2. Verify expected FTS content in bounded exact intervals
+### Slice 1 result
 
-1. Do not start this section until the slice-1 feasibility result is explicitly
-   accepted. If it is rejected, preserve the current exact audit and replace
-   this design through a new or materially revised plan.
-2. Add a private best-effort work observer in
-   `src/infrastructure/sqlite/fts-projection.ts`, composed from
-   `src/infrastructure/sqlite/sqlite-index-health.ts:inspectDatabaseHealth`.
-   Keep it out of the application health port and public doctor result.
-   Allowlisted aggregate fields are:
-   - canonical rows and UTF-8 bytes inspected;
-   - expected interval count and maximum interval rows/bytes;
-   - oversized-content interval count;
-   - term summaries and ordinary term ranges compared;
-   - oversized terms and coordinate ranges compared;
-   - actual/expected instances compared and maximum range size.
-3. Isolate and swallow observer callback failures. They must not affect semantic
-   health, cleanup, stdout, stderr, or the exit code, and the observer must never
-   receive text, terms, content IDs, hashes, identities, paths, timestamps, SQL
-   text/errors, or lease values.
-4. Refactor
-   `src/infrastructure/sqlite/fts-projection.ts:ftsProjectionSemanticContentIsValidReadOnly`
-   so it never retains one corpus-sized expected projection or a corpus-sized
-   interval list. Keep `PRAGMA temp_store = MEMORY` and fail closed unless
-   SQLite confirms memory-only TEMP storage.
-5. Replace `loadExpectedDoctorProjectionInsideSavepoint` with interval-local
-   helpers such as `scanDoctorContentIntervals`,
-   `loadDoctorExpectedInterval`, and `dropDoctorExpectedProjection`.
-   Construct intervals by keyset-reading `content_id` and exact
-   `length(CAST(text AS BLOB))`, then load the corresponding canonical
-   `content_id,text` rows in signed-ID order.
-6. Use fixed private admission targets of at most 512 canonical rows and exactly
-   `16 * 1024 * 1024` UTF-8 bytes per expected interval. A single canonical
-   value above the byte target is processed alone, counted as oversized, and
-   never truncated, skipped, split into invented canonical rows, or spilled to
-   disk.
-7. For each interval:
-   - create a fresh contentless TEMP FTS5 table plus only the vocab tables
-     needed for that comparison;
-   - preserve the original signed row IDs;
-   - load inside a private savepoint that composes with an existing outer
-     transaction;
-   - compare docsize in both directions;
-   - compare exact term/document/column/offset instances in both directions;
-   - close iterators, roll back or release the savepoint, and drop every TEMP
-     object before advancing.
-8. Cover actual document IDs exactly with half-open signed-ID intervals. The
-   first interval includes the actual prefix through its last canonical ID;
-   later intervals cover `(previousLastId,lastCanonicalId]`; after the final
-   interval, the actual docsize and vocabulary tail must be empty. This detects
-   extra actual documents before the first canonical row, between sparse
-   canonical IDs, and after the last row. An empty canonical table requires an
-   empty actual projection.
-9. Derive each interval's actual and expected term summaries from the
-   `instance` vocabulary restricted by that interval's document bounds, grouped
-   by term with exact distinct-document and instance counts. The `doc` column of
-   the current `fts5vocab(...,'row')` table is a document count, not a document
-   ID; never filter or reuse whole-library row-vocabulary summaries as if it
-   were an interval coordinate.
-10. The feasibility gate in slice 1 must already have shown that this exact
-    document-bounded access shape does not multiply whole-vocabulary work.
-    Bounded memory alone is not sufficient justification for accidental
-    superlinear CPU.
-11. Preserve primary-error precedence. Load, comparison, iterator, or cleanup
-    failure makes semantic health false; cleanup noise must not replace the
-    original failure. Repeated calls and calls inside the current immutable
-    snapshot must leave no TEMP or persistent artifact.
+The generated production-writer measurement is recorded in
+[`docs/research/doctor-document-interval-feasibility.md`](../../docs/research/doctor-document-interval-feasibility.md).
+Document-bounded actual-vocabulary queries retained the same virtual-table plan
+shape as unbounded queries. On the large cohort, the proposed 512-row/16-MiB
+admission rule produced 41 intervals, made total work 3.80 times slower, and
+made grouped term-summary work 6.82 times slower. The actual-vocabulary probe's
+peak RSS ratio was 0.96; it deliberately does not measure the expected-side
+projection whose memory the full design intended to bound.
 
-### 3. Stream term ranges and partition an oversized term
+Human review accepted the recommendation on 2026-07-23. Sections 2–3 are retired
+and must not be implemented. Production doctor behavior remains unchanged;
+successor investigation is owned by
+[the single-pass FTS feasibility plan](260723-doctor-single-pass-fts-feasibility.md).
 
-1. Replace
-   `src/infrastructure/sqlite/fts-projection.ts:matchingDoctorTermRanges` and
-   the retained `DoctorTermRange[]` with immediate, streaming comparisons.
-   Walk actual and expected term summaries in UTF-8 binary order. Require exact
-   term, document-count, and instance-count equality before comparing
-   positions.
-2. Accumulate complete ordinary terms only until either side reaches the
-   existing 1,000,000-instance target, compare that range in both directions,
-   then discard its bounds. Never sample terms, documents, or positions and
-   never replace exact instance equality with aggregate counts or hashes.
-3. When one term exceeds the target, partition its exact ordered coordinate
-   space `(doc,col,offset)`. Build each half-open upper boundary with bounded
-   lookahead from both actual and expected vocabularies and choose the earlier
-   target-th coordinate, so neither side can place more than the target in one
-   comparison. Compare actual-only and expected-only rows before advancing.
-4. Cover the first coordinate, signed 64-bit document IDs, boundaries that fall
-   on different sides, and the final tail. Equal total counts are not proof:
-   shifted documents, columns, or offsets must still fail.
-5. Extend `test/infrastructure/sqlite-fts-projection.test.ts` with:
-   - healthy equality across row/byte intervals, sparse IDs, zero-token rows,
-     multibyte terms, and one oversized canonical value;
-   - missing, extra, and malformed docsize in the first, middle, and final
-     interval;
-   - extra actual documents before, between, and after canonical IDs;
-   - wrong terms with equal token counts, changed positions, cross-document
-     swaps, and unequal counts under the same term universe;
-   - a healthy oversized term spanning several coordinate ranges;
-   - actual-only, expected-only, shifted-document, and shifted-offset damage on
-     both sides of boundaries;
-   - an adversarial distribution that would exceed the target if boundaries
-     came from only one side;
-   - invalid private limits, load/comparison/observer/drop failures, outer
-     transaction composition, and repeated invocation.
-6. Extend `test/infrastructure/sqlite-index-health.test.ts` to require the same
-   public `ReadyIndexHealth` decisions for healthy, docsize-damaged, and
-   semantic-damaged libraries. Extend `test/doctor-no-persistence.test.ts` with
-   a worker stopped after its first interval; the parent must see unchanged
-   main-file identity/stat, no WAL/SHM, and no persistent TEMP artifact.
-7. Reconcile the current-behavior descriptions in
-   `docs/reference/cli-contract.md`, `docs/privacy.md`,
-   `docs/contributing/storage.md`, `docs/contributing/architecture.md`,
-   `docs/contributing/testing.md`, and `docs/architecture-memo.md`. Describe
-   exact interval coverage, the one-oversized-content exception, coordinate
-   partitioning, and the memory-only TEMP rule. Do not make the private work
-   observer part of the public CLI contract.
+### 2–3. Retired: document-ID interval verification
+
+The accepted slice-1 decision rejects this design because document-bounded
+actual-vocabulary scans multiply dominant work by interval count. The dependent
+term-range proposal is not authorized independently in this program. Preserve
+the current exact audit. Any reusable technique must be re-established through
+the successor plan rather than copied from these retired sections.
 
 ### 4. Page only orphan repair candidates
 
@@ -287,12 +199,10 @@ ordinary retained library.
 
 ## Verify
 
-- For the feasibility delivery, run the script-contract tests and
-  `pnpm measure:doctor`; require exact generated query equality, immutable
-  persistent state, and cleanup, then stop for explicit acceptance.
-- For bounded doctor after that acceptance, run the focused FTS projection,
-  index health, no-persistence, immutable snapshot, and measurement-contract
-  tests, then `pnpm measure:doctor`.
+- The completed feasibility delivery requires the script-contract tests and
+  `pnpm measure:doctor`, with exact generated query equality, immutable
+  persistent state, cleanup, and the accepted decision recorded in the
+  feasibility report.
 - For orphan paging, run the repair-orphans, writer-coordination, FTS repair,
   clean-proof, and lifecycle tests.
 - Require exact semantic/corruption parity, bounded work counters,
@@ -313,6 +223,5 @@ ordinary retained library.
 - Do not certify repair, forget, clear, failed compact, or crashed compact.
 - Do not claim secure erasure, partial-page repacking, or file shrink beyond
   observed whole-page reclamation.
-- Stop and redesign bounded doctor if interval cleanup cannot remain
-  memory-only, exact coverage weakens, or actual-vocabulary work becomes
-  superlinear in interval count.
+- Do not revive sections 2–3 without new measured evidence and an explicitly
+  accepted successor design.

@@ -48,6 +48,7 @@
     "lint:fix": "oxlint -c .oxlintrc.json --fix src scripts test vitest.config.ts",
     "measure:cli-startup": "node scripts/measure-cli-startup.ts",
     "measure:content-storage": "node scripts/measure-content-storage.ts",
+    "measure:doctor": "node scripts/measure-doctor.ts",
     "measure:entry-query": "node scripts/measure-entry-query.ts",
     "measure:indexing": "node scripts/measure-indexing.ts",
     "measure:indexing:codex": "node scripts/measure-codex-indexing.ts",
