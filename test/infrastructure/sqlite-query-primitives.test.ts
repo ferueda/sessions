@@ -7,6 +7,7 @@ import { truncateUtf8Around } from "../../src/infrastructure/sqlite/sqlite-query
 import { applyMigrations } from "../../src/infrastructure/sqlite/migrations.ts";
 import {
   decodeQueryCursor,
+  encodeAnchoredQueryCursor,
   encodeQueryCursor,
   fingerprintQuery,
   readQueryRevision,
@@ -95,6 +96,92 @@ describe("SQLite query primitives", () => {
     }
   });
 
+  test("encodes bounded numeric anchors for list and entry continuation", () => {
+    const database = migratedDatabase();
+    try {
+      const revision = readQueryRevision(database);
+      const fingerprint = fingerprintQuery('{"limit":200}');
+      const listCursor = encodeAnchoredQueryCursor({
+        command: "list",
+        fingerprint,
+        revision,
+        offset: 200,
+        anchor: { kind: "list", sessionId: 9 },
+      });
+      const entriesCursor = encodeAnchoredQueryCursor({
+        command: "entries",
+        fingerprint,
+        revision,
+        offset: 400,
+        anchor: { kind: "entries", sessionId: 12, entryOrdinal: 34 },
+      });
+
+      expect(decodeQueryCursor(listCursor, { command: "list", fingerprint, revision })).toEqual({
+        ok: true,
+        offset: 200,
+        anchor: { kind: "list", sessionId: 9 },
+      });
+      expect(
+        decodeQueryCursor(entriesCursor, { command: "entries", fingerprint, revision }),
+      ).toEqual({
+        ok: true,
+        offset: 400,
+        anchor: { kind: "entries", sessionId: 12, entryOrdinal: 34 },
+      });
+      expect(decodeQueryCursor(listCursor, { command: "entries", fingerprint, revision })).toEqual({
+        ok: false,
+        reason: "mismatch",
+      });
+
+      expect(JSON.parse(Buffer.from(listCursor, "base64url").toString("utf8"))).toEqual({
+        v: 2,
+        c: "list",
+        q: fingerprint,
+        l: revision.libraryInstanceId,
+        g: revision.writerGeneration,
+        o: 200,
+        s: 9,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test("rejects non-allowlisted anchored commands and anchor kinds at encoding", () => {
+    const database = migratedDatabase();
+    try {
+      const common = {
+        fingerprint: fingerprintQuery("{}"),
+        revision: readQueryRevision(database),
+        offset: 1,
+      };
+
+      expect(() =>
+        encodeAnchoredQueryCursor({
+          ...common,
+          command: "search",
+          anchor: { kind: "search", sessionId: 1 },
+        } as never),
+      ).toThrow("Invalid anchored query command");
+      expect(() =>
+        encodeAnchoredQueryCursor({
+          ...common,
+          command: "list",
+          anchor: { kind: "search", sessionId: 1 },
+        } as never),
+      ).toThrow("Invalid query cursor anchor kind");
+      expect(() =>
+        encodeAnchoredQueryCursor({
+          ...common,
+          command: "list",
+          anchor: { kind: "entries", sessionId: 1, entryOrdinal: 0 },
+        } as never),
+      ).toThrow("Query cursor anchor does not match command");
+    } finally {
+      database.close();
+    }
+  });
+
   test("rejects malformed and non-canonical cursor payloads", () => {
     const database = migratedDatabase();
     try {
@@ -111,6 +198,51 @@ describe("SQLite query primitives", () => {
         ok: false,
         reason: "invalid",
       });
+      for (const payload of [
+        {
+          v: 2,
+          c: "list",
+          q: expected.fingerprint,
+          l: expected.revision.libraryInstanceId,
+          g: expected.revision.writerGeneration,
+          o: 20,
+        },
+        {
+          v: 2,
+          c: "search",
+          q: expected.fingerprint,
+          l: expected.revision.libraryInstanceId,
+          g: expected.revision.writerGeneration,
+          o: 20,
+          s: 1,
+        },
+        {
+          v: 2,
+          c: "list",
+          q: expected.fingerprint,
+          l: expected.revision.libraryInstanceId,
+          g: expected.revision.writerGeneration,
+          o: 20,
+          s: -1,
+        },
+        {
+          v: 2,
+          c: "list",
+          q: expected.fingerprint,
+          l: expected.revision.libraryInstanceId,
+          g: expected.revision.writerGeneration,
+          o: 20,
+          s: 1,
+          extra: true,
+        },
+      ]) {
+        expect(
+          decodeQueryCursor(
+            Buffer.from(JSON.stringify(payload), "utf8").toString("base64url"),
+            expected,
+          ),
+        ).toEqual({ ok: false, reason: "invalid" });
+      }
     } finally {
       database.close();
     }

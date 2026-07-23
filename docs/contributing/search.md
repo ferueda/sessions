@@ -14,9 +14,12 @@ The public behavior is defined by the [CLI contract](../reference/cli-contract.m
 4. SQLite ranks each entry by its best FTS5 BM25 score. Ties use session activity,
    source identity, and entry ordinal in a fixed order. The query keeps one extra
    rank row only to decide whether a next page exists.
-5. After selecting the page, SQLite loads full text, its digest, and the FTS
-   snippet only for selected content IDs. `any` mode probes each selected entry
-   for its exact matched terms; `all` reuses the unique query terms.
+5. After selecting the page, one page-bounded SQLite statement loads full text,
+   its digest, and the FTS snippet for the distinct selected content IDs. Snippet
+   marker collisions retry that whole selected page deterministically. `any`
+   mode probes each selected entry for its exact matched terms; `all` reuses the
+   unique query terms. Distinct selected sessions load their retained summaries
+   in one identity-checked batch of at most 200 requests.
 6. The same immutable snapshot supplies one page-level capture scope from
    registered sources and tracking state. Source/tracking filters can narrow that
    aggregate; canonical metadata, entry, and search-text filters are named as
@@ -25,7 +28,9 @@ The public behavior is defined by the [CLI contract](../reference/cli-contract.m
    `unknown`.
 8. Search verifies each selected content hash, bounds snippets and context to 512
    UTF-8 bytes, and adds requested neighboring entries plus direct tool-call and
-   tool-result links.
+   tool-result links. One page-level query discovers direct links, then selected
+   physical context coordinates are deduplicated and hydrated in fixed-size
+   chunks before each hit's flags and order are rebuilt.
 9. Support is calculated over the complete filtered retained result, before page slicing:
    matching occurrences, distinct content, known roots, and sessions with unknown
    lineage.
@@ -57,9 +62,23 @@ and lineage counts still inspect the full qualifying result, so broad searches c
 still take longer on large libraries. The design favors exact evidence over
 approximate counts or ranking.
 
+Selected-content, summary, and linked-context query counts are page-bounded
+instead of growing once per hit. Context body hydration grows with fixed-size
+chunks of distinct selected physical entries, so overlapping hit neighborhoods
+share the same read. These batching steps do not change ranking or query-wide
+support work.
+
+The exact query-wide support, identity, and rank passes intentionally remain
+separate. A generated `MATERIALIZED` one-pass prototype proved one qualifying FTS
+scan and exact result parity, but was about 15% slower across broad profiles
+instead of meeting the 20% improvement gate. Its selective regression and peak
+memory stayed within bounds, so performance—not correctness—closed that
+candidate and no prototype runtime path is retained.
+
 `any` mode adds at most one candidate-local FTS probe per unique term for the
 selected page. Activity bounds reuse canonical timestamps and add no storage
-index. The repeatable measurement covers both term modes; elapsed time remains
+index. The repeatable measurement covers small and maximum-size pages, with and
+without neighboring context, in both term modes; elapsed time remains
 report-only.
 
 ## Retrieve an exact span

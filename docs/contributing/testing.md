@@ -252,6 +252,34 @@ set-based query shape from N+1 drift. It constructs no provider adapter, prints
 only aggregate counts and timings, has no timed threshold, and stays outside
 `pnpm check`.
 
+`pnpm measure:query-planner-statistics` is an opt-in, provider-free experiment
+for SQLite planner statistics. It builds one skewed generic library, closes it,
+then makes byte-exact control, `ANALYZE`, and forced `PRAGMA optimize` clones.
+Only the two experiment clones receive statistics mutations. The command
+compares normalized representative plans and alternating warm elapsed
+aggregates for broad and narrow entries, identity and activity list filters,
+broad and selective `all`/`any` search, and manifest. Production query results
+must remain exactly equal across all clones. The report also includes
+statistics-table row counts, statistics payload bytes, mutation time, database
+growth, clone verification, and final temporary-root cleanup. The experiment
+has no elapsed threshold and does not define or invoke a runtime refresh policy.
+The full corpus stays outside `pnpm check`; a small `-- --contract` run in the
+test suite checks mutation isolation, semantic equality, report shape, and
+cleanup. Current generated evidence leaves runtime statistics disabled: entry
+plans stayed unchanged while several narrow, list, and search profiles regressed.
+Any future policy proposal must rerun this experiment against the then-current
+queries and separately design certified writer mutation and refresh semantics.
+
+`pnpm measure:cli-startup` is the compiled, provider-free startup measure. Run
+`pnpm build` first. It rotates bare Node, version, top-level help, command help,
+and one uninitialized local read across warm-up and measured rounds using only a
+mode-0700 temporary data root. It checks exact success/output shapes, reports
+median and p95 elapsed aggregates plus overhead against bare Node, and removes
+the temporary root before emitting its report. Lazy CLI composition is a
+candidate only when version, top help, and command help each cost at least 25 ms
+over bare Node and at least 2× bare Node. These are implementation decision
+thresholds, not CI performance budgets; the command stays outside `pnpm check`.
+
 `pnpm measure:indexing:codex -- --allow-provider-read` is the Codex local
 provider-read measurement. It is macOS/Linux-only and fails before provider
 resolution elsewhere. It uses the production Codex adapter, exhausts its full

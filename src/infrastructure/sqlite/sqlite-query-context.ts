@@ -10,35 +10,73 @@ import type { Actor } from "../../domain/session.ts";
 import { SqliteSessionIndexError } from "./sqlite-session-transaction.ts";
 
 const ACTORS = new Set<Actor>(["human", "model", "tool", "system", "unknown"]);
+// Three parameters per coordinate keeps a chunk below SQLite's common 999-variable limit.
+export const SQLITE_SEARCH_CONTEXT_COORDINATE_CHUNK_SIZE = 200;
+// At most twenty adjacent entries can precede the twenty-one extras needed
+// to prove linked-context truncation.
+const LINKED_CANDIDATE_LIMIT = MAX_SESSION_SEARCH_LINKED_CONTEXT * 2 + 1;
 
 export interface SqliteSearchContext {
   readonly entries: readonly SessionSearchContextEntry[];
   readonly linkedContextTruncated: boolean;
 }
 
-export function readSearchContext(
+export interface SqliteSearchContextCoordinate {
+  readonly sessionId: number;
+  readonly entryOrdinal: number;
+}
+
+export function readSearchContexts(
   database: DatabaseSync,
-  sessionId: number,
-  primaryOrdinal: number,
+  primaries: readonly SqliteSearchContextCoordinate[],
   adjacentLimit: number,
-): SqliteSearchContext {
-  const adjacent = adjacentOrdinals(primaryOrdinal, adjacentLimit);
-  const linked = readLinkedOrdinals(database, sessionId, primaryOrdinal);
-  const linkedAdditions = linked.filter((ordinal) => !adjacent.has(ordinal));
-  const selectedLinked = linkedAdditions.slice(0, MAX_SESSION_SEARCH_LINKED_CONTEXT);
-  const selected = new Set([...adjacent, ...selectedLinked]);
-  if (selected.size === 0) {
-    return Object.freeze({
-      entries: Object.freeze([]),
-      linkedContextTruncated: linkedAdditions.length > MAX_SESSION_SEARCH_LINKED_CONTEXT,
-    });
+): readonly SqliteSearchContext[] {
+  if (primaries.length === 0) return Object.freeze([]);
+  const uniquePrimaries = new Set(primaries.map(coordinateKey));
+  if (uniquePrimaries.size !== primaries.length) {
+    throw new SqliteSessionIndexError("corrupt-data");
   }
-  const linkedSet = new Set(linked);
-  const entries = readContextEntries(database, sessionId, selected, adjacent, linkedSet);
-  return Object.freeze({
-    entries: Object.freeze(entries),
-    linkedContextTruncated: linkedAdditions.length > MAX_SESSION_SEARCH_LINKED_CONTEXT,
+  const linkedByPrimary = readLinkedOrdinals(database, primaries);
+  const plans = primaries.map((primary, primaryIndex) => {
+    const adjacent = adjacentOrdinals(primary.entryOrdinal, adjacentLimit);
+    const linked = linkedByPrimary[primaryIndex];
+    if (linked === undefined) throw new SqliteSessionIndexError("corrupt-data");
+    const linkedAdditions = linked.filter((ordinal) => !adjacent.has(ordinal));
+    return {
+      primary,
+      adjacent,
+      linked: new Set(linked),
+      selected: new Set([
+        ...adjacent,
+        ...linkedAdditions.slice(0, MAX_SESSION_SEARCH_LINKED_CONTEXT),
+      ]),
+      linkedContextTruncated: linkedAdditions.length > MAX_SESSION_SEARCH_LINKED_CONTEXT,
+    };
   });
+  const hydrated = readContextEntries(database, selectedContextCoordinates(plans));
+  return Object.freeze(
+    plans.map((plan) =>
+      Object.freeze({
+        entries: Object.freeze(
+          [...plan.selected]
+            .toSorted((left, right) => left - right)
+            .flatMap((ordinal) => {
+              const entry = hydrated.get(coordinateKeyOf(plan.primary.sessionId, ordinal));
+              return entry === undefined
+                ? []
+                : [
+                    Object.freeze({
+                      ...entry,
+                      adjacent: plan.adjacent.has(ordinal),
+                      linked: plan.linked.has(ordinal),
+                    }),
+                  ];
+            }),
+        ),
+        linkedContextTruncated: plan.linkedContextTruncated,
+      }),
+    ),
+  );
 }
 
 export function truncateUtf8(
@@ -112,96 +150,197 @@ function adjacentOrdinals(primaryOrdinal: number, limit: number): Set<number> {
 
 function readLinkedOrdinals(
   database: DatabaseSync,
-  sessionId: number,
-  primaryOrdinal: number,
-): readonly number[] {
+  primaries: readonly SqliteSearchContextCoordinate[],
+): readonly (readonly number[])[] {
+  const selected = selectedPrimaryCte(primaries);
   const rows = database
     .prepare(
-      `SELECT candidate.ordinal
-       FROM sessions_entries AS primary_entry
-       JOIN sessions_entries AS candidate
-         ON candidate.session_id = primary_entry.session_id
-        AND candidate.ordinal <> primary_entry.ordinal
-       WHERE primary_entry.session_id = ?
-         AND primary_entry.ordinal = ?
-         AND (
+      `${selected.sql},
+       ranked_links AS (
+         SELECT selected.primary_index,
+                selected.session_id,
+                selected.primary_ordinal,
+                candidate.ordinal AS candidate_ordinal,
+                ROW_NUMBER() OVER (
+                  PARTITION BY selected.primary_index
+                  ORDER BY candidate.ordinal
+                ) AS candidate_rank
+         FROM selected_primaries AS selected
+         JOIN sessions_entries AS primary_entry
+           ON primary_entry.session_id = selected.session_id
+          AND primary_entry.ordinal = selected.primary_ordinal
+         JOIN sessions_entries AS candidate
+           ON candidate.session_id = primary_entry.session_id
+          AND candidate.ordinal <> primary_entry.ordinal
+         WHERE (
            primary_entry.related_entry_ordinal = candidate.ordinal
            OR candidate.related_entry_ordinal = primary_entry.ordinal
          )
-         AND (
-           (primary_entry.kind = 'tool-call' AND candidate.kind = 'tool-result')
-           OR
-           (primary_entry.kind = 'tool-result' AND candidate.kind = 'tool-call')
-         )
-       ORDER BY candidate.ordinal
-       LIMIT ?`,
+           AND (
+             (primary_entry.kind = 'tool-call' AND candidate.kind = 'tool-result')
+             OR
+             (primary_entry.kind = 'tool-result' AND candidate.kind = 'tool-call')
+           )
+       )
+       SELECT primary_index, session_id, primary_ordinal, candidate_ordinal
+       FROM ranked_links
+       WHERE candidate_rank <= ?
+       ORDER BY primary_index, candidate_ordinal`,
     )
-    // At most twenty adjacent entries can precede the twenty-one extras needed
-    // to prove linked-context truncation.
-    .all(
-      sessionId,
-      primaryOrdinal,
-      MAX_SESSION_SEARCH_LINKED_CONTEXT * 2 + 1,
-    ) as unknown as readonly {
-    readonly ordinal: unknown;
-  }[];
-  return rows.map((row) => integerAt(row.ordinal));
+    .all(...selected.parameters, LINKED_CANDIDATE_LIMIT) as unknown as readonly LinkedRow[];
+  const result = primaries.map(() => [] as number[]);
+  for (const row of rows) {
+    const primaryIndex = integerAt(row.primary_index);
+    const primary = primaries[primaryIndex];
+    const linked = result[primaryIndex];
+    if (
+      primary === undefined ||
+      linked === undefined ||
+      integerAt(row.session_id) !== primary.sessionId ||
+      integerAt(row.primary_ordinal) !== primary.entryOrdinal
+    ) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    const ordinal = integerAt(row.candidate_ordinal);
+    const previous = linked.at(-1);
+    if (previous !== undefined && ordinal <= previous) {
+      throw new SqliteSessionIndexError("corrupt-data");
+    }
+    linked.push(ordinal);
+  }
+  return result;
 }
 
 function readContextEntries(
   database: DatabaseSync,
-  sessionId: number,
-  selected: ReadonlySet<number>,
-  adjacent: ReadonlySet<number>,
-  linked: ReadonlySet<number>,
-): readonly SessionSearchContextEntry[] {
-  const ordinals = [...selected].toSorted((left, right) => left - right);
-  const placeholders = ordinals.map(() => "?").join(", ");
-  const rows = database
-    .prepare(
-      `SELECT entry.ordinal,
-              entry.kind,
-              entry.actor,
-              entry.timestamp,
-              entry.related_entry_ordinal,
-              entry.tool_call_id,
-              entry.tool_name,
-              entry.tool_namespace,
-              occurrence.segment_ordinal,
-              content.text
-       FROM sessions_entries AS entry
-       LEFT JOIN sessions_content_occurrences AS occurrence
-         ON occurrence.session_id = entry.session_id
-        AND occurrence.entry_ordinal = entry.ordinal
-       LEFT JOIN sessions_content_values AS content
-         ON content.content_id = occurrence.content_id
-       WHERE entry.session_id = ?
-         AND entry.ordinal IN (${placeholders})
-       ORDER BY entry.ordinal, occurrence.segment_ordinal`,
-    )
-    .all(sessionId, ...ordinals) as unknown as readonly ContextRow[];
-  const grouped = new Map<number, { entry: SessionSearchEntry; body: string[] }>();
-  for (const row of rows) {
-    const ordinal = integerAt(row.ordinal);
-    const current = grouped.get(ordinal) ?? { entry: entryAt(row), body: [] };
-    if (row.text !== null) {
-      if (typeof row.text !== "string" || !row.text.isWellFormed()) {
+  coordinates: readonly SqliteSearchContextCoordinate[],
+): ReadonlyMap<string, ContextEntryBody> {
+  const result = new Map<string, ContextEntryBody>();
+  for (
+    let start = 0;
+    start < coordinates.length;
+    start += SQLITE_SEARCH_CONTEXT_COORDINATE_CHUNK_SIZE
+  ) {
+    const chunk = coordinates.slice(start, start + SQLITE_SEARCH_CONTEXT_COORDINATE_CHUNK_SIZE);
+    const selected = selectedContextCte(chunk);
+    const rows = database
+      .prepare(
+        `${selected.sql}
+         SELECT selected.coordinate_index,
+                selected.session_id AS selected_session_id,
+                selected.entry_ordinal AS selected_entry_ordinal,
+                entry.ordinal,
+                entry.kind,
+                entry.actor,
+                entry.timestamp,
+                entry.related_entry_ordinal,
+                entry.tool_call_id,
+                entry.tool_name,
+                entry.tool_namespace,
+                occurrence.segment_ordinal,
+                content.text
+         FROM selected_context AS selected
+         JOIN sessions_entries AS entry
+           ON entry.session_id = selected.session_id
+          AND entry.ordinal = selected.entry_ordinal
+         LEFT JOIN sessions_content_occurrences AS occurrence
+           ON occurrence.session_id = entry.session_id
+          AND occurrence.entry_ordinal = entry.ordinal
+         LEFT JOIN sessions_content_values AS content
+           ON content.content_id = occurrence.content_id
+         ORDER BY selected.coordinate_index, occurrence.segment_ordinal`,
+      )
+      .all(...selected.parameters) as unknown as readonly ContextRow[];
+    const grouped = new Map<number, { entry: SessionSearchEntry; body: string[] }>();
+    for (const row of rows) {
+      const coordinateIndex = integerAt(row.coordinate_index);
+      const coordinate = chunk[coordinateIndex];
+      if (
+        coordinate === undefined ||
+        integerAt(row.selected_session_id) !== coordinate.sessionId ||
+        integerAt(row.selected_entry_ordinal) !== coordinate.entryOrdinal ||
+        integerAt(row.ordinal) !== coordinate.entryOrdinal
+      ) {
         throw new SqliteSessionIndexError("corrupt-data");
       }
-      current.body.push(row.text);
+      const current = grouped.get(coordinateIndex) ?? { entry: entryAt(row), body: [] };
+      if (row.text !== null) {
+        if (typeof row.text !== "string" || !row.text.isWellFormed()) {
+          throw new SqliteSessionIndexError("corrupt-data");
+        }
+        current.body.push(row.text);
+      }
+      grouped.set(coordinateIndex, current);
     }
-    grouped.set(ordinal, current);
+    for (const [coordinateIndex, value] of grouped) {
+      const coordinate = chunk[coordinateIndex];
+      if (coordinate === undefined) throw new SqliteSessionIndexError("corrupt-data");
+      const body = truncateUtf8(value.body.join("\n"));
+      const key = coordinateKey(coordinate);
+      if (result.has(key)) throw new SqliteSessionIndexError("corrupt-data");
+      result.set(
+        key,
+        Object.freeze({
+          ...value.entry,
+          body: body.text,
+          bodyTruncated: body.truncated,
+        }),
+      );
+    }
   }
-  return [...grouped.entries()].map(([ordinal, value]) => {
-    const body = truncateUtf8(value.body.join("\n"));
-    return Object.freeze({
-      ...value.entry,
-      body: body.text,
-      bodyTruncated: body.truncated,
-      adjacent: adjacent.has(ordinal),
-      linked: linked.has(ordinal),
-    });
-  });
+  return result;
+}
+
+function selectedContextCoordinates(
+  plans: readonly {
+    readonly primary: SqliteSearchContextCoordinate;
+    readonly selected: ReadonlySet<number>;
+  }[],
+): readonly SqliteSearchContextCoordinate[] {
+  const byKey = new Map<string, SqliteSearchContextCoordinate>();
+  for (const plan of plans) {
+    for (const entryOrdinal of plan.selected) {
+      const coordinate = { sessionId: plan.primary.sessionId, entryOrdinal };
+      byKey.set(coordinateKey(coordinate), coordinate);
+    }
+  }
+  return [...byKey.values()].toSorted(
+    (left, right) => left.sessionId - right.sessionId || left.entryOrdinal - right.entryOrdinal,
+  );
+}
+
+function selectedPrimaryCte(primaries: readonly SqliteSearchContextCoordinate[]): SelectedCte {
+  return {
+    sql: `WITH selected_primaries(primary_index, session_id, primary_ordinal) AS (
+      VALUES ${primaries.map(() => "(?, ?, ?)").join(", ")}
+    )`,
+    parameters: primaries.flatMap((primary, primaryIndex) => [
+      primaryIndex,
+      primary.sessionId,
+      primary.entryOrdinal,
+    ]),
+  };
+}
+
+function selectedContextCte(coordinates: readonly SqliteSearchContextCoordinate[]): SelectedCte {
+  return {
+    sql: `WITH selected_context(coordinate_index, session_id, entry_ordinal) AS (
+      VALUES ${coordinates.map(() => "(?, ?, ?)").join(", ")}
+    )`,
+    parameters: coordinates.flatMap((coordinate, coordinateIndex) => [
+      coordinateIndex,
+      coordinate.sessionId,
+      coordinate.entryOrdinal,
+    ]),
+  };
+}
+
+function coordinateKey(coordinate: SqliteSearchContextCoordinate): string {
+  return coordinateKeyOf(coordinate.sessionId, coordinate.entryOrdinal);
+}
+
+function coordinateKeyOf(sessionId: number, entryOrdinal: number): string {
+  return `${String(sessionId)}:${String(entryOrdinal)}`;
 }
 
 export function entryAt(row: EntryRow): SessionSearchEntry {
@@ -276,6 +415,23 @@ interface EntryRow {
 }
 
 interface ContextRow extends EntryRow {
+  readonly coordinate_index: unknown;
+  readonly selected_session_id: unknown;
+  readonly selected_entry_ordinal: unknown;
   readonly segment_ordinal: unknown;
   readonly text: unknown;
+}
+
+interface LinkedRow {
+  readonly primary_index: unknown;
+  readonly session_id: unknown;
+  readonly primary_ordinal: unknown;
+  readonly candidate_ordinal: unknown;
+}
+
+type ContextEntryBody = Omit<SessionSearchContextEntry, "adjacent" | "linked">;
+
+interface SelectedCte {
+  readonly sql: string;
+  readonly parameters: readonly number[];
 }

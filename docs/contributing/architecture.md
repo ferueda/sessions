@@ -53,13 +53,15 @@ forget / data repair-orphans / data compact / data clear
   -> src/infrastructure/sqlite/index-maintenance.ts
 ```
 
-The composition root is the only production module that imports both a concrete
-adapter and infrastructure. It resolves Cursor and Codex lazily: help, version,
-list, search, entries, manifest, show, export, forget, data repair-orphans, data
-compact, and data clear do not resolve provider configuration.
-Index, paths, and doctor resolve registered sources. Implicit indexing skips
-only valid unavailable sources; explicit selection and all other probe failures
-remain strict.
+The composition root is the only production module that selects both concrete
+adapters and infrastructure. CLI grammar stays static, while providers,
+lifecycle, maintenance, diagnostics, indexing, and command services load through
+memoized callback-local imports. Help and version therefore load none of those
+capabilities. List, search, entries, manifest, show, export, forget, data
+repair-orphans, data compact, and data clear load their provider-free services
+without resolving provider configuration. Index, paths, and doctor resolve
+registered sources. Implicit indexing skips only valid unavailable sources;
+explicit selection and all other probe failures remain strict.
 
 ## Ownership
 
@@ -308,7 +310,11 @@ FTS damage. List/search/manifest read the stored digest directly and do not
 reconstruct every document. None resolve or
 reopen a provider, so retained content remains usable after provider disappearance.
 The guard changes neither the SQLite schema nor physical read cost.
-Query cursors bind the query plus library identity/writer generation. An explicit
+Query cursors bind the query plus library identity/writer generation. List and
+entry continuations use v2 provider-neutral numeric anchors for indexed keyset
+continuation while retaining the cumulative offset and accepting existing v1
+offset tokens; search remains on the compatible v1 offset format. No cursor
+contains a raw provider identity. An explicit
 leased index writer can rebuild FTS-only damage from canonical content. Doctor
 stays read-only and reports canonical integrity, content reachability,
 projection health, and the global capture aggregate separately. Canonical health
@@ -370,10 +376,15 @@ fallback, bounded context assembly, query-wide counts, and cursor encoding.
 The shared capture-scope reader uses registered-source and tracking columns only,
 reports applicable source coverage even for a no-hit page, and names canonical
 metadata, entry, and text filters it cannot assess for unindexed sessions.
-Search ranks compact coordinates first, keeps the extra rank-only row used for
-pagination, and hydrates text, digest, and snippets only for the selected page.
+List, search, and entries carry compact canonical session IDs through page
+selection and hydrate the selected retained summaries in one bounded,
+identity-checked batch. Search ranks compact coordinates first, keeps the extra
+rank-only row used for pagination, and hydrates text, digest, and snippets in one
+selected-page statement. Context link discovery is page-wide; physical context
+coordinates are deduplicated and their bodies are read in fixed-size chunks.
 Snippet markers are checked against those selected canonical texts and retried
-on collision, so search does not scan or hydrate the rest of the library.
+for the complete selected page on collision, so search does not scan or hydrate
+unselected text.
 `any` mode derives exact per-hit terms with candidate-local probes after page
 selection. One query-scoped root resolver serves support plus list/search/entries
 attribution. Support remains exact and query-wide rather than being inferred from the page.

@@ -1155,13 +1155,102 @@ export function runSessionQueryContract(
     }
   });
 
+  test("keeps every entry filter and selection stable across page-size-one traversal", async () => {
+    const fixture = await createFixture();
+    const corpus = sessionQueryContractCorpus();
+    const present = corpus.present;
+    const observedAt = SESSION_QUERY_CONTRACT_TIMES.present;
+    const filterCases: readonly [
+      string,
+      Parameters<typeof createSessionEntryQuery>[0]["filter"],
+    ][] = [
+      ["source", { source: present.identity.source.kind }],
+      [
+        "instance",
+        {
+          source: present.identity.source.kind,
+          instance: present.identity.source.instanceId,
+        },
+      ],
+      [
+        "native ID",
+        {
+          source: present.identity.source.kind,
+          instance: present.identity.source.instanceId,
+          nativeId: present.identity.nativeId,
+        },
+      ],
+      ["source state", { sourceState: "present" }],
+      ["workspace", { workspace: "/workspace/Primary" }],
+      [
+        "activity",
+        {
+          activityAfter: "2026-07-14T09:29:59.999Z",
+          activityBefore: "2026-07-14T09:30:00.001Z",
+        },
+      ],
+      [
+        "capture",
+        {
+          capturedAfter: before(observedAt),
+          capturedBefore: after(observedAt),
+        },
+      ],
+      [
+        "observation",
+        {
+          observedAfter: before(observedAt),
+          observedBefore: after(observedAt),
+        },
+      ],
+      ["session", { session: present.identity }],
+      [
+        "entry time",
+        {
+          entryAfter: "2026-07-14T09:19:59.999Z",
+          entryBefore: "2026-07-14T09:50:00.001Z",
+        },
+      ],
+      ["actor", { actor: "model" }],
+      ["origin", { origin: "model" }],
+      ["entry kind", { entryKind: "entry-order" }],
+      ["tool name", { toolName: "read_file" }],
+      ["tool namespace", { toolNamespace: "filesystem" }],
+    ];
+
+    try {
+      for (const selection of ["all", "first", "last"] as const) {
+        for (const [label, filter] of filterCases) {
+          const canonical = await fixture.query.entries(
+            createSessionEntryQuery({
+              selection,
+              limit: 200,
+              ...(filter === undefined ? {} : { filter }),
+            }),
+          );
+          expect(canonical.entries.length, `${selection} ${label}`).toBeGreaterThan(0);
+          expect(await traverseEntries(fixture.query, filter, 1, selection)).toEqual(
+            canonical.entries.map(entryKey),
+          );
+        }
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("traverses list and default-sized search cursors without duplicates", async () => {
     const fixture = await createFixture();
     const corpus = sessionQueryContractCorpus();
     try {
       const listed = await traverseList(fixture.query, 5);
-      expect(listed).toHaveLength(corpus.documents.length);
+      const canonicalList = await fixture.query.list(createSessionListQuery({ limit: 200 }));
+      expect(listed).toEqual(canonicalList.sessions.map(({ identity }) => key(identity)));
       expect(new Set(listed).size).toBe(listed.length);
+
+      const pageSizeOne = await traverseList(fixture.query, 1);
+      expect(pageSizeOne).toEqual(canonicalList.sessions.map(({ identity }) => key(identity)));
+      expect(pageSizeOne).toHaveLength(corpus.documents.length);
 
       const firstList = await fixture.query.list(createSessionListQuery({ limit: 2 }));
       if (firstList.nextCursor === undefined) throw new Error("Expected list continuation");
@@ -1240,6 +1329,7 @@ async function traverseEntries(
   query: SessionQueryRepository,
   filter: Parameters<typeof createSessionEntryQuery>[0]["filter"],
   limit: number,
+  selection: NonNullable<Parameters<typeof createSessionEntryQuery>[0]["selection"]> = "all",
 ): Promise<string[]> {
   const found: string[] = [];
   let cursor: SessionQueryCursor | undefined;
@@ -1247,6 +1337,7 @@ async function traverseEntries(
     const page = await query.entries(
       createSessionEntryQuery({
         limit,
+        selection,
         ...(filter === undefined ? {} : { filter }),
         ...(cursor === undefined ? {} : { cursor }),
       }),
