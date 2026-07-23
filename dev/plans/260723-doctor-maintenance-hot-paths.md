@@ -19,17 +19,17 @@ tests reachability row by row, and executes a fenced zero-deletion batch for
 windows containing only referenced content. The desired query should page only
 orphan candidates while preserving the transaction-time reachability recheck.
 
-Carrying certified cleanliness through a successful compact is a possible third
-optimization, not accepted implementation. Compaction deliberately invalidates
-the previous clean proof today. It advances only if provider-free measurement
-shows that the next index's full validation is a material cost and a separate
-ADR proves that compaction can carry, but never manufacture, cleanliness.
+Carrying certified cleanliness through a successful compact is outside this
+plan. Compaction deliberately invalidates the previous clean proof today. Any
+investigation into carrying, but never manufacturing, cleanliness requires a
+separately accepted measurement plan and ADR.
 
 Doctor remains an immutable, exact whole-library audit. Repair remains
 uncertified maintenance. The program changes no provider behavior, query
 result, public command grammar, structured output, exit code, or retention
-policy. The first two delivery slices land as separate PRs. Compact
-certification, if its gate passes, receives a new plan and PR.
+policy. The feasibility measure, bounded doctor refactor, and orphan paging land
+as separate PRs. The feasibility result requires explicit acceptance before the
+bounded doctor refactor is authorized.
 
 ## Changes
 
@@ -53,13 +53,35 @@ certification, if its gate passes, receives a new plan and PR.
    elapsed/RSS measurements. Node's current SQLite API has no stable statement
    status or progress-handler seam, so do not promise VM-step or internal
    virtual-table traversal counters.
-4. Stop before the production refactor and documentation changes if the
-   interval query repeatedly scans the complete actual vocabulary or elapsed
-   work scales with corpus size multiplied by interval count. RSS and elapsed
-   scaling are evidence, not deterministic proof. Record a failed feasibility
-   result and preserve the current exact audit while a different bounded design
-   is prepared.
-5. If the feasibility gate passes, add a private best-effort work observer in
+4. Stop before the production refactor and current-behavior documentation
+   changes if the interval query repeatedly scans the complete actual vocabulary
+   or elapsed work scales with corpus size multiplied by interval count. RSS and
+   elapsed scaling are evidence, not deterministic proof. Still publish the
+   feasibility report and decision record, then preserve the current exact audit
+   while a different bounded design is prepared.
+5. This delivery ends after producing the feasibility report. It does not add a
+   production work observer or change production FTS validation. A human
+   reviewer must explicitly accept the recorded result before sections 2–3 are
+   authorized. Record that accepted or rejected decision in the architecture
+   memo or a successor plan; an executor cannot infer acceptance from elapsed
+   time alone.
+6. The script reports only generated corpus sizes, database bytes, interval
+   counts and bounds, normalized aggregate plan facts, phase durations,
+   child-process peak RSS, exact query equality, final health, and
+   main-file/sidecar equality. It uses mode-`0700` temporary roots, mode-`0600`
+   owned files, cleans on success and failure, and stays outside `pnpm check`.
+7. Add a script-contract test that rejects private fields, proves child and
+   temporary-file cleanup after a forced failure, and requires healthy exact
+   results. Elapsed time and RSS are report-only; semantic equality, immutable
+   persistent state, interval accounting, and complete cleanup are hard
+   assertions.
+
+### 2. Verify expected FTS content in bounded exact intervals
+
+1. Do not start this section until the slice-1 feasibility result is explicitly
+   accepted. If it is rejected, preserve the current exact audit and replace
+   this design through a new or materially revised plan.
+2. Add a private best-effort work observer in
    `src/infrastructure/sqlite/fts-projection.ts`, composed from
    `src/infrastructure/sqlite/sqlite-index-health.ts:inspectDatabaseHealth`.
    Keep it out of the application health port and public doctor result.
@@ -70,39 +92,27 @@ certification, if its gate passes, receives a new plan and PR.
    - term summaries and ordinary term ranges compared;
    - oversized terms and coordinate ranges compared;
    - actual/expected instances compared and maximum range size.
-6. Observer failure must not affect health, cleanup, stdout, or the exit code.
-   It must never receive text, terms, content IDs, hashes, identities, paths,
-   timestamps, SQL text/errors, or lease values.
-7. The script reports only generated corpus sizes, database bytes, normalized
-   aggregate plan facts, phase durations, child-process peak RSS, final health,
-   main-file/sidecar equality, and the allowlisted counters. It uses
-   mode-`0700` temporary roots, mode-`0600` owned files, cleans on success and
-   failure, and stays outside `pnpm check`.
-8. Add a script-contract test that rejects private fields, proves child and
-   temporary-file cleanup after a forced failure, and requires healthy exact
-   results. Elapsed time and RSS are report-only; semantic equality, immutable
-   persistent state, bounded interval counters, and complete cleanup are hard
-   assertions.
-
-### 2. Verify expected FTS content in bounded exact intervals
-
-1. Refactor
+3. Isolate and swallow observer callback failures. They must not affect semantic
+   health, cleanup, stdout, stderr, or the exit code, and the observer must never
+   receive text, terms, content IDs, hashes, identities, paths, timestamps, SQL
+   text/errors, or lease values.
+4. Refactor
    `src/infrastructure/sqlite/fts-projection.ts:ftsProjectionSemanticContentIsValidReadOnly`
    so it never retains one corpus-sized expected projection or a corpus-sized
    interval list. Keep `PRAGMA temp_store = MEMORY` and fail closed unless
    SQLite confirms memory-only TEMP storage.
-2. Replace `loadExpectedDoctorProjectionInsideSavepoint` with interval-local
+5. Replace `loadExpectedDoctorProjectionInsideSavepoint` with interval-local
    helpers such as `scanDoctorContentIntervals`,
    `loadDoctorExpectedInterval`, and `dropDoctorExpectedProjection`.
    Construct intervals by keyset-reading `content_id` and exact
    `length(CAST(text AS BLOB))`, then load the corresponding canonical
    `content_id,text` rows in signed-ID order.
-3. Use fixed private admission targets of at most 512 canonical rows and exactly
+6. Use fixed private admission targets of at most 512 canonical rows and exactly
    `16 * 1024 * 1024` UTF-8 bytes per expected interval. A single canonical
    value above the byte target is processed alone, counted as oversized, and
    never truncated, skipped, split into invented canonical rows, or spilled to
    disk.
-4. For each interval:
+7. For each interval:
    - create a fresh contentless TEMP FTS5 table plus only the vocab tables
      needed for that comparison;
    - preserve the original signed row IDs;
@@ -112,27 +122,27 @@ certification, if its gate passes, receives a new plan and PR.
    - compare exact term/document/column/offset instances in both directions;
    - close iterators, roll back or release the savepoint, and drop every TEMP
      object before advancing.
-5. Cover actual document IDs exactly with half-open signed-ID intervals. The
+8. Cover actual document IDs exactly with half-open signed-ID intervals. The
    first interval includes the actual prefix through its last canonical ID;
    later intervals cover `(previousLastId,lastCanonicalId]`; after the final
    interval, the actual docsize and vocabulary tail must be empty. This detects
    extra actual documents before the first canonical row, between sparse
    canonical IDs, and after the last row. An empty canonical table requires an
    empty actual projection.
-6. Derive each interval's actual and expected term summaries from the
+9. Derive each interval's actual and expected term summaries from the
    `instance` vocabulary restricted by that interval's document bounds, grouped
    by term with exact distinct-document and instance counts. The `doc` column of
    the current `fts5vocab(...,'row')` table is a document count, not a document
    ID; never filter or reuse whole-library row-vocabulary summaries as if it
    were an interval coordinate.
-7. The feasibility gate in slice 1 must already have shown that this exact
-   document-bounded access shape does not multiply whole-vocabulary work.
-   Bounded memory alone is not sufficient justification for accidental
-   superlinear CPU.
-8. Preserve primary-error precedence. Load, comparison, observer, iterator, or
-   cleanup failure makes semantic health false; cleanup noise must not replace
-   the original failure. Repeated calls and calls inside the current immutable
-   snapshot must leave no TEMP or persistent artifact.
+10. The feasibility gate in slice 1 must already have shown that this exact
+    document-bounded access shape does not multiply whole-vocabulary work.
+    Bounded memory alone is not sufficient justification for accidental
+    superlinear CPU.
+11. Preserve primary-error precedence. Load, comparison, iterator, or cleanup
+    failure makes semantic health false; cleanup noise must not replace the
+    original failure. Repeated calls and calls inside the current immutable
+    snapshot must leave no TEMP or persistent artifact.
 
 ### 3. Stream term ranges and partition an oversized term
 
@@ -242,42 +252,13 @@ certification, if its gate passes, receives a new plan and PR.
    pages orphan candidates. Public no-limit/no-cursor behavior, exact totals,
    restart semantics, and the post-repair doctor contract remain unchanged.
 
-### 5. Measure, then gate certified cleanliness through compact
+## Deferred candidate: certified cleanliness through compact
 
-1. Do not implement this slice with bounded doctor or orphan paging. First
-   extend `scripts/measure-indexing.ts` with equal clean control and compacted
-   clones. Create reusable pages through supported index mutations before the
-   clean writer closes, then clone only after `readWriterCleanProof` confirms a
-   valid stat-bound proof. Never mutate a clone directly after clean close.
-   Record compact duration, reclaimed pages/bytes, next writer-open mode,
-   full-validation phase calls/durations, and canonical/query/health equality.
-   Require the untouched control's next index to select `fast`, current compact
-   to make its clone select full validation, and both to retain equal canonical,
-   FTS, capture, and query state.
-2. Proceed only when accepted evidence shows post-compact full validation is a
-   material next-index cost and carrying an existing valid proof avoids that
-   work. If not, leave compact correctly uncertified and close the candidate.
-3. If the gate passes, create a new executor plan and
-   `docs/decisions/0012-preserve-certified-cleanliness-through-compaction.md`.
-   The ADR must narrow the claim:
-   - compact may carry forward an already valid clean proof but cannot create
-     cleanliness from an unproven library;
-   - only supported SQLite compaction and coordination mutations are covered;
-   - crash recovery remains uncertified and direct same-user SQLite edits
-     remain outside the threat boundary;
-   - doctor remains the explicit semantic audit.
-4. The later plan must consume the exact stat-, schema-, instance-, generation-,
-   lease-, and sidecar-bound proof before writer acquisition, publish a new
-   proof only after all compact batches, final checkpoint, exact-owner release,
-   close, hardening, and sidecar absence succeed, and make every uncertainty
-   fall back to full validation. It must not extend certified recovery receipts
-   to compact or accidentally certify `repair`, `forget`, `clear`, failure, or
-   crash.
-5. Required later tests include absent/malformed/stale proof, stat and schema
-   mismatch, sidecars, no-op and page-reclaiming compact, every failure/crash
-   boundary, lease takeover, retained canonical/FTS/query equality, and proof
-   privacy. Stop if certification requires rescanning canonical or FTS content;
-   that would erase the intended benefit.
+Compact remains deliberately uncertified and is not executable scope here. A
+future investigation requires a separately accepted measurement plan and, only
+if its evidence justifies changing the proof lifecycle, a separate ADR and
+executor plan. This program must not modify compact, clean-proof, or certified
+receipt behavior.
 
 ## Live smoke protocol
 
@@ -295,9 +276,10 @@ ordinary retained library.
 4. Redirect stdout/stderr into an owned mode-`0700` temporary directory, capture
    OS peak RSS, and run one cold then two serial warm compiled doctor processes
    with `SESSIONS_DOCTOR_TIMINGS=1`.
-5. Report only health, allowlisted phase durations/counters, peak RSS, database
-   bytes, and persistent-file equality. Remove the temporary directory and
-   never print paths, identities, terms, hashes, source metadata, or text.
+5. Report only health, existing allowlisted phase durations, peak RSS, database
+   bytes, and persistent-file equality. The compiled public doctor has no
+   private work-counter channel. Remove the temporary directory and never print
+   paths, identities, terms, hashes, source metadata, or text.
 6. Never smoke destructive repair or compact against the ordinary retained
    library under this plan. Use a disposable provider-free library containing
    retained rows, sparse orphans, and reusable pages. Real repair or compact
@@ -305,13 +287,17 @@ ordinary retained library.
 
 ## Verify
 
-- For bounded doctor, run the focused FTS projection, index health,
-  no-persistence, immutable snapshot, and measurement-contract tests, then
-  `pnpm measure:doctor`.
+- For the feasibility delivery, run the script-contract tests and
+  `pnpm measure:doctor`; require exact generated query equality, immutable
+  persistent state, and cleanup, then stop for explicit acceptance.
+- For bounded doctor after that acceptance, run the focused FTS projection,
+  index health, no-persistence, immutable snapshot, and measurement-contract
+  tests, then `pnpm measure:doctor`.
 - For orphan paging, run the repair-orphans, writer-coordination, FTS repair,
   clean-proof, and lifecycle tests.
-- Require exact semantic/corruption parity, bounded work counters, cleanup,
-  crash/restart behavior, receipt/proof gates, and immutable persistent state.
+- Require exact semantic/corruption parity, bounded work counters,
+  crash/restart behavior, receipt/proof gates, and immutable persistent state
+  when applicable to the owning slice. Cleanup is required in every slice.
   Elapsed time and RSS are supporting evidence, not correctness gates.
 - Run `pnpm check` before publishing each independently reviewable slice.
 
@@ -330,5 +316,3 @@ ordinary retained library.
 - Stop and redesign bounded doctor if interval cleanup cannot remain
   memory-only, exact coverage weakens, or actual-vocabulary work becomes
   superlinear in interval count.
-- Stop compact-certification work if its measurement gate fails or exact proof
-  requires a new whole-library audit.
