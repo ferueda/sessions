@@ -19,7 +19,7 @@ import {
 import { isCanonicalTimestamp } from "../../domain/canonical-timestamp.ts";
 import { contentHashMatches } from "../../domain/content-hash.ts";
 import type { SessionRootResolver } from "../../domain/session-lineage.ts";
-import { isSessionIdentity } from "../../domain/session-identity.ts";
+import { isSessionIdentity, sameSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import { splitUnicodeWhitespaceTerms } from "../../domain/unicode-whitespace.ts";
 import { readSqliteCaptureScope } from "./sqlite-capture-scope.ts";
@@ -98,7 +98,7 @@ function listSessions(database: DatabaseSync, query: SessionListQuery): SessionL
     if (summary === undefined || resolveRoot === undefined) {
       throw new SqliteSessionIndexError("corrupt-data");
     }
-    if (!sameIdentity(summary.identity, identity))
+    if (!sameSessionIdentity(summary.identity, identity))
       throw new SqliteSessionIndexError("corrupt-data");
     return Object.freeze({ ...summary, root: resolveRoot(identity) });
   });
@@ -696,7 +696,7 @@ function searchHit(
     native_id: row.native_id,
   });
   const summary = summaries.get(sessionId);
-  if (summary === undefined || !sameIdentity(summary.identity, identity)) {
+  if (summary === undefined || !sameSessionIdentity(summary.identity, identity)) {
     throw new SqliteSessionIndexError("corrupt-data");
   }
   const entry = entryAt({
@@ -759,7 +759,7 @@ function readSelectedSummaries(
   for (const coordinate of coordinates) {
     const previous = requests.get(coordinate.sessionId);
     if (previous !== undefined) {
-      if (!sameIdentity(previous.identity, coordinate.identity)) {
+      if (!sameSessionIdentity(previous.identity, coordinate.identity)) {
         throw new SqliteSessionIndexError("corrupt-data");
       }
       continue;
@@ -874,14 +874,6 @@ function identityAt(row: IdentityRow): SessionIdentity {
   };
   if (!isSessionIdentity(identity)) throw new SqliteSessionIndexError("corrupt-data");
   return identity;
-}
-
-function sameIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
-  return (
-    left.source.kind === right.source.kind &&
-    left.source.instanceId === right.source.instanceId &&
-    left.nativeId === right.nativeId
-  );
 }
 
 function emptySearchPage(captureScope: SessionSearchPage["captureScope"]): SessionSearchPage {

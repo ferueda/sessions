@@ -16,7 +16,7 @@ import {
   type SessionEntryQuery,
   type SessionQuerySummary,
 } from "../../domain/session-query.ts";
-import { isSessionIdentity } from "../../domain/session-identity.ts";
+import { isSessionIdentity, sameSessionIdentity } from "../../domain/session-identity.ts";
 import type { ContentOrigin, OriginConfidence, SessionIdentity } from "../../domain/session.ts";
 import {
   decodeQueryCursor,
@@ -266,7 +266,7 @@ function hydrateEntries(
       throw new SqliteSessionIndexError("corrupt-data");
     }
     const summary = summaries.get(coordinate.sessionId);
-    if (summary === undefined || !sameIdentity(summary.identity, identity)) {
+    if (summary === undefined || !sameSessionIdentity(summary.identity, identity)) {
       throw new SqliteSessionIndexError("corrupt-data");
     }
     const root = resolveRoot(identity);
@@ -295,7 +295,7 @@ function readEntrySummaries(
     if (identity === undefined) throw new SqliteSessionIndexError("corrupt-data");
     const previous = requests.get(coordinate.sessionId);
     if (previous !== undefined) {
-      if (!sameIdentity(previous.identity, identity)) {
+      if (!sameSessionIdentity(previous.identity, identity)) {
         throw new SqliteSessionIndexError("corrupt-data");
       }
       continue;
@@ -573,14 +573,6 @@ function freezeSummary(summary: SessionQuerySummary): SessionQuerySummary {
       nativeId: summary.identity.nativeId,
     }),
   });
-}
-
-function sameIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
-  return (
-    left.source.kind === right.source.kind &&
-    left.source.instanceId === right.source.instanceId &&
-    left.nativeId === right.nativeId
-  );
 }
 
 function storedString(value: unknown): string {

@@ -123,7 +123,6 @@ async function runMeasurement(root: string): Promise<MeasurementReport> {
         regularSessionEntries: REGULAR_SESSION_ENTRIES,
       },
       clonesVerifiedExact: true,
-      explicitEntryTraversal: await hasExplicitEntryTraversal(),
       timingRounds: TIMING_ROUNDS,
       variants: mutationReports,
       cases,
@@ -699,14 +698,6 @@ function openReadDatabase(file: string): DatabaseSync {
   return database;
 }
 
-async function hasExplicitEntryTraversal(): Promise<boolean> {
-  const source = await readFile(
-    path.resolve(import.meta.dirname, "../src/infrastructure/sqlite/sqlite-session-entry-query.ts"),
-    "utf8",
-  );
-  return /CROSS JOIN sessions_session_tracking/u.test(source);
-}
-
 async function assertNoSidecars(file: string): Promise<void> {
   for (const suffix of ["-wal", "-shm"] as const) {
     try {
@@ -797,7 +788,6 @@ interface MeasurementReport {
     readonly regularSessionEntries: number;
   };
   readonly clonesVerifiedExact: boolean;
-  readonly explicitEntryTraversal: boolean;
   readonly timingRounds: number;
   readonly variants: Record<VariantName, VariantReport>;
   readonly cases: Record<string, CaseReport>;
