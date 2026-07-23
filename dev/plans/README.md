@@ -2,7 +2,7 @@
 
 This directory holds the repository's active implementation plans.
 
-- One plan per independently reviewable change.
+- One executor plan per independently reviewable change.
 - Plans describe outcomes, boundaries, exact change areas, and verification.
 - Keep plans aligned with the current codebase; update them when scope changes.
 - Remove completed plans. Git history remains the archive.
@@ -10,11 +10,22 @@ This directory holds the repository's active implementation plans.
 The durable product roadmap lives in the
 [architecture memo](../../docs/architecture-memo.md#post-v1-roadmap).
 
-## Active executor plans
+## Active program plans
 
-- [Digest-guarded coordinate reads](260722-digest-guarded-coordinate-reads.md)
-  add a caller-supplied document-digest precondition to existing `show` and
-  `export` reads without adding revision storage or changing successful output.
+Each program is ordered internally. Promote one numbered delivery slice at a
+time into its own executor plan and independently reviewable change;
+evidence-gated slices receive an executor plan only after their gate passes.
 
-Later product milestones still wait for this contract and its acceptance
-evidence.
+1. [Everyday query hot paths](260723-everyday-query-hot-paths.md) — fix broad
+   entry selection first, then reduce repeated search hydration and summary
+   work, add compatible keyset continuation, and measure later planner/startup
+   candidates.
+2. [Indexing hot paths](260723-indexing-hot-paths.md) — measure discovery and
+   replacement work, remove avoidable provider lookup/serialization and
+   statement-per-content costs, then gate deeper transaction or WAL changes.
+3. [Doctor and maintenance hot paths](260723-doctor-maintenance-hot-paths.md) —
+   make exact FTS verification memory-bounded, partition oversized terms, page
+   only orphan candidates, and gate any compact-proof optimization separately.
+4. [Verified bounded session reads](260723-verified-bounded-session-reads.md) —
+   stream complete validation and the existing public-document digest while
+   retaining only the requested bounded `show` or `export` selection.
