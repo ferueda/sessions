@@ -11,6 +11,7 @@
 | `pnpm format:docs:check`                                | Check Markdown formatting                                               | No                                 | No                                  |
 | `pnpm lint` / `pnpm lint:fix`                           | Check or fix source/test lint                                           | Fix variant only                   | No                                  |
 | `pnpm measure:content-storage`                          | Compare legacy and current canonical-content layouts with fixed corpora | Temporary directory, removed       | No                                  |
+| `pnpm measure:doctor`                                   | Probe document-bounded exact FTS validation with generated libraries    | Temporary directory, removed       | No                                  |
 | `pnpm measure:query-lineage`                            | Compare repeated and query-scoped lineage resolution                    | No                                 | No                                  |
 | `pnpm measure:entry-query`                              | Measure fixed textless entry queries through production SQLite seams    | In-memory database, removed        | No                                  |
 | `pnpm measure:search-query`                             | Measure a fixed broad first-page search through production SQLite seams | In-memory database, removed        | No                                  |
@@ -43,6 +44,18 @@ parameters, per-object/file byte counts, and interning timings. The structural
 checks require exact-content ID reuse, collision coexistence, no target index on
 text, and a realistic target database no larger than 60% of the legacy layout.
 Timings are report-only and can vary by machine and SQLite version.
+
+`pnpm measure:doctor` is an opt-in feasibility probe outside `pnpm check`. It
+seeds two provider-free libraries through the production writer, measures one,
+two, and many exact document-bounded FTS vocabulary strategies in alternating
+fresh child processes, and runs exact equality and final-health checks outside
+the measured workers. The many-interval strategy uses the proposed 512-row and
+16-MiB admission limits. It reports only generated aggregate plan, timing,
+memory, corpus, and integrity evidence. Immutable file state, absent sidecars,
+owned permissions, and complete success/failure cleanup are required; elapsed
+time and RSS are report-only. The probe is supported on macOS and Linux because
+the private-file evidence requires POSIX modes. The result cannot authorize a
+production refactor without explicit human acceptance.
 
 `pnpm measure:query-lineage` is also opt-in and outside `pnpm check`. It compares
 rebuilding lineage state per resolution with one query-scoped resolver over a

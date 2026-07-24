@@ -20,8 +20,12 @@ evidence-gated slices receive an executor plan only after their gate passes.
    replacement work, remove avoidable provider lookup/serialization and
    statement-per-content costs, then gate deeper transaction or WAL changes.
 2. [Doctor and maintenance hot paths](260723-doctor-maintenance-hot-paths.md) —
-   make exact FTS verification memory-bounded, partition oversized terms, page
-   only orphan candidates, and gate any compact-proof optimization separately.
-3. [Verified bounded session reads](260723-verified-bounded-session-reads.md) —
+   record the rejected document-interval gate, page only orphan candidates, and
+   keep compact-proof work separately gated.
+3. [Single-pass doctor FTS feasibility](260723-doctor-single-pass-fts-feasibility.md) —
+   evaluate an exact term-ordered alternative without repeated
+   actual-vocabulary scans; gate any production refactor on corruption parity,
+   memory-only state, compatible ordering, and measured scaling.
+4. [Verified bounded session reads](260723-verified-bounded-session-reads.md) —
    stream complete validation and the existing public-document digest while
    retaining only the requested bounded `show` or `export` selection.
