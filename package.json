@@ -68,13 +68,13 @@
   },
   "dependencies": {
     "commander": "15.0.0",
-    "smol-toml": "1.7.0"
+    "smol-toml": "1.7.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
-    "lint-staged": "17.1.0",
-    "oxfmt": "0.59.0",
-    "oxlint": "1.74.0",
+    "lint-staged": "17.2.0",
+    "oxfmt": "0.61.0",
+    "oxlint": "1.76.0",
     "simple-git-hooks": "2.13.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
