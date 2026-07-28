@@ -1331,6 +1331,18 @@ canonical reads, batches the TEMP FTS load transactionally, partitions exact FTS
 instance comparison by a fixed occurrence target, reports interactive phases,
 and supports aggregate opt-in timings without weakening its exact proof. The
 complete expected index and one oversized term remain corpus-dependent.
+
+Generated feasibility evidence rejected document-ID-bounded actual-vocabulary
+scans: 41 production-shaped intervals made total work 3.80 times slower and
+grouped term-summary work 6.82 times slower while retaining the same
+virtual-table scan shape. The accepted decision preserves the current exact
+whole-library audit and retires that interval design. A separate
+[single-pass feasibility plan](../dev/plans/260723-doctor-single-pass-fts-feasibility.md)
+may evaluate one monotonic actual/expected instance traversal as a CPU
+optimization, but no production refactor is authorized until it proves exact
+corruption parity, memory-only transient state, compatible ordering, and better
+scaling. It does not solve the corpus-sized expected index.
+
 Crash-safe index generations now use a transaction-bound schema-3 receipt to
 replace global recovery scans only at exact certified boundaries; any ambiguity
 keeps the complete validation fallback. Further lower total-memory doctor work,

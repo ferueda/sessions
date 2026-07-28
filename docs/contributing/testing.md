@@ -204,6 +204,19 @@ composition, forced load failure, cleanup, and exact semantic mismatches.
 Application, runtime, and CLI tests keep progress/timing best-effort, normal
 redirected stderr quiet, and doctor stdout/check/exit behavior unchanged.
 
+`pnpm measure:doctor` is the opt-in, provider-free document-interval feasibility
+probe. It seeds small and large generated libraries through the production
+writer, measures one, two, and many document-bounded `fts5vocab` strategies in
+alternating fresh child processes, and records normalized plan facts, elapsed
+phases, and peak RSS. The many strategy uses the proposed 512-row and 16-MiB
+admission limits. Separate exact comparisons require complete coordinate,
+term-summary, docsize, interval, tail, final-health, immutable-file, sidecar,
+permission, and cleanup equality. A reduced `--contract` mode owns deterministic
+script, direct-worker isolation, and forced-failure coverage in Vitest on macOS
+and Linux; Windows skips the POSIX-mode contract. Timings never pass or fail CI,
+and the measurement cannot authorize a production doctor refactor; its recorded
+result requires explicit human acceptance.
+
 An accepted live doctor measurement may run against the ordinary retained
 library only as one process: do not open the database through `sqlite3` or any
 second SQLite connection while the immutable snapshot is active. Capture the
