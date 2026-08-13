@@ -61,7 +61,7 @@ jobs:
 
       - name: Setup pnpm
         if: needs.changes.outputs.docs_only != 'true' || matrix.os == 'ubuntu-latest'
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.0.10
 
       - name: Setup Node.js
         if: needs.changes.outputs.docs_only != 'true' || matrix.os == 'ubuntu-latest'
